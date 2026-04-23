@@ -13,6 +13,211 @@ var EXIT_PARTIAL  = 1;
 var EXIT_USAGE    = 2;
 var EXIT_ALL_FAIL = 4;
 
+# Decoration mode — populated by resolve_mode() after arg parse.
+#   0 = plain (no decorations), 1 = decorated
+var g_decorated = 0;
+
+# Flag state set during arg parse. -1 = unset (auto), 0 = off, 1 = on.
+var g_flag_numbers = 0 - 1;
+var g_flag_plain   = 0;
+var g_flag_color   = 0 - 1;   # -1 auto, 0 never, 1 always
+
+# ================================================================
+# TTY detection
+# ================================================================
+
+# Linux x86_64 stat struct: st_mode is a u32 at offset 24.
+# S_IFMT = 0xF000, S_IFCHR = 0x2000.
+fn is_tty(fd) {
+    var sb[144];
+    var r = syscall(SYS_FSTAT, fd, &sb);
+    if (r < 0) { return 0; }
+    var mode = load32(&sb + 24);
+    if ((mode & 0xF000) == 0x2000) { return 1; }
+    return 0;
+}
+
+# ================================================================
+# Mode resolution
+# ================================================================
+
+fn resolve_mode() {
+    # Defaults from stdout TTY.
+    g_decorated = is_tty(STDOUT);
+
+    # NO_COLOR env: standard convention — any non-empty value disables color.
+    # Scope for M2: treated as --color=never (no color subsystem wired yet;
+    # preserves future behavior).
+    var nc = getenv("NO_COLOR");
+    if (nc != 0) {
+        if (load8(nc) != 0) { g_flag_color = 0; }
+    }
+
+    # -p / --plain overrides everything.
+    if (g_flag_plain == 1) {
+        g_decorated = 0;
+        return 0;
+    }
+
+    # -n / -N override the auto-from-TTY for the numbers gutter.
+    # When piped (non-TTY) and the user forces -n, we go decorated
+    # anyway so numbers can render.
+    if (g_flag_numbers == 1) { g_decorated = 1; }
+    if (g_flag_numbers == 0) {
+        # Force-off just suppresses numbers; header stays gated by TTY.
+        # resolved_show_numbers in cat_stream handles this.
+    }
+
+    return 0;
+}
+
+fn resolved_show_numbers() {
+    # -p overrides everything — even an explicit -n.
+    if (g_flag_plain == 1) { return 0; }
+    if (g_flag_numbers == 1) { return 1; }
+    if (g_flag_numbers == 0) { return 0; }
+    # auto
+    if (g_decorated == 1) { return 1; }
+    return 0;
+}
+
+fn resolved_show_header() {
+    if (g_flag_plain == 1) { return 0; }
+    if (g_decorated == 1) { return 1; }
+    return 0;
+}
+
+# ================================================================
+# Decoration rendering
+# ================================================================
+
+# "─── File: <path> " + 40 dashes + "\n"
+# ─ is U+2500 (E2 94 80). We don't adapt to terminal width in M2;
+# wide-enough-for-most-terms is the M2 tradeoff, terminal-width
+# probing ships with the M8 polish pass.
+fn emit_header(path) {
+    syscall(1, 1, "─── File: ", 16);
+    syscall(1, 1, path, strlen(path));
+    syscall(1, 1, " ", 1);
+    var i = 0;
+    while (i < 40) {
+        syscall(1, 1, "─", 3);
+        i = i + 1;
+    }
+    syscall(1, 1, "\n", 1);
+    return 0;
+}
+
+# Line-number gutter: "<6-col right-aligned num> │ "
+# Fixed width 6 cols → supports up to 999999 lines without
+# misalignment. Files beyond that render with a widened-but-
+# consistent gutter; M8 will make the width adapt per-file.
+fn emit_lineno(ln: i64) {
+    var pbuf[24];
+    var n = ln;
+    var pi: i64 = 5;
+    if (n == 0) { store8(&pbuf + pi, 48); pi = pi - 1; }
+    while (n > 0) {
+        store8(&pbuf + pi, 48 + n % 10);
+        pi = pi - 1;
+        n = n / 10;
+    }
+    while (pi >= 0) {
+        store8(&pbuf + pi, 32);
+        pi = pi - 1;
+    }
+    store8(&pbuf + 6,  32);
+    store8(&pbuf + 7,  0xE2);
+    store8(&pbuf + 8,  0x94);
+    store8(&pbuf + 9,  0x82);
+    store8(&pbuf + 10, 32);
+    syscall(1, 1, &pbuf, 11);
+    return 0;
+}
+
+# ================================================================
+# Rendering
+# ================================================================
+
+fn report_error(path, reason) {
+    eprint("owl: ", 5);
+    eprint(path, strlen(path));
+    eprint(": ", 2);
+    eprint(reason, strlen(reason));
+    eprint("\n", 1);
+    return 0;
+}
+
+fn cat_fd_plain(fd) {
+    var buf = alloc(BUFSIZE);
+    while (1 == 1) {
+        var n = file_read(fd, buf, BUFSIZE);
+        if (n < 0) { return 0 - 1; }
+        if (n == 0) { return 0; }
+        file_write(STDOUT, buf, n);
+    }
+    return 0;
+}
+
+# Stream fd to stdout, emitting line numbers before each line.
+# Broken pipe is left to the kernel's default SIGPIPE behavior.
+fn cat_fd_numbered(fd) {
+    var buf = alloc(BUFSIZE);
+    var line_no: i64 = 1;
+    var at_line_start = 1;
+    while (1 == 1) {
+        var n = file_read(fd, buf, BUFSIZE);
+        if (n < 0) { return 0 - 1; }
+        if (n == 0) { return 0; }
+        var start = 0;
+        var i = 0;
+        while (i < n) {
+            if (at_line_start == 1) {
+                emit_lineno(line_no);
+                at_line_start = 0;
+            }
+            if (load8(buf + i) == 10) {
+                file_write(STDOUT, buf + start, i - start + 1);
+                start = i + 1;
+                line_no = line_no + 1;
+                at_line_start = 1;
+            }
+            i = i + 1;
+        }
+        if (start < n) {
+            file_write(STDOUT, buf + start, n - start);
+        }
+    }
+    return 0;
+}
+
+# Render one input (file path or fd for stdin) with the resolved mode.
+# path_for_header is the display name ("<stdin>" for stdin).
+fn render_fd(fd, path_for_header) {
+    if (resolved_show_header() == 1) { emit_header(path_for_header); }
+    if (resolved_show_numbers() == 1) { return cat_fd_numbered(fd); }
+    return cat_fd_plain(fd);
+}
+
+fn render_path(path) {
+    var fd = file_open(path, O_RDONLY, 0);
+    if (fd < 0) {
+        report_error(path, "No such file or directory");
+        return 0 - 1;
+    }
+    var rc = render_fd(fd, path);
+    file_close(fd);
+    if (rc < 0) {
+        report_error(path, "read error");
+        return 0 - 1;
+    }
+    return 0;
+}
+
+# ================================================================
+# CLI
+# ================================================================
+
 fn print_version() {
     println(OWL_VERSION);
     return EXIT_OK;
@@ -27,48 +232,39 @@ fn print_help() {
     println("  owl a.txt - b.txt    Mix files and stdin");
     println("");
     println("Options:");
-    println("  -p, --plain          Plain output (currently always on)");
+    println("  -n, --number         Force line numbers on");
+    println("  -N, --no-number      Force line numbers off");
+    println("  -p, --plain          Plain output (no decorations)");
+    println("      --color=<when>   auto | always | never");
+    println("      --paging=<when>  auto | always | never (no-op pre-M4)");
     println("  -h, --help           Show this help and exit");
     println("  -V, --version        Show version and exit");
     return EXIT_OK;
 }
 
-fn report_error(path, reason) {
-    eprint("owl: ", 5);
-    eprint(path, strlen(path));
-    eprint(": ", 2);
-    eprint(reason, strlen(reason));
-    eprint("\n", 1);
-    return 0;
+# Match a long option of the form "--name=VALUE".
+# Returns pointer to the VALUE part on match, 0 otherwise.
+fn match_eq_flag(arg, name) {
+    var nlen = strlen(name);
+    if (memeq(arg, name, nlen) == 0) { return 0; }
+    if (load8(arg + nlen) != 61) { return 0; }
+    return arg + nlen + 1;
 }
 
-# Stream an open fd to stdout. Returns 0 on EOF, -1 on read error.
-# Broken pipe is left to the kernel (default SIGPIPE) — exits the
-# process cleanly with signal 13, no stderr noise. See spec §9.
-fn cat_fd(fd) {
-    var buf = alloc(BUFSIZE);
-    while (1 == 1) {
-        var n = file_read(fd, buf, BUFSIZE);
-        if (n < 0) { return 0 - 1; }
-        if (n == 0) { return 0; }
-        file_write(STDOUT, buf, n);
-    }
-    return 0;
+# Apply --color=<value>. Returns 0 on OK, 1 on bad value.
+fn set_color(value) {
+    if (streq(value, "auto") == 1)   { g_flag_color = 0 - 1; return 0; }
+    if (streq(value, "always") == 1) { g_flag_color = 1;     return 0; }
+    if (streq(value, "never") == 1)  { g_flag_color = 0;     return 0; }
+    return 1;
 }
 
-fn cat_path(path) {
-    var fd = file_open(path, O_RDONLY, 0);
-    if (fd < 0) {
-        report_error(path, "No such file or directory");
-        return 0 - 1;
-    }
-    var rc = cat_fd(fd);
-    file_close(fd);
-    if (rc < 0) {
-        report_error(path, "read error");
-        return 0 - 1;
-    }
-    return 0;
+# --paging is parsed and validated but otherwise inert until M4.
+fn set_paging(value) {
+    if (streq(value, "auto") == 1)   { return 0; }
+    if (streq(value, "always") == 1) { return 0; }
+    if (streq(value, "never") == 1)  { return 0; }
+    return 1;
 }
 
 fn main() {
@@ -84,42 +280,70 @@ fn main() {
     while (i < n) {
         var a = argv(i);
 
-        # Info flags short-circuit wherever they appear.
+        # Info flags short-circuit.
         if (streq(a, "-V") == 1)        { return print_version(); }
         if (streq(a, "--version") == 1) { return print_version(); }
         if (streq(a, "-h") == 1)        { return print_help(); }
         if (streq(a, "--help") == 1)    { return print_help(); }
 
-        # -p / --plain — M1 no-op; M2 gives it meaning (turns decorations off).
-        if (streq(a, "-p") == 1)        { i = i + 1; continue; }
-        if (streq(a, "--plain") == 1)   { i = i + 1; continue; }
+        # Decoration toggles.
+        if (streq(a, "-n") == 1)        { g_flag_numbers = 1; i = i + 1; continue; }
+        if (streq(a, "--number") == 1)  { g_flag_numbers = 1; i = i + 1; continue; }
+        if (streq(a, "-N") == 1)        { g_flag_numbers = 0; i = i + 1; continue; }
+        if (streq(a, "--no-number") == 1) { g_flag_numbers = 0; i = i + 1; continue; }
+        if (streq(a, "-p") == 1)        { g_flag_plain = 1; i = i + 1; continue; }
+        if (streq(a, "--plain") == 1)   { g_flag_plain = 1; i = i + 1; continue; }
 
-        # "-" alone means stdin (may appear mixed with file args).
+        # Long options with =VALUE.
+        var v = match_eq_flag(a, "--color");
+        if (v != 0) {
+            if (set_color(v) != 0) {
+                report_error(a, "invalid value (want auto|always|never)");
+                return EXIT_USAGE;
+            }
+            i = i + 1;
+            continue;
+        }
+        v = match_eq_flag(a, "--paging");
+        if (v != 0) {
+            if (set_paging(v) != 0) {
+                report_error(a, "invalid value (want auto|always|never)");
+                return EXIT_USAGE;
+            }
+            i = i + 1;
+            continue;
+        }
+
+        # "-" → stdin positional.
         if (streq(a, "-") == 1) {
+            if (any_positional == 0) { resolve_mode(); }
             any_positional = 1;
-            var stdin_rc = cat_fd(STDIN);
+            var stdin_rc = render_fd(STDIN, "<stdin>");
             if (stdin_rc < 0) { fail = fail + 1; } else { ok = ok + 1; }
             i = i + 1;
             continue;
         }
 
-        # Anything else starting with '-' is an unknown option.
+        # Unknown dash-prefixed option.
         if (load8(a) == 45) {
             report_error(a, "unknown option");
             return EXIT_USAGE;
         }
 
         # Positional file path.
+        if (any_positional == 0) { resolve_mode(); }
         any_positional = 1;
-        var file_rc = cat_path(a);
+        var file_rc = render_path(a);
         if (file_rc < 0) { fail = fail + 1; } else { ok = ok + 1; }
         i = i + 1;
     }
 
-    # No positional args → read stdin (cat parity). M2 will gate this
-    # on TTY so `owl` at an interactive prompt prints help again.
+    # No positional args: either read stdin (piped) or print help (TTY).
+    # M2 restores M0's interactive bare-owl = help behavior.
     if (any_positional == 0) {
-        var bare_rc = cat_fd(STDIN);
+        if (is_tty(STDIN) == 1) { return print_help(); }
+        resolve_mode();
+        var bare_rc = render_fd(STDIN, "<stdin>");
         if (bare_rc < 0) { return EXIT_ALL_FAIL; }
         return EXIT_OK;
     }

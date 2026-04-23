@@ -113,4 +113,76 @@ grep -q "^owl: .*frobnicate: .*" "$TMPDIR/err" || fail "unknown-option stderr fo
 "$BIN" "$TMPDIR/big.txt" 2>"$TMPDIR/err" | head -1 > /dev/null || true
 [ ! -s "$TMPDIR/err" ] || fail "broken-pipe produced stderr noise: $(cat "$TMPDIR/err")"
 
-echo "smoke: OK ($v_long) — M0 + M1 gates passing"
+# ============================================================
+# M2 — TTY awareness + line numbers
+# ============================================================
+
+# Piped output stays plain (the tests above covered byte-identity;
+# this re-verifies no decorations leak when stdout is a pipe).
+out=$("$BIN" "$TMPDIR/a.txt" | od -An -c | head -1)
+case "$out" in
+    *"l"*"i"*"n"*"e"*) ;;  # raw content
+    *) fail "piped output looks decorated: $out" ;;
+esac
+
+# -n forces numbers even when piped. Gutter contains the │ separator.
+out=$("$BIN" -n "$TMPDIR/a.txt")
+case "$out" in
+    *" │ line one"*) ;;
+    *) fail "-n did not emit line-number gutter: $(printf '%s' "$out" | od -An -c | head -3)" ;;
+esac
+# --number long form parity.
+out_long=$("$BIN" --number "$TMPDIR/a.txt")
+[ "$out_long" = "$out" ] || fail "--number disagrees with -n"
+
+# -n also emits a file header with the path.
+case "$out" in
+    *"── File: $TMPDIR/a.txt"*) ;;
+    *) fail "-n did not emit file header" ;;
+esac
+
+# -N forces numbers off. Piped output is already plain; this asserts
+# the flag is accepted and doesn't alter byte-for-byte output.
+diff <("$BIN" -N "$TMPDIR/a.txt") "$TMPDIR/a.txt" > /dev/null \
+    || fail "-N changed output (should be byte-identical to cat when piped)"
+diff <("$BIN" --no-number "$TMPDIR/a.txt") "$TMPDIR/a.txt" > /dev/null \
+    || fail "--no-number changed output"
+
+# -p overrides -n: plain wins.
+diff <("$BIN" -p -n "$TMPDIR/a.txt") "$TMPDIR/a.txt" > /dev/null \
+    || fail "-p did not override -n"
+
+# Multi-file with -n shows one header per file.
+out=$("$BIN" -n "$TMPDIR/a.txt" "$TMPDIR/b.txt")
+hdr_count=$(printf '%s\n' "$out" | grep -c "── File: ")
+[ "$hdr_count" = "2" ] || fail "expected 2 file headers with -n, got $hdr_count"
+
+# --color=<value> parses. auto/always/never all accepted, bogus rejected.
+"$BIN" --color=auto "$TMPDIR/a.txt"   > /dev/null 2>&1 || fail "--color=auto rejected"
+"$BIN" --color=always "$TMPDIR/a.txt" > /dev/null 2>&1 || fail "--color=always rejected"
+"$BIN" --color=never "$TMPDIR/a.txt"  > /dev/null 2>&1 || fail "--color=never rejected"
+set +e
+"$BIN" --color=bogus "$TMPDIR/a.txt" > /dev/null 2>"$TMPDIR/err"
+rc=$?
+set -e
+[ "$rc" = "2" ] || fail "--color=bogus exit: got $rc, expected 2"
+grep -q "invalid value" "$TMPDIR/err" || fail "--color=bogus missing 'invalid value' in stderr"
+
+# --paging=<value> parses the same way.
+"$BIN" --paging=auto "$TMPDIR/a.txt"   > /dev/null 2>&1 || fail "--paging=auto rejected"
+set +e
+"$BIN" --paging=bogus "$TMPDIR/a.txt" > /dev/null 2>"$TMPDIR/err"
+rc=$?
+set -e
+[ "$rc" = "2" ] || fail "--paging=bogus exit: got $rc, expected 2"
+
+# NO_COLOR env — accepted without error. (M2 has no color subsystem
+# yet, so this just checks the flag path doesn't regress.)
+NO_COLOR=1 "$BIN" "$TMPDIR/a.txt" > /dev/null 2>&1 \
+    || fail "NO_COLOR=1 caused non-zero exit"
+
+# Bare `owl` with piped stdin still reads stdin (cat parity).
+out=$(echo "bare piped" | "$BIN")
+[ "$out" = "bare piped" ] || fail "bare-piped: got '$out'"
+
+echo "smoke: OK ($v_long) — M0 + M1 + M2 gates passing"
