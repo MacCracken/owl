@@ -71,25 +71,54 @@ A phased plan for building `owl` from nothing to a polished release. Each milest
 
 ## Milestone 3 — Syntax highlighting
 
-**Goal:** Files render with appropriate colors based on language.
+Split into two sub-milestones after a local-repo survey (2026-04-22)
+turned up no port-ready grammar source anywhere in the AGNOS
+ecosystem. Detection + theme infrastructure ships first; tokenization
+follows once a grammar format is chosen.
 
-- Language detection from extension and shebang
-- Bundled grammars for a starter set: shell, Python, JavaScript, Rust, C, TOML, JSON, YAML, Markdown, plain text
+### M3a — Detection + theme scaffolding
+
+**Goal:** Files are classified, themes are picked, and the existing
+decorations (header, gutter) are color-aware. No token-level coloring
+yet — that's M3b.
+
+- Language detection from extension and shebang (tested by detection,
+  stored but not yet acted on beyond theme color of decorations)
 - At least two themes shipped: one dark (default), one light
-- `--language <lang>` override
-- `--theme <n>`, `--list-themes`, `--list-languages`
-- `NO_COLOR` environment variable respected
+- Theme format: Cyrius-native TOML/CYML (decided 2026-04-22, overrides
+  the spec's earlier "use an existing format" suggestion)
+- `--language <lang>` override, `--list-languages`
+- `--theme <n>`, `--list-themes`
+- `NO_COLOR` environment variable respected (no ANSI emitted)
 - Color disabled automatically when output is not a TTY
+- `--color=always` overrides both NO_COLOR and TTY gate
 
-**Non-goals for this milestone:**
-- Content-based language detection (shebang + extension is enough)
-- User-installable grammars (defer to later)
-- Custom theme format (use a well-understood existing one if possible)
+**Non-goals for M3a:**
+- Token-level syntax coloring (→ M3b)
+- User-installable themes from config dir (→ post-v1 or M7 config)
+- Content-based language detection (shebang + extension only)
 
-**Testing:**
-- Each bundled language renders visibly colored for a sample file
-- `NO_COLOR=1 owl file.py` emits zero ANSI escapes
-- `owl --language rust plain.txt` applies Rust grammar
+**Done when:** `--list-themes` / `--list-languages` work, themes
+affect visible decoration color on a TTY, NO_COLOR fully suppresses
+ANSI, detected language surfaces via `--list-languages` and is
+validated via `--language=<x>`.
+
+### M3b — Token-level highlighting (deferred)
+
+**Goal:** File *contents* render with per-token color.
+
+- Choose grammar format (candidates: reuse `vidya`'s hand-written
+  lexer pattern from `content/lexing_and_parsing/cyrius.cyr`, or
+  adapt a minimal TextMate/Sublime subset, or a Cyrius-native spec)
+- Bundled grammars for the starter set: shell, Python, JavaScript,
+  Rust, C, Cyrius, TOML, JSON, YAML, Markdown
+- Wire tokenizer output to theme palette
+- `NO_COLOR=1 owl file.py` still emits zero ANSI
+- Sample file per bundled language for visual regression
+
+**Blocked on:** a grammar format decision. No pre-existing grammar
+source found in AGNOS ecosystem repos as of 2026-04-22 — must
+hand-author or port from an external lexer spec.
 
 **Done when:** a developer viewing their own code says "oh, nice."
 
