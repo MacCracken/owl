@@ -1,0 +1,233 @@
+# src/lang.cyr — language detection (M3a)
+#
+# Extension table + shebang peek. Stores a detected-language name for
+# the current file; actual token-level coloring lands in M3b.
+#
+# Design:
+#   - lang table is a flat array of {name, extensions, shebang_hints}
+#   - extensions are matched case-sensitive against the file suffix
+#   - shebang peek reads the first 128 bytes and looks for "#!"
+#   - unknown/missing input falls through to "plain"
+#
+# Usage from main.cyr:
+#   include "src/lang.cyr"
+#   lang_init();
+#   detect_language_from_path("foo.py")  → "python"
+#   detect_language_from_shebang(buf, n) → "shell" | ... | 0
+#   lang_is_valid("rust")                → 1 / 0
+#   print_language_list()
+
+# ── Table ──────────────────────────────────────────────────────────────
+# One language per row, as three parallel constants, joined by index.
+# Extensions and shebang hints are space-separated lowercase tokens.
+# Order matters: "cyrius" precedes "c" so *.cyr doesn't match *.c.
+
+var LANG_COUNT = 11;
+
+# Indexed 0..LANG_COUNT-1
+fn lang_name(i) {
+    if (i == 0)  { return "plain"; }
+    if (i == 1)  { return "shell"; }
+    if (i == 2)  { return "python"; }
+    if (i == 3)  { return "javascript"; }
+    if (i == 4)  { return "typescript"; }
+    if (i == 5)  { return "rust"; }
+    if (i == 6)  { return "cyrius"; }
+    if (i == 7)  { return "c"; }
+    if (i == 8)  { return "toml"; }
+    if (i == 9)  { return "json"; }
+    if (i == 10) { return "yaml"; }
+    return "plain";
+}
+
+# Extensions for language i (space-separated, lowercase, leading dot).
+fn lang_exts(i) {
+    if (i == 0)  { return ""; }
+    if (i == 1)  { return ".sh .bash .zsh"; }
+    if (i == 2)  { return ".py"; }
+    if (i == 3)  { return ".js .mjs .cjs"; }
+    if (i == 4)  { return ".ts"; }
+    if (i == 5)  { return ".rs"; }
+    if (i == 6)  { return ".cyr .tcyr .bcyr .fcyr"; }
+    if (i == 7)  { return ".c .h"; }
+    if (i == 8)  { return ".toml .cyml"; }
+    if (i == 9)  { return ".json"; }
+    if (i == 10) { return ".yaml .yml"; }
+    return "";
+}
+
+# Shebang interpreter hints for language i (space-separated tokens
+# that may appear in the shebang line, e.g. "python" matches
+# "#!/usr/bin/env python3").
+fn lang_shebangs(i) {
+    if (i == 1) { return "sh bash zsh"; }
+    if (i == 2) { return "python python3 python2"; }
+    if (i == 3) { return "node deno"; }
+    if (i == 5) { return "rust-script"; }
+    return "";
+}
+
+# ── Helpers ────────────────────────────────────────────────────────────
+
+# Case-folded suffix check: does `path` end with `ext` (lowercase)?
+# Path chars are compared lowercase via add-32-if-A-to-Z trick.
+fn _path_ends_with_lower(path, ext) {
+    var plen = strlen(path);
+    var elen = strlen(ext);
+    if (elen > plen) { return 0; }
+    var pi = plen - elen;
+    var ei = 0;
+    while (ei < elen) {
+        var pc = load8(path + pi + ei);
+        var ec = load8(ext + ei);
+        if (pc >= 65) { if (pc <= 90) { pc = pc + 32; } }
+        if (pc != ec) { return 0; }
+        ei = ei + 1;
+    }
+    return 1;
+}
+
+# Does `path` have any of the space-separated extensions in `list`?
+fn _path_has_any_ext(path, list) {
+    var llen = strlen(list);
+    var i = 0;
+    while (i < llen) {
+        # Skip leading spaces
+        while (i < llen) {
+            if (load8(list + i) != 32) { break; }
+            i = i + 1;
+        }
+        if (i >= llen) { return 0; }
+        # Extract current token into a small buf
+        var ebuf[32];
+        var ei = 0;
+        while (i < llen) {
+            if (load8(list + i) == 32) { break; }
+            if (ei < 31) {
+                store8(&ebuf + ei, load8(list + i));
+                ei = ei + 1;
+            }
+            i = i + 1;
+        }
+        store8(&ebuf + ei, 0);
+        if (_path_ends_with_lower(path, &ebuf) == 1) { return 1; }
+    }
+    return 0;
+}
+
+# ── Public API ─────────────────────────────────────────────────────────
+
+# Look up language by name. Returns index or -1.
+fn lang_index(name) {
+    var i = 0;
+    while (i < LANG_COUNT) {
+        if (streq(lang_name(i), name) == 1) { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn lang_is_valid(name) {
+    if (lang_index(name) >= 0) { return 1; }
+    return 0;
+}
+
+# Map path → language name (by extension). Returns "plain" on no match.
+fn detect_language_from_path(path) {
+    var i = 1;  # skip "plain"
+    while (i < LANG_COUNT) {
+        if (_path_has_any_ext(path, lang_exts(i)) == 1) {
+            return lang_name(i);
+        }
+        i = i + 1;
+    }
+    return "plain";
+}
+
+# Scan a buffer holding the first N bytes of a file for a shebang line.
+# Returns a language name or 0 if none matched.
+fn detect_language_from_shebang(buf, n) {
+    if (n < 3) { return 0; }
+    if (load8(buf) != 35) { return 0; }   # '#'
+    if (load8(buf + 1) != 33) { return 0; } # '!'
+
+    # Extract shebang line (up to \n or EOF, cap at 127 bytes).
+    var sb[128];
+    var sbi = 0;
+    var pi = 2;
+    while (pi < n) {
+        if (sbi >= 127) { break; }
+        var c = load8(buf + pi);
+        if (c == 10) { break; }
+        store8(&sb + sbi, c);
+        sbi = sbi + 1;
+        pi = pi + 1;
+    }
+    store8(&sb + sbi, 0);
+
+    # For each language with shebang hints, check if any hint appears
+    # as a word in the shebang line. We check word-as-suffix-of-path
+    # (e.g. "python" inside "/usr/bin/env python3" — the basename of
+    # the last space-separated token) AND plain occurrence.
+    var i = 1;
+    while (i < LANG_COUNT) {
+        var hints = lang_shebangs(i);
+        if (strlen(hints) > 0) {
+            # Tokenize hints
+            var hlen = strlen(hints);
+            var hi = 0;
+            while (hi < hlen) {
+                while (hi < hlen) {
+                    if (load8(hints + hi) != 32) { break; }
+                    hi = hi + 1;
+                }
+                if (hi >= hlen) { break; }
+                var h_start = hi;
+                while (hi < hlen) {
+                    if (load8(hints + hi) == 32) { break; }
+                    hi = hi + 1;
+                }
+                var h_len = hi - h_start;
+                # Search sbuf for this hint as a whole token boundary.
+                var sblen = sbi;
+                var si = 0;
+                while (si <= sblen - h_len) {
+                    if (memeq(&sb + si, hints + h_start, h_len) == 1) {
+                        # Boundary check: prev char must be / or space or start;
+                        # next char must be end, space, digit, or newline.
+                        var prev_ok = 0;
+                        if (si == 0) { prev_ok = 1; }
+                        else {
+                            var pc = load8(&sb + si - 1);
+                            if (pc == 47) { prev_ok = 1; }  # '/'
+                            if (pc == 32) { prev_ok = 1; }  # ' '
+                        }
+                        var next_ok = 0;
+                        if (si + h_len >= sblen) { next_ok = 1; }
+                        else {
+                            var nc = load8(&sb + si + h_len);
+                            if (nc == 0)  { next_ok = 1; }
+                            if (nc == 32) { next_ok = 1; }  # ' '
+                            if (nc >= 48) { if (nc <= 57) { next_ok = 1; } } # digit (python3)
+                        }
+                        if (prev_ok == 1) {
+                            if (next_ok == 1) { return lang_name(i); }
+                        }
+                    }
+                    si = si + 1;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn print_language_list() {
+    var i = 0;
+    while (i < LANG_COUNT) {
+        println(lang_name(i));
+        i = i + 1;
+    }
+    return 0;
+}

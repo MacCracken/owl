@@ -1,6 +1,9 @@
 # owl — main entry point
 # Stdlib auto-included via cyrius.cyml
 
+include "src/lang.cyr"
+include "src/theme.cyr"
+
 # Keep OWL_VERSION in sync with the VERSION file.
 # A M8 CI check will enforce equality; for now, manual.
 var OWL_VERSION = "owl 0.1.0";
@@ -13,18 +16,23 @@ var EXIT_PARTIAL  = 1;
 var EXIT_USAGE    = 2;
 var EXIT_ALL_FAIL = 4;
 
-# Decoration mode — populated by resolve_mode() after arg parse.
-#   0 = plain (no decorations), 1 = decorated
+# ── Mode + theme state (resolved after flag parse) ─────────────────────
 var g_decorated = 0;
+var g_want_color = 0;
 
-# Flag state set during arg parse. -1 = unset (auto), 0 = off, 1 = on.
+# Flag state set during arg parse. -1 = unset/auto, 0 = off, 1 = on.
 var g_flag_numbers = 0 - 1;
 var g_flag_plain   = 0;
-var g_flag_color   = 0 - 1;   # -1 auto, 0 never, 1 always
+var g_flag_color   = 0 - 1;
+var g_flag_lang    = 0;           # pointer to --language value, 0 if unset
+var g_active_theme = 0;           # theme index (default 0 = dark)
+var g_active_lang  = "plain";     # detected per-file; surfaced for M3b
 
-# ================================================================
-# TTY detection
-# ================================================================
+# Streaming render state, reset per input.
+var g_line_no       = 1;
+var g_at_line_start = 1;
+
+# ── TTY detection ──────────────────────────────────────────────────────
 
 # Linux x86_64 stat struct: st_mode is a u32 at offset 24.
 # S_IFMT = 0xF000, S_IFCHR = 0x2000.
@@ -37,46 +45,43 @@ fn is_tty(fd) {
     return 0;
 }
 
-# ================================================================
-# Mode resolution
-# ================================================================
+# ── Mode resolution ────────────────────────────────────────────────────
 
 fn resolve_mode() {
-    # Defaults from stdout TTY.
     g_decorated = is_tty(STDOUT);
 
-    # NO_COLOR env: standard convention — any non-empty value disables color.
-    # Scope for M2: treated as --color=never (no color subsystem wired yet;
-    # preserves future behavior).
+    # NO_COLOR — standard convention, any non-empty value disables color
+    # unless --color=always already forced it on.
     var nc = getenv("NO_COLOR");
     if (nc != 0) {
-        if (load8(nc) != 0) { g_flag_color = 0; }
+        if (load8(nc) != 0) {
+            if (g_flag_color != 1) { g_flag_color = 0; }
+        }
     }
 
-    # -p / --plain overrides everything.
+    # -p overrides everything: no decorations, no color.
     if (g_flag_plain == 1) {
         g_decorated = 0;
+        g_want_color = 0;
         return 0;
     }
 
-    # -n / -N override the auto-from-TTY for the numbers gutter.
-    # When piped (non-TTY) and the user forces -n, we go decorated
-    # anyway so numbers can render.
+    # -n lifts decorated on (so numbers render even when piped).
     if (g_flag_numbers == 1) { g_decorated = 1; }
-    if (g_flag_numbers == 0) {
-        # Force-off just suppresses numbers; header stays gated by TTY.
-        # resolved_show_numbers in cat_stream handles this.
-    }
+
+    # Color resolution (independent of decorated — numbers can be on
+    # without color when piped, per --color=never).
+    if (g_flag_color == 1) { g_want_color = 1; }
+    else { if (g_flag_color == 0) { g_want_color = 0; }
+           else { g_want_color = is_tty(STDOUT); } }
 
     return 0;
 }
 
 fn resolved_show_numbers() {
-    # -p overrides everything — even an explicit -n.
     if (g_flag_plain == 1) { return 0; }
     if (g_flag_numbers == 1) { return 1; }
     if (g_flag_numbers == 0) { return 0; }
-    # auto
     if (g_decorated == 1) { return 1; }
     return 0;
 }
@@ -87,31 +92,30 @@ fn resolved_show_header() {
     return 0;
 }
 
-# ================================================================
-# Decoration rendering
-# ================================================================
+# ── Decoration rendering ───────────────────────────────────────────────
 
-# "─── File: <path> " + 40 dashes + "\n"
-# ─ is U+2500 (E2 94 80). We don't adapt to terminal width in M2;
-# wide-enough-for-most-terms is the M2 tradeoff, terminal-width
-# probing ships with the M8 polish pass.
 fn emit_header(path) {
+    if (g_want_color == 1) { ansi_fg(theme_header_color(g_active_theme)); }
     syscall(1, 1, "─── File: ", 16);
     syscall(1, 1, path, strlen(path));
+    # Show detected language when non-plain — makes detection visible
+    # without requiring a debug flag. Full highlighting arrives in M3b.
+    if (streq(g_active_lang, "plain") == 0) {
+        syscall(1, 1, " (", 2);
+        syscall(1, 1, g_active_lang, strlen(g_active_lang));
+        syscall(1, 1, ")", 1);
+    }
     syscall(1, 1, " ", 1);
     var i = 0;
     while (i < 40) {
         syscall(1, 1, "─", 3);
         i = i + 1;
     }
+    if (g_want_color == 1) { ansi_reset(); }
     syscall(1, 1, "\n", 1);
     return 0;
 }
 
-# Line-number gutter: "<6-col right-aligned num> │ "
-# Fixed width 6 cols → supports up to 999999 lines without
-# misalignment. Files beyond that render with a widened-but-
-# consistent gutter; M8 will make the width adapt per-file.
 fn emit_lineno(ln: i64) {
     var pbuf[24];
     var n = ln;
@@ -131,13 +135,14 @@ fn emit_lineno(ln: i64) {
     store8(&pbuf + 8,  0x94);
     store8(&pbuf + 9,  0x82);
     store8(&pbuf + 10, 32);
+
+    if (g_want_color == 1) { ansi_fg(theme_lineno_color(g_active_theme)); }
     syscall(1, 1, &pbuf, 11);
+    if (g_want_color == 1) { ansi_reset(); }
     return 0;
 }
 
-# ================================================================
-# Rendering
-# ================================================================
+# ── Streaming ──────────────────────────────────────────────────────────
 
 fn report_error(path, reason) {
     eprint("owl: ", 5);
@@ -148,64 +153,97 @@ fn report_error(path, reason) {
     return 0;
 }
 
-fn cat_fd_plain(fd) {
-    var buf = alloc(BUFSIZE);
-    while (1 == 1) {
-        var n = file_read(fd, buf, BUFSIZE);
-        if (n < 0) { return 0 - 1; }
-        if (n == 0) { return 0; }
+fn render_reset() {
+    g_line_no = 1;
+    g_at_line_start = 1;
+    return 0;
+}
+
+# Render one buffered chunk, prefixing each line with a number gutter
+# when resolved_show_numbers() is true.
+fn render_chunk(buf, n) {
+    if (resolved_show_numbers() == 0) {
         file_write(STDOUT, buf, n);
+        return 0;
+    }
+    var start = 0;
+    var i = 0;
+    while (i < n) {
+        if (g_at_line_start == 1) {
+            emit_lineno(g_line_no);
+            g_at_line_start = 0;
+        }
+        if (load8(buf + i) == 10) {
+            file_write(STDOUT, buf + start, i - start + 1);
+            start = i + 1;
+            g_line_no = g_line_no + 1;
+            g_at_line_start = 1;
+        }
+        i = i + 1;
+    }
+    if (start < n) {
+        file_write(STDOUT, buf + start, n - start);
     }
     return 0;
 }
 
-# Stream fd to stdout, emitting line numbers before each line.
-# Broken pipe is left to the kernel's default SIGPIPE behavior.
-fn cat_fd_numbered(fd) {
+fn render_fd_loop(fd) {
     var buf = alloc(BUFSIZE);
-    var line_no: i64 = 1;
-    var at_line_start = 1;
     while (1 == 1) {
         var n = file_read(fd, buf, BUFSIZE);
         if (n < 0) { return 0 - 1; }
         if (n == 0) { return 0; }
-        var start = 0;
-        var i = 0;
-        while (i < n) {
-            if (at_line_start == 1) {
-                emit_lineno(line_no);
-                at_line_start = 0;
-            }
-            if (load8(buf + i) == 10) {
-                file_write(STDOUT, buf + start, i - start + 1);
-                start = i + 1;
-                line_no = line_no + 1;
-                at_line_start = 1;
-            }
-            i = i + 1;
-        }
-        if (start < n) {
-            file_write(STDOUT, buf + start, n - start);
-        }
+        render_chunk(buf, n);
     }
     return 0;
 }
 
-# Render one input (file path or fd for stdin) with the resolved mode.
-# path_for_header is the display name ("<stdin>" for stdin).
 fn render_fd(fd, path_for_header) {
+    render_reset();
+    g_active_lang = "plain";
     if (resolved_show_header() == 1) { emit_header(path_for_header); }
-    if (resolved_show_numbers() == 1) { return cat_fd_numbered(fd); }
-    return cat_fd_plain(fd);
+    return render_fd_loop(fd);
 }
 
+# Render a file path. Performs extension-based language detection, a
+# shebang peek on the first chunk if the extension didn't resolve,
+# and honors --language override.
 fn render_path(path) {
     var fd = file_open(path, O_RDONLY, 0);
     if (fd < 0) {
         report_error(path, "No such file or directory");
         return 0 - 1;
     }
-    var rc = render_fd(fd, path);
+
+    var lang = detect_language_from_path(path);
+
+    # Pre-read first chunk. Doubles as the shebang-peek buffer and the
+    # first chunk to render (no lseek).
+    var first_buf = alloc(BUFSIZE);
+    var first_n = file_read(fd, first_buf, BUFSIZE);
+    if (first_n < 0) {
+        file_close(fd);
+        report_error(path, "read error");
+        return 0 - 1;
+    }
+
+    # If extension detection fell through to "plain", try shebang.
+    if (streq(lang, "plain") == 1) {
+        if (first_n > 0) {
+            var sh = detect_language_from_shebang(first_buf, first_n);
+            if (sh != 0) { lang = sh; }
+        }
+    }
+
+    # --language overrides both.
+    if (g_flag_lang != 0) { lang = g_flag_lang; }
+
+    g_active_lang = lang;
+
+    render_reset();
+    if (resolved_show_header() == 1) { emit_header(path); }
+    render_chunk(first_buf, first_n);
+    var rc = render_fd_loop(fd);
     file_close(fd);
     if (rc < 0) {
         report_error(path, "read error");
@@ -214,9 +252,7 @@ fn render_path(path) {
     return 0;
 }
 
-# ================================================================
-# CLI
-# ================================================================
+# ── CLI ────────────────────────────────────────────────────────────────
 
 fn print_version() {
     println(OWL_VERSION);
@@ -228,17 +264,21 @@ fn print_help() {
     println("");
     println("Usage:");
     println("  owl [OPTIONS] [FILE...]");
-    println("  owl -                Read from stdin");
-    println("  owl a.txt - b.txt    Mix files and stdin");
+    println("  owl -                  Read from stdin");
+    println("  owl a.txt - b.txt      Mix files and stdin");
     println("");
     println("Options:");
-    println("  -n, --number         Force line numbers on");
-    println("  -N, --no-number      Force line numbers off");
-    println("  -p, --plain          Plain output (no decorations)");
-    println("      --color=<when>   auto | always | never");
-    println("      --paging=<when>  auto | always | never (no-op pre-M4)");
-    println("  -h, --help           Show this help and exit");
-    println("  -V, --version        Show version and exit");
+    println("  -n, --number           Force line numbers on");
+    println("  -N, --no-number        Force line numbers off");
+    println("  -p, --plain            Plain output (no decorations)");
+    println("      --color=<when>     auto | always | never");
+    println("      --paging=<when>    auto | always | never (no-op pre-M4)");
+    println("      --theme=<name>     Syntax theme (dark | light)");
+    println("      --list-themes      List bundled themes");
+    println("      --language=<name>  Force language (overrides auto-detect)");
+    println("      --list-languages   List recognized languages");
+    println("  -h, --help             Show this help and exit");
+    println("  -V, --version          Show version and exit");
     return EXIT_OK;
 }
 
@@ -251,7 +291,6 @@ fn match_eq_flag(arg, name) {
     return arg + nlen + 1;
 }
 
-# Apply --color=<value>. Returns 0 on OK, 1 on bad value.
 fn set_color(value) {
     if (streq(value, "auto") == 1)   { g_flag_color = 0 - 1; return 0; }
     if (streq(value, "always") == 1) { g_flag_color = 1;     return 0; }
@@ -259,7 +298,6 @@ fn set_color(value) {
     return 1;
 }
 
-# --paging is parsed and validated but otherwise inert until M4.
 fn set_paging(value) {
     if (streq(value, "auto") == 1)   { return 0; }
     if (streq(value, "always") == 1) { return 0; }
@@ -280,21 +318,21 @@ fn main() {
     while (i < n) {
         var a = argv(i);
 
-        # Info flags short-circuit.
         if (streq(a, "-V") == 1)        { return print_version(); }
         if (streq(a, "--version") == 1) { return print_version(); }
         if (streq(a, "-h") == 1)        { return print_help(); }
         if (streq(a, "--help") == 1)    { return print_help(); }
 
-        # Decoration toggles.
-        if (streq(a, "-n") == 1)        { g_flag_numbers = 1; i = i + 1; continue; }
-        if (streq(a, "--number") == 1)  { g_flag_numbers = 1; i = i + 1; continue; }
-        if (streq(a, "-N") == 1)        { g_flag_numbers = 0; i = i + 1; continue; }
-        if (streq(a, "--no-number") == 1) { g_flag_numbers = 0; i = i + 1; continue; }
-        if (streq(a, "-p") == 1)        { g_flag_plain = 1; i = i + 1; continue; }
-        if (streq(a, "--plain") == 1)   { g_flag_plain = 1; i = i + 1; continue; }
+        if (streq(a, "--list-themes") == 1)    { return print_theme_list(); }
+        if (streq(a, "--list-languages") == 1) { return print_language_list(); }
 
-        # Long options with =VALUE.
+        if (streq(a, "-n") == 1)         { g_flag_numbers = 1; i = i + 1; continue; }
+        if (streq(a, "--number") == 1)   { g_flag_numbers = 1; i = i + 1; continue; }
+        if (streq(a, "-N") == 1)         { g_flag_numbers = 0; i = i + 1; continue; }
+        if (streq(a, "--no-number") == 1) { g_flag_numbers = 0; i = i + 1; continue; }
+        if (streq(a, "-p") == 1)         { g_flag_plain = 1; i = i + 1; continue; }
+        if (streq(a, "--plain") == 1)    { g_flag_plain = 1; i = i + 1; continue; }
+
         var v = match_eq_flag(a, "--color");
         if (v != 0) {
             if (set_color(v) != 0) {
@@ -313,8 +351,28 @@ fn main() {
             i = i + 1;
             continue;
         }
+        v = match_eq_flag(a, "--theme");
+        if (v != 0) {
+            var tidx = theme_index(v);
+            if (tidx < 0) {
+                report_error(a, "unknown theme (try --list-themes)");
+                return EXIT_USAGE;
+            }
+            g_active_theme = tidx;
+            i = i + 1;
+            continue;
+        }
+        v = match_eq_flag(a, "--language");
+        if (v != 0) {
+            if (lang_is_valid(v) == 0) {
+                report_error(a, "unknown language (try --list-languages)");
+                return EXIT_USAGE;
+            }
+            g_flag_lang = v;
+            i = i + 1;
+            continue;
+        }
 
-        # "-" → stdin positional.
         if (streq(a, "-") == 1) {
             if (any_positional == 0) { resolve_mode(); }
             any_positional = 1;
@@ -324,13 +382,11 @@ fn main() {
             continue;
         }
 
-        # Unknown dash-prefixed option.
         if (load8(a) == 45) {
             report_error(a, "unknown option");
             return EXIT_USAGE;
         }
 
-        # Positional file path.
         if (any_positional == 0) { resolve_mode(); }
         any_positional = 1;
         var file_rc = render_path(a);
@@ -338,8 +394,6 @@ fn main() {
         i = i + 1;
     }
 
-    # No positional args: either read stdin (piped) or print help (TTY).
-    # M2 restores M0's interactive bare-owl = help behavior.
     if (any_positional == 0) {
         if (is_tty(STDIN) == 1) { return print_help(); }
         resolve_mode();

@@ -1,0 +1,103 @@
+# src/theme.cyr — bundled themes + ANSI emission (M3a)
+#
+# Two bundled themes: "dark" (default) and "light". Each theme maps
+# decoration zones to 256-color ANSI codes. Token-level palette keys
+# (keyword/string/comment/number) are stubbed in as fields for M3b
+# so the format doesn't churn when grammars land.
+#
+# Theme selection resolves to a single active index via theme_select().
+# Color output is gated by g_want_color, set during resolve_mode() in
+# main.cyr based on --color / NO_COLOR / TTY.
+
+var THEME_COUNT = 2;
+
+# ── Theme table (parallel per-field accessors, keyed by index) ────────
+
+fn theme_name(i) {
+    if (i == 0) { return "dark"; }
+    if (i == 1) { return "light"; }
+    return "dark";
+}
+
+fn theme_header_color(i) {
+    if (i == 0) { return 45; }   # cyan-ish (256-color index)
+    if (i == 1) { return 24; }   # deep blue
+    return 7;
+}
+
+fn theme_lineno_color(i) {
+    if (i == 0) { return 240; }  # dark grey
+    if (i == 1) { return 250; }  # light grey
+    return 7;
+}
+
+# ── Public API ─────────────────────────────────────────────────────────
+
+# Look up theme by name. Returns index or -1.
+fn theme_index(name) {
+    var i = 0;
+    while (i < THEME_COUNT) {
+        if (streq(theme_name(i), name) == 1) { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn print_theme_list() {
+    var i = 0;
+    while (i < THEME_COUNT) {
+        println(theme_name(i));
+        i = i + 1;
+    }
+    return 0;
+}
+
+# ── ANSI emission ──────────────────────────────────────────────────────
+
+# Write an integer (0..999) as decimal into buf at offset, return
+# number of bytes written.
+fn _u16_to_ascii(buf, off, n: i64) {
+    var nbuf[8];
+    var pi: i64 = 7;
+    if (n == 0) { store8(&nbuf + pi, 48); pi = pi - 1; }
+    while (n > 0) {
+        store8(&nbuf + pi, 48 + n % 10);
+        pi = pi - 1;
+        n = n / 10;
+    }
+    pi = pi + 1;
+    var copied = 0;
+    while (pi < 8) {
+        store8(buf + off + copied, load8(&nbuf + pi));
+        copied = copied + 1;
+        pi = pi + 1;
+    }
+    return copied;
+}
+
+# Emit \e[38;5;Nm foreground-color escape on stdout.
+# Caller must have verified g_want_color == 1 before calling.
+fn ansi_fg(code) {
+    var buf[16];
+    # "\e[38;5;"
+    store8(&buf + 0, 0x1B);
+    store8(&buf + 1, 91);   # '['
+    store8(&buf + 2, 51);   # '3'
+    store8(&buf + 3, 56);   # '8'
+    store8(&buf + 4, 59);   # ';'
+    store8(&buf + 5, 53);   # '5'
+    store8(&buf + 6, 59);   # ';'
+    var off = 7;
+    off = off + _u16_to_ascii(&buf, off, code);
+    store8(&buf + off, 109);  # 'm'
+    off = off + 1;
+    syscall(1, 1, &buf, off);
+    return 0;
+}
+
+# Emit reset escape \e[0m on stdout. Unguarded — callers only call
+# this after ansi_fg, so the gate has already been checked.
+fn ansi_reset() {
+    syscall(1, 1, "\x1b[0m", 4);
+    return 0;
+}

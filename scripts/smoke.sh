@@ -185,4 +185,103 @@ NO_COLOR=1 "$BIN" "$TMPDIR/a.txt" > /dev/null 2>&1 \
 out=$(echo "bare piped" | "$BIN")
 [ "$out" = "bare piped" ] || fail "bare-piped: got '$out'"
 
-echo "smoke: OK ($v_long) — M0 + M1 + M2 gates passing"
+# ============================================================
+# M3a — language detection + theme scaffolding
+# ============================================================
+
+# --list-themes must include both bundled themes.
+tlist=$("$BIN" --list-themes)
+echo "$tlist" | grep -q "^dark$"  || fail "--list-themes missing 'dark'"
+echo "$tlist" | grep -q "^light$" || fail "--list-themes missing 'light'"
+
+# --list-languages must include the starter set.
+llist=$("$BIN" --list-languages)
+for lang in plain shell python javascript typescript rust cyrius c toml json yaml; do
+    echo "$llist" | grep -q "^$lang\$" || fail "--list-languages missing '$lang'"
+done
+
+# --theme=bogus → exit 2 with clear error.
+set +e
+"$BIN" --theme=bogus "$TMPDIR/a.txt" > /dev/null 2>"$TMPDIR/err"
+rc=$?
+set -e
+[ "$rc" = "2" ] || fail "--theme=bogus exit: got $rc, expected 2"
+grep -q "unknown theme" "$TMPDIR/err" || fail "--theme=bogus missing 'unknown theme' in stderr"
+
+# --language=bogus → exit 2.
+set +e
+"$BIN" --language=bogus "$TMPDIR/a.txt" > /dev/null 2>"$TMPDIR/err"
+rc=$?
+set -e
+[ "$rc" = "2" ] || fail "--language=bogus exit: got $rc, expected 2"
+
+# Extension detection: .rs → rust.
+printf 'fn main() {}\n' > "$TMPDIR/t.rs"
+out=$("$BIN" -n "$TMPDIR/t.rs")
+case "$out" in
+    *"(rust)"*) ;;
+    *) fail "extension detection: .rs should show (rust) in header" ;;
+esac
+
+# Shebang detection: python shebang.
+printf '#!/usr/bin/env python3\nprint("hi")\n' > "$TMPDIR/shebang"
+out=$("$BIN" -n "$TMPDIR/shebang")
+case "$out" in
+    *"(python)"*) ;;
+    *) fail "shebang detection: python not detected in '$out'" ;;
+esac
+
+# Shebang detection: bash shebang.
+printf '#!/bin/bash\necho hi\n' > "$TMPDIR/script"
+out=$("$BIN" -n "$TMPDIR/script")
+case "$out" in
+    *"(shell)"*) ;;
+    *) fail "shebang detection: shell not detected" ;;
+esac
+
+# --language overrides detection.
+out=$("$BIN" -n --language=rust "$TMPDIR/t.rs")
+case "$out" in
+    *"(rust)"*) ;;
+    *) fail "--language=rust override should leave (rust) in header" ;;
+esac
+
+# Stdin input has no language label in header.
+out=$(echo "hi" | "$BIN" -n -)
+case "$out" in
+    *"("*) fail "stdin header should not carry a language label: '$out'" ;;
+    *) ;;
+esac
+
+# --color=always emits ANSI escape even when piped (-n to force header).
+out=$("$BIN" --color=always -n "$TMPDIR/a.txt")
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "--color=always did not emit ANSI escape when piped" ;;
+esac
+
+# --color=always + --theme=light produces different bytes than --theme=dark
+# (palette values differ, so the escape-code digits are different).
+dark_out=$("$BIN"  --color=always --theme=dark  -n "$TMPDIR/a.txt")
+light_out=$("$BIN" --color=always --theme=light -n "$TMPDIR/a.txt")
+[ "$dark_out" != "$light_out" ] || fail "dark and light themes produced identical output"
+
+# NO_COLOR strips ANSI (overrides auto / default) but leaves numbers on with -n.
+out=$(NO_COLOR=1 "$BIN" -n "$TMPDIR/a.txt")
+case "$out" in
+    *$(printf '\033')*) fail "NO_COLOR=1 failed to strip ANSI" ;;
+    *) ;;
+esac
+case "$out" in
+    *"line one"*) ;;
+    *) fail "NO_COLOR=1 corrupted content" ;;
+esac
+
+# --color=always overrides NO_COLOR (flags > env).
+out=$(NO_COLOR=1 "$BIN" --color=always -n "$TMPDIR/a.txt")
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "--color=always should override NO_COLOR" ;;
+esac
+
+echo "smoke: OK ($v_long) — M0 + M1 + M2 + M3a gates passing"
