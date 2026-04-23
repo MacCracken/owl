@@ -3,9 +3,23 @@
 
 fn main() {
     alloc_init();
+
     test_group("smoke");
     assert(1, "true is true");
     assert_eq(1 + 1, 2, "math works");
+
+    test_group("string primitives main.cyr dispatches on");
+    assert_eq(streq("-V", "-V"), 1, "streq matches equal c-strings");
+    assert_eq(streq("-V", "-h"), 0, "streq rejects unequal c-strings");
+    assert_eq(strlen("owl"), 3, "strlen of 'owl' is 3");
+
+    # Version string shape. Keep the literal here in sync with OWL_VERSION
+    # in src/main.cyr and with VERSION. M8 CI check will enforce.
+    test_group("version string shape");
+    var v = "owl 0.1.0";
+    assert(strlen(v) > 4, "version string is longer than 4 chars");
+    assert_eq(memeq(v, "owl ", 4), 1, "version string starts with 'owl '");
+
     return assert_summary();
 }
 

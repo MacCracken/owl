@@ -41,3 +41,6 @@ jobs:
 
       - name: Test
         run: cyrius test tests/owl.tcyr
+
+      - name: Smoke test
+        run: sh scripts/smoke.sh build/owl

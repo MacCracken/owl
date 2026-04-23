@@ -1,9 +1,51 @@
 # owl — main entry point
 # Stdlib auto-included via cyrius.cyml
 
+# Keep OWL_VERSION in sync with the VERSION file.
+# A M8 CI check will enforce equality; for now, manual.
+var OWL_VERSION = "owl 0.1.0";
+
+fn print_version() {
+    println(OWL_VERSION);
+    return 0;
+}
+
+fn print_help() {
+    println("owl — a watchful file viewer for AGNOS / Cyrius");
+    println("");
+    println("Usage:");
+    println("  owl [OPTIONS] [FILE...]");
+    println("");
+    println("Options:");
+    println("  -h, --help       Show this help and exit");
+    println("  -V, --version    Show version and exit");
+    println("");
+    println("Note: M0 scaffold — file reading arrives in M1 (cat parity).");
+    return 0;
+}
+
 fn main() {
     alloc_init();
-    println("hello from owl");
+    args_init();
+
+    var n = argc();
+    if (n <= 1) {
+        print_help();
+        return 0;
+    }
+
+    var i = 1;
+    while (i < n) {
+        var a = argv(i);
+        if (streq(a, "-V") == 1)        { return print_version(); }
+        if (streq(a, "--version") == 1) { return print_version(); }
+        if (streq(a, "-h") == 1)        { return print_help(); }
+        if (streq(a, "--help") == 1)    { return print_help(); }
+        i = i + 1;
+    }
+
+    # Any other args land here until M1 introduces file reading.
+    print_help();
     return 0;
 }
 
