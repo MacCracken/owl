@@ -1,0 +1,16 @@
+[package]
+name = "owl"
+version = "0.1.0"
+description = "A watchful file viewer for AGNOS / Cyrius"
+license = "GPL-3.0-only"
+language = "cyrius"
+cyrius = "5.6.0"
+
+[build]
+entry = "src/main.cyr"
+test = "src/test.cyr"
+output = "owl"
+
+[deps]
+stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert"]
+---
