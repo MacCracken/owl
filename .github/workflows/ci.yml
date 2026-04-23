@@ -40,4 +40,4 @@ jobs:
           cyrius build src/main.cyr build/${{ github.event.repository.name }}
 
       - name: Test
-        run: cyrius test src/test.cyr
+        run: cyrius test tests/owl.tcyr

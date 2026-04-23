@@ -1,16 +1,40 @@
 [package]
 name = "owl"
-version = "0.1.0"
+version = "${file:VERSION}"
 description = "A watchful file viewer for AGNOS / Cyrius"
 license = "GPL-3.0-only"
+repository = "https://github.com/MacCracken/owl"
 language = "cyrius"
 cyrius = "5.6.0"
 
 [build]
 entry = "src/main.cyr"
-test = "src/test.cyr"
 output = "owl"
 
+# Stdlib footprint chosen for the ROADMAP M0–M4 arc:
+#   syscalls/alloc/fmt/io — required baseline
+#   str/string/vec        — file content, paths, multi-file list
+#   args                  — CLI flag parsing (M0, §3.3)
+#   fs                    — reading files by path (M1, §3.2)
+#   hashmap               — language + theme tables (M3, §5.1/§5.2)
+#   process               — pager spawn (M4, §7)
+#   assert                — tests/owl.tcyr
+# toml/cyml (config, M7) and any syntax-grammar deps come later.
+# No external deps yet — owl is first-party; add [deps.<name>] blocks
+# (git + tag + modules) if we pull in e.g. sakshi/patra/yukti later.
 [deps]
-stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert"]
+stdlib = [
+    "syscalls",
+    "alloc",
+    "fmt",
+    "io",
+    "fs",
+    "str",
+    "string",
+    "vec",
+    "args",
+    "hashmap",
+    "process",
+    "assert",
+]
 ---
