@@ -319,4 +319,74 @@ if command -v script > /dev/null 2>&1; then
     fi
 fi
 
-echo "smoke: OK ($v_long) — M0 + M1 + M2 + M3a + M4 gates passing"
+# ============================================================
+# M5 — non-printables + whitespace
+# ============================================================
+
+# Fixture with tab, CR, DEL-class control chars.
+printf 'a\tb\n'              > "$TMPDIR/tab.txt"
+printf 'line\r\nnext\n'      > "$TMPDIR/cr.txt"
+printf 'x\x01\x02y\n'        > "$TMPDIR/ctrl.txt"
+
+# -A shows → for tab and $ before \n.
+out=$("$BIN" -A "$TMPDIR/tab.txt")
+case "$out" in
+    *"→"*"b"*) ;;
+    *) fail "-A did not render → for tab" ;;
+esac
+case "$out" in
+    *"b\$") ;;
+    *) fail "-A did not append \$ before \\n" ;;
+esac
+
+# -A shows ␍ for CR.
+out=$("$BIN" -A "$TMPDIR/cr.txt")
+case "$out" in
+    *"␍"*) ;;
+    *) fail "-A did not render ␍ for CR" ;;
+esac
+
+# -A shows ^A / ^B for control chars.
+out=$("$BIN" -A "$TMPDIR/ctrl.txt")
+case "$out" in
+    *"^A"*"^B"*) ;;
+    *) fail "-A did not render ^X notation" ;;
+esac
+
+# Default tab expansion (4 spaces).
+out=$("$BIN" "$TMPDIR/tab.txt")
+[ "$out" = "a    b" ] || fail "default tab expansion: got '$out', expected 'a    b'"
+
+# --tabs=2.
+out=$("$BIN" --tabs=2 "$TMPDIR/tab.txt")
+[ "$out" = "a  b" ] || fail "--tabs=2: got '$out', expected 'a  b'"
+
+# --tabs=0 preserves literal \t.
+diff "$TMPDIR/tab.txt" <("$BIN" --tabs=0 "$TMPDIR/tab.txt") > /dev/null \
+    || fail "--tabs=0 did not preserve literal \\t"
+
+# --tabs=foo → exit 2.
+set +e
+"$BIN" --tabs=foo "$TMPDIR/tab.txt" > /dev/null 2>"$TMPDIR/err"
+rc=$?
+set -e
+[ "$rc" = "2" ] || fail "--tabs=foo exit: got $rc, expected 2"
+
+# --wrap=<value> validates.
+"$BIN" --wrap=auto      "$TMPDIR/a.txt" > /dev/null 2>&1 || fail "--wrap=auto rejected"
+"$BIN" --wrap=never     "$TMPDIR/a.txt" > /dev/null 2>&1 || fail "--wrap=never rejected"
+"$BIN" --wrap=character "$TMPDIR/a.txt" > /dev/null 2>&1 || fail "--wrap=character rejected"
+set +e
+"$BIN" --wrap=bogus "$TMPDIR/a.txt" > /dev/null 2>"$TMPDIR/err"
+rc=$?
+set -e
+[ "$rc" = "2" ] || fail "--wrap=bogus exit: got $rc, expected 2"
+
+# -p overrides all transforms — byte-identical to cat for tab file.
+diff "$TMPDIR/tab.txt" <("$BIN" -p "$TMPDIR/tab.txt") > /dev/null \
+    || fail "-p did not pass tabs through literally (cat-parity violation)"
+# -p wins over -A + -n.
+diff "$TMPDIR/tab.txt" <("$BIN" -p -A -n "$TMPDIR/tab.txt") > /dev/null \
+    || fail "-p did not override -A / -n"
+
+echo "smoke: OK ($v_long) — M0 + M1 + M2 + M3a + M4 + M5 gates passing"

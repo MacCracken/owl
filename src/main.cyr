@@ -22,12 +22,20 @@ var g_decorated = 0;
 var g_want_color = 0;
 
 # Flag state set during arg parse. -1 = unset/auto, 0 = off, 1 = on.
-var g_flag_numbers = 0 - 1;
-var g_flag_plain   = 0;
-var g_flag_color   = 0 - 1;
-var g_flag_lang    = 0;           # pointer to --language value, 0 if unset
-var g_active_theme = 0;           # theme index (default 0 = dark)
-var g_active_lang  = "plain";     # detected per-file; surfaced for M3b
+var g_flag_numbers  = 0 - 1;
+var g_flag_plain    = 0;
+var g_flag_color    = 0 - 1;
+var g_flag_lang     = 0;           # pointer to --language value, 0 if unset
+var g_active_theme  = 0;           # theme index (default 0 = dark)
+var g_active_lang   = "plain";     # detected per-file; surfaced for M3b
+
+# M5 — non-printables + whitespace
+var g_flag_show_all = 0;           # -A
+var g_flag_tabs     = 4;           # --tabs=N; 0 = preserve literal \t
+# --wrap is parsed for spec compatibility but doesn't yet insert breaks.
+# "never" matches the current behavior (terminal handles visual wrap);
+# "character" mode needs a TIOCGWINSZ col count — deferred to M8.
+var g_flag_wrap     = 0;           # 0 auto, 1 never, 2 character
 
 # Streaming render state, reset per input.
 var g_line_no       = 1;
@@ -161,30 +169,139 @@ fn render_reset() {
     return 0;
 }
 
-# Render one buffered chunk, prefixing each line with a number gutter
-# when resolved_show_numbers() is true.
+# Render one buffered chunk through the resolved pipeline:
+#   - line-number gutter (from g_flag_numbers / decorated mode)
+#   - tab expansion (g_flag_tabs spaces, or literal if 0)
+#   - visible non-printables (g_flag_show_all: → for tab, $ for \n,
+#     ␍ for CR, ^X / ^? for other control chars)
+#
+# Three dispatch paths, fastest to slowest:
+#   1. No transforms      → bulk file_write of the whole chunk
+#   2. Line-numbers only  → chunk-flush on each \n (M2 path)
+#   3. Any transform      → byte-by-byte
 fn render_chunk(buf, n) {
-    if (resolved_show_numbers() == 0) {
+    # -p is cat-parity: byte-identical passthrough, regardless of -A /
+    # --tabs / -n / any other transform flag the user also set.
+    if (g_flag_plain == 1) {
         file_write(STDOUT, buf, n);
         return 0;
     }
-    var start = 0;
+
+    var show_nums = resolved_show_numbers();
+    var show_all  = g_flag_show_all;
+    var tabs      = g_flag_tabs;
+
+    # Path 1: no transforms at all.
+    if (show_nums == 0) {
+        if (show_all == 0) {
+            if (tabs == 0) {
+                file_write(STDOUT, buf, n);
+                return 0;
+            }
+        }
+    }
+
+    # Path 2: only line numbers, no byte-level changes.
+    if (show_nums == 1) {
+        if (show_all == 0) {
+            if (tabs == 0) {
+                var start = 0;
+                var j = 0;
+                while (j < n) {
+                    if (g_at_line_start == 1) {
+                        emit_lineno(g_line_no);
+                        g_at_line_start = 0;
+                    }
+                    if (load8(buf + j) == 10) {
+                        file_write(STDOUT, buf + start, j - start + 1);
+                        start = j + 1;
+                        g_line_no = g_line_no + 1;
+                        g_at_line_start = 1;
+                    }
+                    j = j + 1;
+                }
+                if (start < n) {
+                    file_write(STDOUT, buf + start, n - start);
+                }
+                return 0;
+            }
+        }
+    }
+
+    # Path 3: any transform active — byte-by-byte.
     var i = 0;
     while (i < n) {
-        if (g_at_line_start == 1) {
-            emit_lineno(g_line_no);
-            g_at_line_start = 0;
+        if (show_nums == 1) {
+            if (g_at_line_start == 1) {
+                emit_lineno(g_line_no);
+                g_at_line_start = 0;
+            }
         }
-        if (load8(buf + i) == 10) {
-            file_write(STDOUT, buf + start, i - start + 1);
-            start = i + 1;
-            g_line_no = g_line_no + 1;
-            g_at_line_start = 1;
+        var c = load8(buf + i);
+
+        if (c == 10) {
+            # LF — -A adds a trailing $ before the newline.
+            if (show_all == 1) { file_write(STDOUT, "$", 1); }
+            file_write(STDOUT, "\n", 1);
+            if (show_nums == 1) {
+                g_line_no = g_line_no + 1;
+                g_at_line_start = 1;
+            }
+        } else {
+            if (c == 9) {
+                # Tab — render the visible arrow + padding under -A, or
+                # N spaces / literal \t otherwise.
+                if (show_all == 1) {
+                    file_write(STDOUT, "→", 3);
+                    var pad = tabs - 1;
+                    if (pad < 0) { pad = 0; }
+                    var p = 0;
+                    while (p < pad) {
+                        file_write(STDOUT, " ", 1);
+                        p = p + 1;
+                    }
+                } else {
+                    if (tabs == 0) {
+                        file_write(STDOUT, "\t", 1);
+                    } else {
+                        var p = 0;
+                        while (p < tabs) {
+                            file_write(STDOUT, " ", 1);
+                            p = p + 1;
+                        }
+                    }
+                }
+            } else {
+                if (c == 13) {
+                    # CR — ␍ glyph under -A; pass through otherwise.
+                    if (show_all == 1) {
+                        file_write(STDOUT, "␍", 3);
+                    } else {
+                        file_write(STDOUT, buf + i, 1);
+                    }
+                } else {
+                    if (show_all == 1) {
+                        # c < 32 (excluding 9/10/13 handled above) or c == 127
+                        # render as ^X notation. 127 (DEL) → ^?.
+                        if (c < 32) {
+                            var ctrl[2];
+                            store8(&ctrl, 94);        # '^'
+                            store8(&ctrl + 1, c + 64);
+                            file_write(STDOUT, &ctrl, 2);
+                        } else {
+                            if (c == 127) {
+                                file_write(STDOUT, "^?", 2);
+                            } else {
+                                file_write(STDOUT, buf + i, 1);
+                            }
+                        }
+                    } else {
+                        file_write(STDOUT, buf + i, 1);
+                    }
+                }
+            }
         }
         i = i + 1;
-    }
-    if (start < n) {
-        file_write(STDOUT, buf + start, n - start);
     }
     return 0;
 }
@@ -273,6 +390,10 @@ fn print_help() {
     println("  -n, --number           Force line numbers on");
     println("  -N, --no-number        Force line numbers off");
     println("  -p, --plain            Plain output (no decorations)");
+    println("  -A, --show-all         Show non-printables: tab as →, EOL as $,");
+    println("                         CR as ␍, other controls as ^X");
+    println("      --tabs=<n>         Expand tabs to N spaces (default 4, 0 = literal)");
+    println("      --wrap=<mode>      auto | never | character (currently a no-op)");
     println("      --color=<when>     auto | always | never");
     println("      --paging=<when>    auto | always | never");
     println("      --theme=<name>     Syntax theme (dark | light)");
@@ -298,6 +419,31 @@ fn set_color(value) {
     if (streq(value, "always") == 1) { g_flag_color = 1;     return 0; }
     if (streq(value, "never") == 1)  { g_flag_color = 0;     return 0; }
     return 1;
+}
+
+# Accepts "auto" | "never" | "character". Stored in g_flag_wrap but
+# unused by the M5 renderer (the terminal handles visual wrap for all
+# three values today). "character" requires TIOCGWINSZ — M8.
+fn set_wrap(value) {
+    if (streq(value, "auto") == 1)      { g_flag_wrap = 0; return 0; }
+    if (streq(value, "never") == 1)     { g_flag_wrap = 1; return 0; }
+    if (streq(value, "character") == 1) { g_flag_wrap = 2; return 0; }
+    return 1;
+}
+
+# Parse --tabs=N. Rejects negative values. Returns 0 OK, 1 on error.
+fn set_tabs(value) {
+    var vlen = strlen(value);
+    if (vlen == 0) { return 1; }
+    var p = 0;
+    while (p < vlen) {
+        var c = load8(value + p);
+        if (c < 48) { return 1; }
+        if (c > 57) { return 1; }
+        p = p + 1;
+    }
+    g_flag_tabs = atoi(value);
+    return 0;
 }
 
 # Pager gate — uses is_tty (local) and g_flag_plain (local); reads
@@ -337,6 +483,8 @@ fn main() {
         if (streq(a, "--no-number") == 1) { g_flag_numbers = 0; i = i + 1; continue; }
         if (streq(a, "-p") == 1)         { g_flag_plain = 1; i = i + 1; continue; }
         if (streq(a, "--plain") == 1)    { g_flag_plain = 1; i = i + 1; continue; }
+        if (streq(a, "-A") == 1)         { g_flag_show_all = 1; i = i + 1; continue; }
+        if (streq(a, "--show-all") == 1) { g_flag_show_all = 1; i = i + 1; continue; }
 
         var v = match_eq_flag(a, "--color");
         if (v != 0) {
@@ -374,6 +522,24 @@ fn main() {
                 return EXIT_USAGE;
             }
             g_flag_lang = v;
+            i = i + 1;
+            continue;
+        }
+        v = match_eq_flag(a, "--tabs");
+        if (v != 0) {
+            if (set_tabs(v) != 0) {
+                report_error(a, "invalid value (want a non-negative integer)");
+                return EXIT_USAGE;
+            }
+            i = i + 1;
+            continue;
+        }
+        v = match_eq_flag(a, "--wrap");
+        if (v != 0) {
+            if (set_wrap(v) != 0) {
+                report_error(a, "invalid value (want auto|never|character)");
+                return EXIT_USAGE;
+            }
             i = i + 1;
             continue;
         }
