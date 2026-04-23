@@ -284,4 +284,39 @@ case "$out" in
     *) fail "--color=always should override NO_COLOR" ;;
 esac
 
-echo "smoke: OK ($v_long) — M0 + M1 + M2 + M3a gates passing"
+# ============================================================
+# M4 — paging
+# ============================================================
+
+# Pager must NOT fire when stdout is not a TTY, even with
+# --paging=always. Uses a side-effecting OWL_PAGER so we can detect
+# spawning via a marker file rather than output content.
+rm -f "$TMPDIR/pager_marker"
+OWL_PAGER="sh -c 'touch \"$TMPDIR/pager_marker\"; cat'" \
+    "$BIN" --paging=always "$TMPDIR/a.txt" > /dev/null 2>&1
+[ ! -f "$TMPDIR/pager_marker" ] \
+    || fail "pager invoked on non-TTY stdout despite --paging=always"
+
+# Paging gates to TTY; when we can simulate one via script(1), also
+# verify the positive path and --paging=never respecting the flag.
+if command -v script > /dev/null 2>&1; then
+    # util-linux: script -qc 'CMD' /dev/null.  BSD macOS flips the arg order.
+    # Detect util-linux by probing the accepted invocation.
+    if script -qc 'true' /dev/null > /dev/null 2>&1; then
+        rm -f "$TMPDIR/pager_marker"
+        OWL_PAGER="sh -c 'touch \"$TMPDIR/pager_marker\"; cat'" \
+            script -qc "'$BIN' --paging=always '$TMPDIR/a.txt'" /dev/null \
+                < /dev/null > /dev/null 2>&1 || true
+        [ -f "$TMPDIR/pager_marker" ] \
+            || fail "pager not invoked on TTY with --paging=always"
+
+        rm -f "$TMPDIR/pager_marker"
+        OWL_PAGER="sh -c 'touch \"$TMPDIR/pager_marker\"; cat'" \
+            script -qc "'$BIN' --paging=never '$TMPDIR/a.txt'" /dev/null \
+                < /dev/null > /dev/null 2>&1 || true
+        [ ! -f "$TMPDIR/pager_marker" ] \
+            || fail "pager invoked despite --paging=never"
+    fi
+fi
+
+echo "smoke: OK ($v_long) — M0 + M1 + M2 + M3a + M4 gates passing"

@@ -3,6 +3,7 @@
 
 include "src/lang.cyr"
 include "src/theme.cyr"
+include "src/pager.cyr"
 
 # Keep OWL_VERSION in sync with the VERSION file.
 # A M8 CI check will enforce equality; for now, manual.
@@ -34,15 +35,16 @@ var g_at_line_start = 1;
 
 # ── TTY detection ──────────────────────────────────────────────────────
 
-# Linux x86_64 stat struct: st_mode is a u32 at offset 24.
-# S_IFMT = 0xF000, S_IFCHR = 0x2000.
+# TTY detection via ioctl(fd, TCGETS). Succeeds only on terminals —
+# unlike fstat+S_IFCHR, which also matches /dev/null, /dev/zero, and
+# any other character device. (That's the bug that let `owl ... > /dev/null`
+# spawn the pager: /dev/null is a char device but not a terminal.)
+# TCGETS = 0x5401 on Linux. termios is ~44 bytes; oversizing is free.
 fn is_tty(fd) {
-    var sb[144];
-    var r = syscall(SYS_FSTAT, fd, &sb);
+    var tbuf[128];
+    var r = syscall(SYS_IOCTL, fd, 0x5401, &tbuf);
     if (r < 0) { return 0; }
-    var mode = load32(&sb + 24);
-    if ((mode & 0xF000) == 0x2000) { return 1; }
-    return 0;
+    return 1;
 }
 
 # ── Mode resolution ────────────────────────────────────────────────────
@@ -272,7 +274,7 @@ fn print_help() {
     println("  -N, --no-number        Force line numbers off");
     println("  -p, --plain            Plain output (no decorations)");
     println("      --color=<when>     auto | always | never");
-    println("      --paging=<when>    auto | always | never (no-op pre-M4)");
+    println("      --paging=<when>    auto | always | never");
     println("      --theme=<name>     Syntax theme (dark | light)");
     println("      --list-themes      List bundled themes");
     println("      --language=<name>  Force language (overrides auto-detect)");
@@ -298,10 +300,13 @@ fn set_color(value) {
     return 1;
 }
 
-fn set_paging(value) {
-    if (streq(value, "auto") == 1)   { return 0; }
-    if (streq(value, "always") == 1) { return 0; }
-    if (streq(value, "never") == 1)  { return 0; }
+# Pager gate — uses is_tty (local) and g_flag_plain (local); reads
+# g_flag_paging from pager.cyr. Kept here so pager.cyr stays
+# dependency-free of main.
+fn should_page() {
+    if (g_flag_plain == 1) { return 0; }
+    if (g_flag_paging == 0) { return 0; }
+    if (is_tty(STDOUT) == 0) { return 0; }
     return 1;
 }
 
@@ -374,7 +379,7 @@ fn main() {
         }
 
         if (streq(a, "-") == 1) {
-            if (any_positional == 0) { resolve_mode(); }
+            if (any_positional == 0) { resolve_mode(); if (should_page() == 1) { start_pager(); } }
             any_positional = 1;
             var stdin_rc = render_fd(STDIN, "<stdin>");
             if (stdin_rc < 0) { fail = fail + 1; } else { ok = ok + 1; }
@@ -387,7 +392,7 @@ fn main() {
             return EXIT_USAGE;
         }
 
-        if (any_positional == 0) { resolve_mode(); }
+        if (any_positional == 0) { resolve_mode(); if (should_page() == 1) { start_pager(); } }
         any_positional = 1;
         var file_rc = render_path(a);
         if (file_rc < 0) { fail = fail + 1; } else { ok = ok + 1; }
@@ -397,16 +402,20 @@ fn main() {
     if (any_positional == 0) {
         if (is_tty(STDIN) == 1) { return print_help(); }
         resolve_mode();
+        if (should_page() == 1) { start_pager(); }
         var bare_rc = render_fd(STDIN, "<stdin>");
+        stop_pager();
         if (bare_rc < 0) { return EXIT_ALL_FAIL; }
         return EXIT_OK;
     }
 
-    if (ok == 0) {
-        if (fail > 0) { return EXIT_ALL_FAIL; }
+    var exit_code = EXIT_OK;
+    if (ok == 0) { if (fail > 0) { exit_code = EXIT_ALL_FAIL; } }
+    if (exit_code == EXIT_OK) {
+        if (fail > 0) { exit_code = EXIT_PARTIAL; }
     }
-    if (fail > 0) { return EXIT_PARTIAL; }
-    return EXIT_OK;
+    stop_pager();
+    return exit_code;
 }
 
 var r = main();
