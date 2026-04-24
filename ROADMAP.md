@@ -73,10 +73,11 @@ A phased plan for building `owl` from nothing to a polished release. Each milest
 
 Split into two sub-milestones after a local-repo survey (2026-04-22)
 turned up no port-ready grammar source anywhere in the AGNOS
-ecosystem. Detection + theme infrastructure ships first; tokenization
-follows once a grammar format is chosen.
+ecosystem. Detection + theme infrastructure shipped first (M3a);
+tokenization landed after vyakarana 1.0 cut a stable tokenizer
+library (M3b).
 
-### M3a — Detection + theme scaffolding
+### M3a — Detection + theme scaffolding ✅ shipped
 
 **Goal:** Files are classified, themes are picked, and the existing
 decorations (header, gutter) are color-aware. No token-level coloring
@@ -98,29 +99,31 @@ yet — that's M3b.
 - User-installable themes from config dir (→ post-v1 or M7 config)
 - Content-based language detection (shebang + extension only)
 
-**Done when:** `--list-themes` / `--list-languages` work, themes
-affect visible decoration color on a TTY, NO_COLOR fully suppresses
-ANSI, detected language surfaces via `--list-languages` and is
-validated via `--language=<x>`.
-
-### M3b — Token-level highlighting (deferred)
+### M3b — Token-level highlighting ✅ shipped
 
 **Goal:** File *contents* render with per-token color.
 
-- Choose grammar format (candidates: reuse `vidya`'s hand-written
-  lexer pattern from `content/lexing_and_parsing/cyrius.cyr`, or
-  adapt a minimal TextMate/Sublime subset, or a Cyrius-native spec)
-- Bundled grammars for the starter set: shell, Python, JavaScript,
-  Rust, C, Cyrius, TOML, JSON, YAML, Markdown
-- Wire tokenizer output to theme palette
-- `NO_COLOR=1 owl file.py` still emits zero ANSI
-- Sample file per bundled language for visual regression
-
-**Blocked on:** a grammar format decision. No pre-existing grammar
-source found in AGNOS ecosystem repos as of 2026-04-22 — must
-hand-author or port from an external lexer spec.
-
-**Done when:** a developer viewing their own code says "oh, nice."
+- Grammar source: **vyakarana** 1.0.2 pulled in as a git-tag dep
+  (`[deps.vyakarana]` in `cyrius.cyml`, vendored to
+  `lib/vyakarana.cyr` by `cyrius deps`). Eleven bundled grammars
+  ship as CYML: shell, python, javascript, typescript, rust, c,
+  cyrius, toml, json, yaml, markdown
+- `theme_token_color(theme, kind)` maps vyakarana's ten-kind palette
+  to 256-color ANSI indices for dark + light themes; kinds marked
+  `-1` fall through to terminal default
+- `render_highlighted_buf` buffers the full file, calls
+  `tokenize_source`, drives a byte-level emitter that layers color
+  over the existing line-number gutter + `-A` glyph + `--tabs`
+  expansion paths from M2/M5
+- `NO_COLOR=1 owl file.py` emits zero ANSI; `--color=always`
+  overrides `NO_COLOR` per spec; `-p` forces highlight off
+- `HIGHLIGHT_MAX` ceiling (128 KB) — larger files fall back to plain
+  streaming so the bump allocator doesn't exhaust on large inputs.
+  Lifting the cap is gated on a freeing allocator or vyakarana's
+  streaming-tokenizer milestone (their 2.x)
+- Fixed `ansi_reset` to build bytes explicitly — Cyrius string
+  literals don't parse `\x??` escapes, which was emitting literal
+  `\x1b[` on every reset
 
 ---
 
@@ -239,12 +242,14 @@ Not committed, just parked here so the agent doesn't accidentally build them int
 
 Keep a running list here as questions get answered during implementation:
 
-| Date | Question | Decision | Rationale |
-|------|----------|----------|-----------|
-| — | Config file format? | TBD | Pending platform convention check |
-| — | Default pager on AGNOS/Cyrius? | TBD | Depends on what ships with the OS |
-| — | Theme format: reuse existing (e.g. TextMate/Sublime) or custom? | TBD | Reuse if practical — grammar ecosystems exist |
-| — | Native theming integration? | Deferred to post-v1 | Keeps v1 portable |
+| Date       | Question | Decision | Rationale |
+|------------|----------|----------|-----------|
+| —          | Config file format? | TBD | Pending platform convention check |
+| —          | Default pager on AGNOS/Cyrius? | TBD | Depends on what ships with the OS |
+| 2026-04-22 | Theme format: reuse existing (e.g. TextMate/Sublime) or custom? | Custom CYML | Keeps toolchain consistent; refuses incumbent baggage |
+| 2026-04-23 | Grammar source for M3b? | vyakarana 1.0.2 (git-tag dep) | Library-first Cyrius-native tokenizer; ten-kind palette already matches theme shape |
+| 2026-04-23 | Highlight file-size ceiling? | 128 KB (`HIGHLIGHT_MAX`) | Bump allocator keeps file + tokenbuf + ANSI-inflated output resident; lifts with a freeing allocator or vyakarana streaming (their 2.x) |
+| —          | Native theming integration? | Deferred to post-v1 | Keeps v1 portable |
 
 ---
 
@@ -252,7 +257,7 @@ Keep a running list here as questions get answered during implementation:
 
 | Risk | Mitigation |
 |------|------------|
-| Syntax highlighting turns out to be the biggest chunk of work | Land plain mode (M1) and line numbers (M2) first — both are independently useful |
+| Syntax highlighting turns out to be the biggest chunk of work | Land plain mode (M1) and line numbers (M2) first — both are independently useful. Resolved 2026-04-23: vyakarana 1.0.2 made M3b a small wiring job |
 | Pager integration is finicky on AGNOS/Cyrius | Ship `--paging never` as a reliable fallback; treat paging as a convenience, not a core feature |
 | Scope creep from users wanting `--follow`, search, etc. | Keep the "post-v1" list visible; be firm about what's in v1 |
 | Platform-specific quirks (TTY detection, signal handling) | Write abstraction layer early in M1; test on real hardware, not just emulators |
