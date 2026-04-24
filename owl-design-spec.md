@@ -5,6 +5,8 @@
 Version: 0.1 (draft)
 Status: Design spec, pre-implementation
 Audience: Implementation agent / contributors
+Name: English "owl" — progenitor is Sanskrit **ulūka** (उलूक) via
+PIE *\*ulū-*. See `README.md` §Name.
 
 ---
 

@@ -200,6 +200,12 @@ File issues at `<repo url>`. Helpful things to include:
 
 ---
 
+## Name
+
+**owl** traces to the same Proto-Indo-European root (*\*ulū-*, "to howl/hoot") as Sanskrit **ulūka** (उलूक). In AGNOS's naming lineage — the Sanskrit wing that yields *vyakarana*, *vidya*, and *yukti* — **Uluka** is the progenitor. In the Rigveda, Ulūka is a messenger; in later tradition, the vāhana of Lakshmi: a bird that sees clearly in the dark, which is what this tool tries to do for source at a terminal.
+
+---
+
 ## License
 
 <license to be chosen>
