@@ -526,6 +526,32 @@ fn render_path(path) {
         return 0 - 1;
     }
 
+    # Binary file detection — a NUL byte in the first chunk is a strong
+    # signal the file isn't meant for terminal display. Skip unless the
+    # user explicitly asked for text mode: `-p` (cat parity), `-A`
+    # (raw-byte escape view), or `--language=<name>` (asserted type).
+    if (g_flag_plain == 0) {
+        if (g_flag_show_all == 0) {
+            if (g_flag_lang == 0) {
+                var nul_hit = 0;
+                var j = 0;
+                while (j < first_n) {
+                    if (load8(first_buf + j) == 0) {
+                        nul_hit = 1;
+                        j = first_n;
+                        continue;
+                    }
+                    j = j + 1;
+                }
+                if (nul_hit == 1) {
+                    file_close(fd);
+                    report_error(path, "binary file (use -p to dump)");
+                    return 0 - 1;
+                }
+            }
+        }
+    }
+
     if (streq(lang, "plain") == 1) {
         if (first_n > 0) {
             var sh = detect_language_from_shebang(first_buf, first_n);
@@ -600,7 +626,29 @@ fn render_path(path) {
 
         # File exceeds HIGHLIGHT_MAX — flush what we have plainly and
         # stream the remainder. No color, but line numbers / -A / tabs
-        # all still apply via render_chunk.
+        # all still apply via render_chunk. Tell the user why color is
+        # missing — the gutter stays on, highlighting doesn't, and a
+        # silent drop is confusing.
+        eprint("owl: ", 5);
+        eprint(path, strlen(path));
+        var msg = ": file too large for highlighting (> ";
+        eprint(msg, strlen(msg));
+        var kb_buf[12];
+        var kb = HIGHLIGHT_MAX / 1024;
+        var kpi = 11;
+        store8(&kb_buf + kpi, 0);
+        kpi = kpi - 1;
+        if (kb == 0) { store8(&kb_buf + kpi, 48); kpi = kpi - 1; }
+        while (kb > 0) {
+            store8(&kb_buf + kpi, 48 + kb % 10);
+            kpi = kpi - 1;
+            kb = kb / 10;
+        }
+        kpi = kpi + 1;
+        eprint(&kb_buf + kpi, 11 - kpi);
+        var tail = " KB), rendering without color\n";
+        eprint(tail, strlen(tail));
+
         render_chunk(big, total);
         var rc_big = render_fd_loop(fd);
         file_close(fd);

@@ -484,4 +484,83 @@ OWL_CONFIG="$TMPDIR/badkey.cyml" "$BIN" "$TMPDIR/hi.py" > /dev/null 2>"$TMPDIR/e
 grep -q ":1: unknown config key" "$TMPDIR/err" \
     || fail "unknown key not reported on stderr"
 
-echo "smoke: OK ($v_long) — M0 + M1 + M2 + M3a + M4 + M5 + M6 + M7 gates passing"
+# ============================================================
+# M8a — Robustness (binary detect, large-file notice, weird inputs)
+# ============================================================
+
+# Binary file: NUL byte in first chunk → skip with notice, don't dump.
+printf '\x00binary\x00content\x00' > "$TMPDIR/bin.dat"
+set +e
+"$BIN" "$TMPDIR/bin.dat" > "$TMPDIR/out" 2> "$TMPDIR/err"
+rc=$?
+set -e
+[ ! -s "$TMPDIR/out" ] || fail "binary file dumped to stdout instead of skipping"
+grep -q "binary file" "$TMPDIR/err" \
+    || fail "binary skip did not mention 'binary file' on stderr"
+# One file, all-fail → exit 4.
+[ "$rc" = "4" ] || fail "binary-skip single-file exit: got $rc, expected 4"
+
+# Binary with -p (cat parity) MUST dump byte-identically.
+diff "$TMPDIR/bin.dat" <("$BIN" -p "$TMPDIR/bin.dat") > /dev/null \
+    || fail "-p did not byte-identically dump binary file (cat-parity)"
+
+# Binary with -A MUST render (escape glyphs), not skip.
+"$BIN" -A "$TMPDIR/bin.dat" > "$TMPDIR/out" 2> "$TMPDIR/err" \
+    || fail "-A on binary should render, not exit non-zero"
+[ -s "$TMPDIR/out" ] || fail "-A on binary produced no output"
+
+# Binary with --language= asserted: user takes responsibility, no skip.
+"$BIN" --language=plain "$TMPDIR/bin.dat" > "$TMPDIR/out" 2>"$TMPDIR/err" \
+    || fail "--language=plain on binary should render, not skip"
+
+# Mixed files: binary between two text files — text renders, binary
+# reports, overall exit is partial (1) because some files succeeded.
+printf 'hello\n' > "$TMPDIR/a.txt"
+printf 'world\n' > "$TMPDIR/b.txt"
+set +e
+"$BIN" -p "$TMPDIR/a.txt" "$TMPDIR/bin.dat" "$TMPDIR/b.txt" \
+    > "$TMPDIR/out" 2> "$TMPDIR/err"
+rc=$?
+set -e
+# -p bypasses binary detection — all three files dump. Exit code 0.
+[ "$rc" = "0" ] || fail "-p mixed exit: got $rc, expected 0"
+# Without -p, binary is skipped, others render. Expect exit 1 (partial).
+set +e
+"$BIN" "$TMPDIR/a.txt" "$TMPDIR/bin.dat" "$TMPDIR/b.txt" \
+    > "$TMPDIR/out" 2> "$TMPDIR/err"
+rc=$?
+set -e
+[ "$rc" = "1" ] || fail "mixed-with-binary exit: got $rc, expected 1 (partial)"
+grep -q "binary file" "$TMPDIR/err" || fail "binary notice missing in mixed run"
+
+# Large-file highlight fallback: creating a >128KB file should still
+# render (no crash) with color stripped and a stderr notice.
+yes "print('x')" | head -20000 > "$TMPDIR/big.py"
+"$BIN" --color=always "$TMPDIR/big.py" > "$TMPDIR/out" 2> "$TMPDIR/err" \
+    || fail "large file highlight fallback failed exit"
+! grep -q $'\x1b' "$TMPDIR/out" \
+    || fail "large file emitted ANSI — fallback did not kick in"
+grep -q "too large for highlighting" "$TMPDIR/err" \
+    || fail "large file missing stderr notice"
+
+# Weird-input robustness.
+: > "$TMPDIR/empty.txt"
+"$BIN" "$TMPDIR/empty.txt" > "$TMPDIR/out" 2> "$TMPDIR/err" \
+    || fail "empty file non-zero exit"
+[ ! -s "$TMPDIR/out" ]  || fail "empty file produced stdout bytes"
+[ ! -s "$TMPDIR/err" ]  || fail "empty file produced stderr"
+
+printf 'x' > "$TMPDIR/one.txt"
+out=$("$BIN" -p "$TMPDIR/one.txt")
+[ "$out" = "x" ] || fail "single-byte file did not render 'x' under -p"
+
+printf 'no trailing newline' > "$TMPDIR/notail.txt"
+diff "$TMPDIR/notail.txt" <("$BIN" -p "$TMPDIR/notail.txt") > /dev/null \
+    || fail "-p broke cat parity on file without trailing newline"
+
+# UTF-8 BOM: bytes pass through under -p (cat parity).
+printf '\xef\xbb\xbfhello\n' > "$TMPDIR/bom.txt"
+diff "$TMPDIR/bom.txt" <("$BIN" -p "$TMPDIR/bom.txt") > /dev/null \
+    || fail "-p broke cat parity on BOM-prefixed file"
+
+echo "smoke: OK ($v_long) — M0 + M1 + M2 + M3a + M4 + M5 + M6 + M7 + M8a gates passing"

@@ -227,21 +227,46 @@ dep. Interface above stays.
 
 ## Milestone 8 — Polish & release candidate
 
-**Goal:** Ready for broad use.
+**Goal:** Ready for broad use. Sliced into four phases so each ships
+with gates green before the next starts.
 
-- Binary file detection with clear skip message
-- Large-file fallback (disable highlighting past a size threshold with stderr notice)
-- Startup time benchmarked and acceptable (<50ms for no-op)
-- Error messages reviewed for clarity and consistency
-- Full test suite covering the spec's testing checklist
-- Documentation: man page, README finalized, examples in help output
-- AGNOS / Cyrius packaging
+### M8a — Robustness pass ✅ shipped
 
-**Testing:**
-- Full checklist from design spec §13 passes
-- Fuzz or stress tests on weird inputs (empty files, 1-byte files, files with only null bytes, files with BOMs, etc.)
+- **Binary file detection** — NUL-byte scan of the first chunk in
+  `render_path`. Skip with `owl: <path>: binary file (use -p to dump)`
+  to stderr. Bypassed by `-p` (cat parity), `-A` (raw escape view),
+  and `--language=<name>` (asserted type). Exit codes obey §9: one
+  binary alone → 4; mixed with text → 1 (partial)
+- **Large-file highlight fallback notice** — when `HIGHLIGHT_MAX` is
+  exceeded, emit `owl: <path>: file too large for highlighting (> 128
+  KB), rendering without color` so the missing color isn't mysterious
+- **Weird-input robustness** — verified: empty files, 1-byte files,
+  files without trailing newline, UTF-8 BOM-prefixed files. All
+  render or pass-through cleanly; `-p` preserves byte-for-byte cat
+  parity in every case
+- **Smoke gates** — 14 new M8a assertions in `scripts/smoke.sh`
+  covering the design-spec §13 items that were previously ungated
+  (binary skip, binary under `-p`/`-A`/`--language`, mixed-with-binary
+  exit codes, large-file notice, empty/1-byte/no-trailing-NL/BOM
+  robustness)
 
-**Done when:** you'd recommend it to someone without caveats.
+### M8b — Error consistency + startup bench (pending)
+
+- Sweep every `eprint` / `report_error` call for format consistency
+  (`owl: <path>: <reason>` everywhere)
+- Benchmark startup: `--version` cold/warm; target <50ms
+- Trim any hot-path allocations that miss the target
+
+### M8c — Docs polish (pending)
+
+- README finalize: synopsis, install, examples, feature matrix
+- `--help` gains a worked example block
+- Man page (`docs/owl.1`) — scdoc or hand-rolled troff
+
+### M8d — AGNOS / Cyrius packaging (deferred)
+
+- Hold until AGNOS ships a packaging convention. `.cyrius-toolchain`
+  file + release workflow per agnosticos first-party standards
 
 ---
 
