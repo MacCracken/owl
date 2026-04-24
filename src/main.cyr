@@ -6,6 +6,7 @@ include "src/lang.cyr"
 include "src/theme.cyr"
 include "src/pager.cyr"
 include "src/vcs.cyr"
+include "src/config.cyr"
 
 # Keep OWL_VERSION in sync with the VERSION file.
 # A M8 CI check will enforce equality; for now, manual.
@@ -652,6 +653,11 @@ fn print_help() {
     println("      --list-languages   List recognized languages");
     println("  -h, --help             Show this help and exit");
     println("  -V, --version          Show version and exit");
+    println("");
+    println("Config (optional):");
+    println("  $OWL_CONFIG, else $XDG_CONFIG_HOME/owl/config.cyml,");
+    println("  else ~/.config/owl/config.cyml. Keys: theme, paging,");
+    println("  style, tabs, wrap. CLI flags override the config.");
     return EXIT_OK;
 }
 
@@ -709,6 +715,9 @@ fn should_page() {
 fn main() {
     alloc_init();
     args_init();
+    # Config → env → CLI: read the file first so CLI flags parsed
+    # below always win. Missing file is a silent no-op.
+    config_load();
 
     var n = argc();
     var ok = 0;

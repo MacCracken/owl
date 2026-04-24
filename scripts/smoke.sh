@@ -422,4 +422,66 @@ if ! "$BIN" -n --color=always README.md 2>/dev/null | grep -q '+'; then
 fi
 cp "$README_BAK" README.md
 
-echo "smoke: OK ($v_long) — M0 + M1 + M2 + M3a + M4 + M5 + M6 gates passing"
+# ============================================================
+# M7 — Config file (OWL_CONFIG + precedence)
+# ============================================================
+
+# Valid config: theme=light applied, keyword ANSI is 126 (light) not 141 (dark).
+cat > "$TMPDIR/owl.cyml" <<'EOF'
+theme = light
+tabs  = 2
+style = no-changes
+EOF
+printf 'def x():\n    return 1\n' > "$TMPDIR/hi.py"
+
+out=$(OWL_CONFIG="$TMPDIR/owl.cyml" "$BIN" --color=always "$TMPDIR/hi.py")
+case "$out" in
+    *"[38;5;126m"*) ;;
+    *) fail "config theme=light did not take effect (no 126 ANSI code in output)" ;;
+esac
+
+# CLI overrides config: --theme=dark wins, keyword is 141 not 126.
+out=$(OWL_CONFIG="$TMPDIR/owl.cyml" "$BIN" --color=always --theme=dark "$TMPDIR/hi.py")
+case "$out" in
+    *"[38;5;141m"*) ;;
+    *) fail "CLI --theme=dark did not override config theme=light" ;;
+esac
+case "$out" in
+    *"[38;5;126m"*) fail "CLI override leaked the config color (found 126)" ;;
+esac
+
+# Missing config path is silent and does not break startup.
+OWL_CONFIG=/nonexistent/path/config.cyml "$BIN" --version > /dev/null 2>"$TMPDIR/err" \
+    || fail "missing OWL_CONFIG broke --version"
+[ ! -s "$TMPDIR/err" ] || fail "missing OWL_CONFIG leaked stderr: $(cat "$TMPDIR/err")"
+
+# Malformed line prints `owl: path:line: reason` to stderr and continues.
+cat > "$TMPDIR/bad.cyml" <<'EOF'
+theme = light
+garbage-line-no-equals
+tabs = 2
+EOF
+OWL_CONFIG="$TMPDIR/bad.cyml" "$BIN" "$TMPDIR/hi.py" > /dev/null 2>"$TMPDIR/err" \
+    || fail "malformed config should not fail the run"
+grep -q ":2: expected key=value" "$TMPDIR/err" \
+    || fail "malformed config did not report line-2 error on stderr"
+
+# Bad value for a known key reports "bad value".
+cat > "$TMPDIR/badval.cyml" <<'EOF'
+theme = chartreuse
+EOF
+OWL_CONFIG="$TMPDIR/badval.cyml" "$BIN" "$TMPDIR/hi.py" > /dev/null 2>"$TMPDIR/err" \
+    || fail "bad config value should not fail the run"
+grep -q ":1: bad value" "$TMPDIR/err" \
+    || fail "bad theme value not reported on stderr"
+
+# Unknown key reports "unknown config key".
+cat > "$TMPDIR/badkey.cyml" <<'EOF'
+not-a-real-key = whatever
+EOF
+OWL_CONFIG="$TMPDIR/badkey.cyml" "$BIN" "$TMPDIR/hi.py" > /dev/null 2>"$TMPDIR/err" \
+    || fail "unknown config key should not fail the run"
+grep -q ":1: unknown config key" "$TMPDIR/err" \
+    || fail "unknown key not reported on stderr"
+
+echo "smoke: OK ($v_long) — M0 + M1 + M2 + M3a + M4 + M5 + M6 + M7 gates passing"

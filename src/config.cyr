@@ -1,0 +1,277 @@
+# src/config.cyr — owl config loader (M7)
+#
+# Reads a small key=value config file at startup to pre-set the
+# persistent flag globals owned by main.cyr, theme.cyr, pager.cyr,
+# and vcs.cyr. CLI args parse after this pass and always win.
+#
+# Format
+# ------
+# One key=value per line. Whitespace around `=` ignored. Values may
+# be bare or double-quoted. Lines starting with `#` (after whitespace)
+# and blank lines are comments. No sections — the surface is too
+# small to need them. Example:
+#
+#   # owl config
+#   theme  = dark
+#   paging = auto
+#   style  = auto
+#   tabs   = 4
+#   wrap   = auto
+#
+# Recognized keys
+# ---------------
+#   theme   = dark | light
+#   paging  = auto | always | never
+#   style   = auto | changes | no-changes
+#   tabs    = <non-negative integer>
+#   wrap    = auto | never | character
+#
+# Location (first hit wins)
+# -------------------------
+#   $OWL_CONFIG
+#   $XDG_CONFIG_HOME/owl/config.cyml
+#   $HOME/.config/owl/config.cyml
+#
+# Error model
+# -----------
+# Missing file is a silent no-op. A per-line parse error (unknown
+# key, bad value) prints `owl: <path>:<line>: <reason>` to stderr and
+# the remaining lines continue to load. We deliberately do NOT fail
+# startup on bad config — a user's viewer should not be held hostage
+# by a typo in their own dotfiles.
+
+var CONFIG_MAX = 8192;
+
+fn _cfg_append(dst, off, src) {
+    var sl = strlen(src);
+    var i = 0;
+    while (i < sl) {
+        store8(dst + off + i, load8(src + i));
+        i = i + 1;
+    }
+    return off + sl;
+}
+
+fn _cfg_append_n(dst, off, src, n) {
+    var i = 0;
+    while (i < n) {
+        store8(dst + off + i, load8(src + i));
+        i = i + 1;
+    }
+    return off + n;
+}
+
+# Returns pointer to a null-terminated path in the bump allocator, or
+# 0 if none of the candidates are available in the environment.
+fn _config_resolve_path() {
+    var p = getenv("OWL_CONFIG");
+    if (p != 0) { if (load8(p) != 0) { return p; } }
+
+    var xdg = getenv("XDG_CONFIG_HOME");
+    if (xdg != 0) {
+        if (load8(xdg) != 0) {
+            var buf = alloc(1024);
+            var o = 0;
+            o = _cfg_append_n(buf, o, xdg, strlen(xdg));
+            o = _cfg_append(buf, o, "/owl/config.cyml");
+            store8(buf + o, 0);
+            return buf;
+        }
+    }
+
+    var home = getenv("HOME");
+    if (home != 0) {
+        if (load8(home) != 0) {
+            var buf = alloc(1024);
+            var o = 0;
+            o = _cfg_append_n(buf, o, home, strlen(home));
+            o = _cfg_append(buf, o, "/.config/owl/config.cyml");
+            store8(buf + o, 0);
+            return buf;
+        }
+    }
+
+    return 0;
+}
+
+# True (1) when the key buffer at (buf, len) matches null-terminated s.
+fn _cfg_keyeq(buf, len, s) {
+    var sl = strlen(s);
+    if (sl != len) { return 0; }
+    return memeq(buf, s, len);
+}
+
+# Emit `owl: <path>:<line>: <reason>` to stderr. Keeps the same shape
+# as report_error so the format is familiar to users. Line numbers are
+# 1-based.
+fn _cfg_err(path, line, reason) {
+    var pbuf[16];
+    var n = line;
+    var pi = 15;
+    store8(&pbuf + pi, 0);
+    pi = pi - 1;
+    if (n == 0) { store8(&pbuf + pi, 48); pi = pi - 1; }
+    while (n > 0) {
+        store8(&pbuf + pi, 48 + n % 10);
+        pi = pi - 1;
+        n = n / 10;
+    }
+    pi = pi + 1;
+    eprint("owl: ", 5);
+    eprint(path, strlen(path));
+    eprint(":", 1);
+    eprint(&pbuf + pi, 15 - pi);
+    eprint(": ", 2);
+    eprint(reason, strlen(reason));
+    eprint("\n", 1);
+    return 0;
+}
+
+# Apply a parsed (key, value) pair. Both are pointers into a caller
+# buffer with explicit lengths. Returns 0 OK, 1 unknown key, 2 bad
+# value. Value is copied into a local null-terminated scratch so the
+# existing set_* helpers from theme/pager/vcs keep working unchanged.
+fn _cfg_apply(key, klen, value, vlen) {
+    if (vlen > 63) { return 2; }
+    var vbuf[64];
+    var i = 0;
+    while (i < vlen) {
+        store8(&vbuf + i, load8(value + i));
+        i = i + 1;
+    }
+    store8(&vbuf + i, 0);
+
+    if (_cfg_keyeq(key, klen, "theme") == 1) {
+        var ti = theme_index(&vbuf);
+        if (ti < 0) { return 2; }
+        g_active_theme = ti;
+        return 0;
+    }
+    if (_cfg_keyeq(key, klen, "paging") == 1) {
+        if (set_paging(&vbuf) != 0) { return 2; }
+        return 0;
+    }
+    if (_cfg_keyeq(key, klen, "style") == 1) {
+        if (set_style(&vbuf) != 0) { return 2; }
+        return 0;
+    }
+    if (_cfg_keyeq(key, klen, "tabs") == 1) {
+        if (set_tabs(&vbuf) != 0) { return 2; }
+        return 0;
+    }
+    if (_cfg_keyeq(key, klen, "wrap") == 1) {
+        if (set_wrap(&vbuf) != 0) { return 2; }
+        return 0;
+    }
+    return 1;
+}
+
+# Is byte c whitespace? Tab, LF, CR, space.
+fn _cfg_is_ws(c) {
+    if (c == 9)  { return 1; }
+    if (c == 10) { return 1; }
+    if (c == 13) { return 1; }
+    if (c == 32) { return 1; }
+    return 0;
+}
+
+# Parse one line of the config at buf[s..e]. Returns 0 OK (line
+# applied, skipped as comment, or blank), 1 if an error was reported.
+fn _cfg_parse_line(path, lineno, buf, s, e) {
+    # Trim leading whitespace.
+    while (s < e) {
+        if (_cfg_is_ws(load8(buf + s)) == 0) { break; }
+        s = s + 1;
+    }
+    # Trim trailing whitespace.
+    while (e > s) {
+        if (_cfg_is_ws(load8(buf + e - 1)) == 0) { break; }
+        e = e - 1;
+    }
+    # Empty / comment line.
+    if (s >= e) { return 0; }
+    if (load8(buf + s) == 35) { return 0; }  # '#'
+
+    # Split on first '='.
+    var eq = s;
+    while (eq < e) {
+        if (load8(buf + eq) == 61) { break; }  # '='
+        eq = eq + 1;
+    }
+    if (eq >= e) {
+        _cfg_err(path, lineno, "expected key=value");
+        return 1;
+    }
+
+    # Key span: [s, eq), trim trailing whitespace.
+    var ke = eq;
+    while (ke > s) {
+        if (_cfg_is_ws(load8(buf + ke - 1)) == 0) { break; }
+        ke = ke - 1;
+    }
+    if (ke <= s) {
+        _cfg_err(path, lineno, "missing key before '='");
+        return 1;
+    }
+
+    # Value span: (eq, e), trim leading whitespace.
+    var vs = eq + 1;
+    while (vs < e) {
+        if (_cfg_is_ws(load8(buf + vs)) == 0) { break; }
+        vs = vs + 1;
+    }
+    # Strip one pair of surrounding double quotes.
+    if (e - vs >= 2) {
+        if (load8(buf + vs) == 34) {          # '"'
+            if (load8(buf + e - 1) == 34) {
+                vs = vs + 1;
+                e  = e  - 1;
+            }
+        }
+    }
+    if (vs >= e) {
+        _cfg_err(path, lineno, "missing value after '='");
+        return 1;
+    }
+
+    var rc = _cfg_apply(buf + s, ke - s, buf + vs, e - vs);
+    if (rc == 1) { _cfg_err(path, lineno, "unknown config key"); return 1; }
+    if (rc == 2) { _cfg_err(path, lineno, "bad value");          return 1; }
+    return 0;
+}
+
+# Public entry. Called from main() before CLI argument parsing.
+# Applies any config found; silently skips if no file is present.
+fn config_load() {
+    var path = _config_resolve_path();
+    if (path == 0) { return 0; }
+
+    var fd = file_open(path, O_RDONLY, 0);
+    if (fd < 0) { return 0; }
+
+    var buf = alloc(CONFIG_MAX);
+    var total = 0;
+    while (total < CONFIG_MAX) {
+        var got = file_read(fd, buf + total, CONFIG_MAX - total);
+        if (got < 0) { file_close(fd); return 0; }
+        if (got == 0) { break; }
+        total = total + got;
+    }
+    file_close(fd);
+
+    var lineno = 1;
+    var ls = 0;
+    var i = 0;
+    while (i < total) {
+        if (load8(buf + i) == 10) {
+            _cfg_parse_line(path, lineno, buf, ls, i);
+            lineno = lineno + 1;
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    if (ls < total) {
+        _cfg_parse_line(path, lineno, buf, ls, total);
+    }
+    return 0;
+}

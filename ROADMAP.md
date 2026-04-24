@@ -201,22 +201,27 @@ dep. Interface above stays.
 
 ---
 
-## Milestone 7 — Configuration file
+## Milestone 7 — Configuration file ✅ shipped
 
 **Goal:** Users can set persistent preferences.
 
-- Read config from platform-appropriate location
-- `OWL_CONFIG` overrides location
-- Support theme, paging, tabs, wrap, style flags
-- Precedence: defaults → config → env → CLI
-
-**Testing:**
-- Config setting theme is respected
-- CLI flag overrides config
-- Missing config file is a silent no-op, not an error
-- Malformed config file produces a helpful error, doesn't crash
-
-**Done when:** users stop typing the same flags every time.
+- `src/config.cyr` — minimal `key = value` parser, no new stdlib dep.
+  Values may be bare or double-quoted. `#` starts a line comment. No
+  sections — the surface is too small to need them
+- Recognized keys: `theme`, `paging`, `style`, `tabs`, `wrap`. Each
+  delegates to the same `set_*` / `theme_index` helper the CLI path
+  uses, so validation is shared
+- Location (first hit wins): `$OWL_CONFIG` →
+  `$XDG_CONFIG_HOME/owl/config.cyml` → `$HOME/.config/owl/config.cyml`.
+  Missing file is a silent no-op
+- Precedence: defaults → config → env (`NO_COLOR`, `OWL_PAGER`,
+  `PAGER`) → CLI. `config_load()` runs before CLI arg parsing, so CLI
+  flags always win
+- Per-line parse errors emit `owl: <path>:<line>: <reason>` to stderr
+  and the rest of the file keeps loading. Deliberately does **not**
+  fail startup on bad config — a viewer shouldn't be held hostage by
+  a typo in dotfiles
+- `--help` documents the config location cascade and the keys
 
 ---
 
@@ -262,7 +267,7 @@ Keep a running list here as questions get answered during implementation:
 
 | Date       | Question | Decision | Rationale |
 |------------|----------|----------|-----------|
-| —          | Config file format? | TBD | Pending platform convention check |
+| 2026-04-23 | Config file format? | CYML key=value, no sections, own parser | Surface is too small for sections; avoiding a `cyml` stdlib dep keeps the owl binary lean |
 | —          | Default pager on AGNOS/Cyrius? | TBD | Depends on what ships with the OS |
 | 2026-04-22 | Theme format: reuse existing (e.g. TextMate/Sublime) or custom? | Custom CYML | Keeps toolchain consistent; refuses incumbent baggage |
 | 2026-04-23 | Grammar source for M3b? | vyakarana 1.0.2 (git-tag dep) | Library-first Cyrius-native tokenizer; ten-kind palette already matches theme shape |
