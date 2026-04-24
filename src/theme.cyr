@@ -76,6 +76,30 @@ fn theme_token_color(theme, kind) {
     return 0 - 1;
 }
 
+# ── VCS change-marker palette (M6) ────────────────────────────────────
+#
+# Returns 256-color ANSI index for the vcs.cyr VCS_MARK_* constants.
+# Kept separate from theme_token_color so the change gutter stays
+# readable even when token highlighting is off (e.g. piped with
+# --color=always, no grammar match).
+fn theme_change_color(theme, kind) {
+    if (theme == 0) {
+        # dark
+        if (kind == 1) { return 113; }   # ADD — green
+        if (kind == 2) { return 215; }   # MOD — orange
+        if (kind == 3) { return 167; }   # DEL — red
+        return 0 - 1;
+    }
+    if (theme == 1) {
+        # light
+        if (kind == 1) { return 28; }    # ADD — deep green
+        if (kind == 2) { return 166; }   # MOD — deep orange
+        if (kind == 3) { return 124; }   # DEL — deep red
+        return 0 - 1;
+    }
+    return 0 - 1;
+}
+
 # ── Public API ─────────────────────────────────────────────────────────
 
 # Look up theme by name. Returns index or -1.

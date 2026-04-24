@@ -389,4 +389,37 @@ diff "$TMPDIR/tab.txt" <("$BIN" -p "$TMPDIR/tab.txt") > /dev/null \
 diff "$TMPDIR/tab.txt" <("$BIN" -p -A -n "$TMPDIR/tab.txt") > /dev/null \
     || fail "-p did not override -A / -n"
 
-echo "smoke: OK ($v_long) — M0 + M1 + M2 + M3a + M4 + M5 gates passing"
+# ============================================================
+# M6 — VCS change markers (git scaffold; swappable for SIT)
+# ============================================================
+
+# --style=bogus is a usage error.
+set +e
+"$BIN" --style=bogus "$TMPDIR/a.txt" > /dev/null 2>"$TMPDIR/err"
+rc=$?
+set -e
+[ "$rc" = "2" ] || fail "--style=bogus exit: got $rc, expected 2"
+
+# --style=no-changes outside a repo: renders cleanly, no error.
+"$BIN" -n --color=always --style=no-changes "$TMPDIR/a.txt" > /dev/null \
+    || fail "--style=no-changes on a plain file should render cleanly"
+
+# Non-git path doesn't hang and doesn't leak git errors onto stderr.
+"$BIN" -n --color=always "$TMPDIR/a.txt" > /dev/null 2>"$TMPDIR/err" \
+    || fail "non-git file rendered non-zero under -n --color=always"
+[ ! -s "$TMPDIR/err" ] || fail "non-git file leaked stderr: $(cat "$TMPDIR/err")"
+
+# Inside a real git repo with a dirty file, markers should appear.
+# owl itself is under git; use its README as a controlled probe —
+# copy → append → render and grep for an ADD marker (+ in the
+# change column). Restore README afterwards via git checkout.
+README_BAK="$TMPDIR/README.bak"
+cp README.md "$README_BAK"
+printf '\nsmoke-marker-probe\n' >> README.md
+if ! "$BIN" -n --color=always README.md 2>/dev/null | grep -q '+'; then
+    cp "$README_BAK" README.md
+    fail "expected ADD marker (+) on dirty README.md inside repo"
+fi
+cp "$README_BAK" README.md
+
+echo "smoke: OK ($v_long) — M0 + M1 + M2 + M3a + M4 + M5 + M6 gates passing"

@@ -5,6 +5,7 @@ include "lib/vyakarana.cyr"
 include "src/lang.cyr"
 include "src/theme.cyr"
 include "src/pager.cyr"
+include "src/vcs.cyr"
 
 # Keep OWL_VERSION in sync with the VERSION file.
 # A M8 CI check will enforce equality; for now, manual.
@@ -136,8 +137,16 @@ fn emit_header(path) {
     return 0;
 }
 
+# Gutter layout:
+#   "     1 " (6-char right-aligned lineno + space)
+#   " "       (change-marker cell: '+'/'~'/'-' or ' ', its own color)
+#   " │ "     (divider + space, lineno color)
+#
+# The change-marker cell is only emitted when vcs_enabled() == 1 so
+# the gutter stays narrow when --style=no-changes / --no-color or
+# when we're outside a repo.
 fn emit_lineno(ln: i64) {
-    var pbuf[24];
+    var pbuf[8];
     var n = ln;
     var pi: i64 = 5;
     if (n == 0) { store8(&pbuf + pi, 48); pi = pi - 1; }
@@ -150,14 +159,38 @@ fn emit_lineno(ln: i64) {
         store8(&pbuf + pi, 32);
         pi = pi - 1;
     }
-    store8(&pbuf + 6,  32);
-    store8(&pbuf + 7,  0xE2);
-    store8(&pbuf + 8,  0x94);
-    store8(&pbuf + 9,  0x82);
-    store8(&pbuf + 10, 32);
+    store8(&pbuf + 6, 32);
 
     if (g_want_color == 1) { ansi_fg(theme_lineno_color(g_active_theme)); }
-    syscall(1, 1, &pbuf, 11);
+    syscall(1, 1, &pbuf, 7);
+    if (g_want_color == 1) { ansi_reset(); }
+
+    if (vcs_enabled() == 1) {
+        var mk = vcs_mark_for_line(ln);
+        if (mk == VCS_MARK_NONE) {
+            syscall(1, 1, "  ", 2);
+        } else {
+            var mcolor = theme_change_color(g_active_theme, mk);
+            if (g_want_color == 1) {
+                if (mcolor != 0 - 1) { ansi_fg(mcolor); }
+            }
+            if (mk == VCS_MARK_ADD) { syscall(1, 1, "+", 1); }
+            if (mk == VCS_MARK_MOD) { syscall(1, 1, "~", 1); }
+            if (mk == VCS_MARK_DEL) { syscall(1, 1, "-", 1); }
+            if (g_want_color == 1) {
+                if (mcolor != 0 - 1) { ansi_reset(); }
+            }
+            syscall(1, 1, " ", 1);
+        }
+    }
+
+    var dbuf[4];
+    store8(&dbuf + 0, 0xE2);
+    store8(&dbuf + 1, 0x94);
+    store8(&dbuf + 2, 0x82);
+    store8(&dbuf + 3, 32);
+    if (g_want_color == 1) { ansi_fg(theme_lineno_color(g_active_theme)); }
+    syscall(1, 1, &dbuf, 4);
     if (g_want_color == 1) { ansi_reset(); }
     return 0;
 }
@@ -460,6 +493,7 @@ fn render_fd_loop(fd) {
 fn render_fd(fd, path_for_header) {
     render_reset();
     g_active_lang = "plain";
+    vcs_reset();
     if (resolved_show_header() == 1) { emit_header(path_for_header); }
     return render_fd_loop(fd);
 }
@@ -501,6 +535,11 @@ fn render_path(path) {
     if (g_flag_lang != 0) { lang = g_flag_lang; }
 
     g_active_lang = lang;
+
+    # Compute VCS markers before any rendering — gutter (M3a) and
+    # highlighted-byte loop (M3b) both read through vcs_mark_for_line.
+    # Silent no-op when not in a repo, not decorated, or --no-changes.
+    vcs_compute_markers(path);
 
     # Highlighting eligibility. Gated on color (not on decorated) —
     # piped output with --color=always should still color tokens even
@@ -606,6 +645,7 @@ fn print_help() {
     println("      --wrap=<mode>      auto | never | character (currently a no-op)");
     println("      --color=<when>     auto | always | never");
     println("      --paging=<when>    auto | always | never");
+    println("      --style=<mode>     auto | changes | no-changes (gutter VCS markers)");
     println("      --theme=<name>     Syntax theme (dark | light)");
     println("      --list-themes      List bundled themes");
     println("      --language=<name>  Force language (overrides auto-detect)");
@@ -709,6 +749,15 @@ fn main() {
         if (v != 0) {
             if (set_paging(v) != 0) {
                 report_error(a, "invalid value (want auto|always|never)");
+                return EXIT_USAGE;
+            }
+            i = i + 1;
+            continue;
+        }
+        v = match_eq_flag(a, "--style");
+        if (v != 0) {
+            if (set_style(v) != 0) {
+                report_error(a, "invalid value (want auto|changes|no-changes)");
                 return EXIT_USAGE;
             }
             i = i + 1;

@@ -1,0 +1,334 @@
+# src/vcs.cyr — VCS change markers for the line-number gutter (M6)
+#
+# Scope
+# -----
+# Shell out to `git diff --no-color -U0 -- <path>` once per rendered
+# file, parse the unified-diff hunk headers into per-line markers, and
+# expose a line-indexed lookup to the gutter renderer in main.cyr.
+#
+# All git-specific code lives in this module. M6 is an interim scaffold
+# — when SIT (planned AGNOS-native VCS) ships, this file becomes a
+# single-file rewrite: the interface stays (`vcs_compute_markers`,
+# `vcs_mark_for_line`, `vcs_reset`, `vcs_enabled`, `set_style`).
+#
+# Marker semantics
+# ----------------
+#   VCS_MARK_ADD  — line exists only in the working copy (pure addition)
+#   VCS_MARK_MOD  — line changed content relative to HEAD
+#   VCS_MARK_DEL  — deletion anchor; shown on the line after the lost
+#                   content, or on line 1 if the file lost its head
+#
+# Non-goals for M6
+# ----------------
+#   - Submodules, packed refs, worktrees — whatever `git diff` handles
+#     in the user's environment is what we show
+#   - Performance under huge diffs — diff output is capped at 64KB; a
+#     file whose diff exceeds that renders partial markers
+#   - Proper shell-safe quoting of arbitrary paths — single-quote wrap
+#     plus reject of paths containing `'` or control bytes. Paths with
+#     embedded single quotes render without markers (silent no-op)
+
+var VCS_MARK_NONE = 0;
+var VCS_MARK_ADD  = 1;
+var VCS_MARK_MOD  = 2;
+var VCS_MARK_DEL  = 3;
+
+# --style toggle. -1 auto (on when decorated), 0 off, 1 on.
+var g_vcs_flag = 0 - 1;
+
+# Per-file marker state — flat byte array indexed by (line - 1).
+# 0 means "no mark". Re-allocated per file; 0 when no file active.
+var g_vcs_marks    = 0;
+var g_vcs_mark_cap = 0;
+
+fn vcs_reset() {
+    g_vcs_marks = 0;
+    g_vcs_mark_cap = 0;
+    return 0;
+}
+
+# --style=<value> flag handler. Returns 0 OK, 1 on bad value.
+fn set_style(value) {
+    if (streq(value, "auto") == 1)       { g_vcs_flag = 0 - 1; return 0; }
+    if (streq(value, "changes") == 1)    { g_vcs_flag = 1;     return 0; }
+    if (streq(value, "no-changes") == 1) { g_vcs_flag = 0;     return 0; }
+    return 1;
+}
+
+# Render-time gate — is the gutter going to show markers for this file?
+# Called by main.cyr before allocating line-indexed state.
+fn vcs_enabled() {
+    if (g_vcs_flag == 0) { return 0; }
+    if (g_decorated == 0) { return 0; }
+    return 1;
+}
+
+# Reject paths containing single-quote or control bytes — these would
+# escape the single-quote shell wrap in _build_git_cmd. Proper quoting
+# deferred; affected paths just render without markers.
+fn _path_shell_safe(path) {
+    var plen = strlen(path);
+    var i = 0;
+    while (i < plen) {
+        var c = load8(path + i);
+        if (c == 39)  { return 0; }   # '
+        if (c < 32)   { return 0; }
+        if (c == 127) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# Compose: git diff --no-color -U0 -- '<path>' 2>/dev/null
+# Returns pointer to null-terminated buffer in the bump allocator.
+fn _build_git_cmd(path) {
+    var plen = strlen(path);
+    var cmd = alloc(plen + 64);
+    var cp = 0;
+    var pfx = "git diff --no-color -U0 -- '";
+    var pxl = strlen(pfx);
+    var j = 0;
+    while (j < pxl) { store8(cmd + cp, load8(pfx + j)); cp = cp + 1; j = j + 1; }
+    j = 0;
+    while (j < plen) { store8(cmd + cp, load8(path + j)); cp = cp + 1; j = j + 1; }
+    var sfx = "' 2>/dev/null";
+    var sxl = strlen(sfx);
+    j = 0;
+    while (j < sxl) { store8(cmd + cp, load8(sfx + j)); cp = cp + 1; j = j + 1; }
+    store8(cmd + cp, 0);
+    return cmd;
+}
+
+# Fork /bin/sh -c "<cmd>" with PATH env injected, capture stdout into
+# buf up to buflen. Returns bytes read, or -1 on fork/pipe failure.
+# sh's exit code is ignored — empty diff output is the honest signal
+# that there are no markers to show (e.g. clean file, untracked file,
+# outside a repo).
+fn _capture_shell(cmd, buf, buflen) {
+    var pipefd[16];
+    if (sys_pipe(&pipefd) < 0) { return 0 - 1; }
+    var rfd = load32(&pipefd);
+    var wfd = load32(&pipefd + 4);
+
+    var pid = sys_fork();
+    if (pid < 0) {
+        sys_close(rfd);
+        sys_close(wfd);
+        return 0 - 1;
+    }
+
+    if (pid == 0) {
+        sys_close(rfd);
+        sys_dup2(wfd, 1);
+        sys_close(wfd);
+        var argv[8];
+        store64(&argv + 0,  "/bin/sh");
+        store64(&argv + 8,  "-c");
+        store64(&argv + 16, cmd);
+        store64(&argv + 24, 0);
+        var envp[4];
+        store64(&envp + 0, "PATH=/usr/local/bin:/usr/bin:/bin");
+        store64(&envp + 8, 0);
+        sys_execve("/bin/sh", &argv, &envp);
+        sys_exit(127);
+    }
+
+    sys_close(wfd);
+    var total = 0;
+    while (total < buflen) {
+        var n = sys_read(rfd, buf + total, buflen - total);
+        if (n <= 0) { break; }
+        total = total + n;
+    }
+    sys_close(rfd);
+    var stbuf[1];
+    sys_waitpid(pid, &stbuf, 0);
+    return total;
+}
+
+# ASCII decimal parse. Reads digits from buf[off..end], returns
+# (value, one-past-last-digit-offset) via globals.
+var _vcs_pv = 0;
+var _vcs_pe = 0;
+fn _parse_uint(buf, off, end) {
+    var v = 0;
+    var i = off;
+    while (i < end) {
+        var c = load8(buf + i);
+        if (c < 48) { break; }
+        if (c > 57) { break; }
+        v = v * 10 + (c - 48);
+        i = i + 1;
+    }
+    _vcs_pv = v;
+    _vcs_pe = i;
+    return 0;
+}
+
+# Find offset of byte `c` in buf[off..end], or `end` if not found.
+fn _scan_byte(buf, off, end, c) {
+    var i = off;
+    while (i < end) {
+        if (load8(buf + i) == c) { return i; }
+        i = i + 1;
+    }
+    return end;
+}
+
+# Parse a unified-diff hunk header:
+#   @@ -OLD_START[,OLD_COUNT] +NEW_START[,NEW_COUNT] @@
+# Writes parsed values into _vcs_hunk_* globals. Returns 1 on success,
+# 0 on malformed header.
+var _vcs_hunk_old_start = 0;
+var _vcs_hunk_old_count = 0;
+var _vcs_hunk_new_start = 0;
+var _vcs_hunk_new_count = 0;
+fn _parse_hunk_header(buf, off, eol) {
+    # Must start with "@@ -"
+    if (eol - off < 8) { return 0; }
+    if (load8(buf + off + 0) != 64) { return 0; }  # '@'
+    if (load8(buf + off + 1) != 64) { return 0; }
+    if (load8(buf + off + 2) != 32) { return 0; }
+    if (load8(buf + off + 3) != 45) { return 0; }  # '-'
+
+    var p = off + 4;
+    _parse_uint(buf, p, eol);
+    _vcs_hunk_old_start = _vcs_pv;
+    p = _vcs_pe;
+    _vcs_hunk_old_count = 1;
+    if (p < eol) {
+        if (load8(buf + p) == 44) {  # ','
+            _parse_uint(buf, p + 1, eol);
+            _vcs_hunk_old_count = _vcs_pv;
+            p = _vcs_pe;
+        }
+    }
+    # expect " +"
+    if (p + 2 > eol) { return 0; }
+    if (load8(buf + p) != 32) { return 0; }
+    if (load8(buf + p + 1) != 43) { return 0; }  # '+'
+    p = p + 2;
+    _parse_uint(buf, p, eol);
+    _vcs_hunk_new_start = _vcs_pv;
+    p = _vcs_pe;
+    _vcs_hunk_new_count = 1;
+    if (p < eol) {
+        if (load8(buf + p) == 44) {
+            _parse_uint(buf, p + 1, eol);
+            _vcs_hunk_new_count = _vcs_pv;
+        }
+    }
+    return 1;
+}
+
+# Walk the captured diff, convert hunks to per-line markers. One pass,
+# O(diff_bytes).
+#
+# Hunk interpretation:
+#   old_count==0 && new_count>0 → pure add:  mark new_start..+new_count ADD
+#   old_count>0  && new_count==0 → pure del: mark new_start (or 1) DEL
+#   both>0                        → modify:  mark new_start..+new_count MOD
+fn _apply_hunks(diff_buf, diff_n) {
+    if (g_vcs_marks == 0) { return 0; }
+    var i = 0;
+    while (i < diff_n) {
+        var eol = _scan_byte(diff_buf, i, diff_n, 10);  # '\n'
+        # Only hunk headers matter for markers.
+        if (eol - i >= 4) {
+            if (load8(diff_buf + i) == 64) {
+                if (load8(diff_buf + i + 1) == 64) {
+                    if (_parse_hunk_header(diff_buf, i, eol) == 1) {
+                        var oc = _vcs_hunk_old_count;
+                        var nc = _vcs_hunk_new_count;
+                        var ns = _vcs_hunk_new_start;
+                        var kind = VCS_MARK_NONE;
+                        if (oc == 0) {
+                            if (nc > 0) { kind = VCS_MARK_ADD; }
+                        } else {
+                            if (nc == 0) {
+                                kind = VCS_MARK_DEL;
+                                nc = 1;
+                                if (ns == 0) { ns = 1; }
+                            } else {
+                                kind = VCS_MARK_MOD;
+                            }
+                        }
+                        if (kind != VCS_MARK_NONE) {
+                            var k = 0;
+                            while (k < nc) {
+                                var ln = ns + k;
+                                if (ln >= 1) {
+                                    if (ln <= g_vcs_mark_cap) {
+                                        store8(g_vcs_marks + ln - 1, kind);
+                                    }
+                                }
+                                k = k + 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        i = eol + 1;
+    }
+    return 0;
+}
+
+# First pass over the diff: find the highest affected line number so we
+# can size the mark array exactly. Avoids re-reading the file just to
+# count lines.
+fn _max_line_from_hunks(diff_buf, diff_n) {
+    var max_line = 0;
+    var i = 0;
+    while (i < diff_n) {
+        var eol = _scan_byte(diff_buf, i, diff_n, 10);
+        if (eol - i >= 4) {
+            if (load8(diff_buf + i) == 64) {
+                if (load8(diff_buf + i + 1) == 64) {
+                    if (_parse_hunk_header(diff_buf, i, eol) == 1) {
+                        var nc = _vcs_hunk_new_count;
+                        var ns = _vcs_hunk_new_start;
+                        if (nc == 0) { nc = 1; if (ns == 0) { ns = 1; } }
+                        var last = ns + nc - 1;
+                        if (last > max_line) { max_line = last; }
+                    }
+                }
+            }
+        }
+        i = eol + 1;
+    }
+    return max_line;
+}
+
+# Public entry — populate per-line markers for `path`. Silent on any
+# failure: gutter just shows no markers. Call exactly once per file,
+# before render begins.
+fn vcs_compute_markers(path) {
+    vcs_reset();
+    if (vcs_enabled() == 0) { return 0; }
+    if (_path_shell_safe(path) == 0) { return 0; }
+
+    var cmd = _build_git_cmd(path);
+    var diff_cap = 65536;
+    var diff_buf = alloc(diff_cap);
+    var diff_n = _capture_shell(cmd, diff_buf, diff_cap);
+    if (diff_n <= 0) { return 0; }
+
+    var max_line = _max_line_from_hunks(diff_buf, diff_n);
+    if (max_line <= 0) { return 0; }
+
+    g_vcs_marks = alloc(max_line);
+    g_vcs_mark_cap = max_line;
+    var z = 0;
+    while (z < max_line) { store8(g_vcs_marks + z, 0); z = z + 1; }
+
+    _apply_hunks(diff_buf, diff_n);
+    return 0;
+}
+
+fn vcs_mark_for_line(line) {
+    if (g_vcs_marks == 0)        { return VCS_MARK_NONE; }
+    if (line < 1)                { return VCS_MARK_NONE; }
+    if (line > g_vcs_mark_cap)   { return VCS_MARK_NONE; }
+    return load8(g_vcs_marks + line - 1);
+}

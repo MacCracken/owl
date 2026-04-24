@@ -165,21 +165,39 @@ yet — that's M3b.
 
 ---
 
-## Milestone 6 — Git integration
+## Milestone 6 — VCS integration (git scaffold) ✅ shipped
 
 **Goal:** Files inside git repos show change markers in the gutter.
 
-- Detect whether file is tracked in a git repo
-- Show `+` / `~` / `−` markers for added / modified / removed lines
-- Toggle via `--style changes` or config
-- Graceful no-op when git is unavailable or file is not tracked
+- `src/vcs.cyr` — narrow VCS interface (`vcs_compute_markers`,
+  `vcs_mark_for_line`, `vcs_reset`, `vcs_enabled`, `set_style`).
+  All git-specific code lives in this module so M6 is a single-file
+  rewrite once SIT (planned AGNOS-native VCS) ships
+- `git diff --no-color -U0 -- <path>` via `/bin/sh -c` with a minimal
+  PATH env; hunk headers parsed directly, no external diff parser
+- Per-line markers: `VCS_MARK_ADD` (`+`, green), `VCS_MARK_MOD`
+  (`~`, orange), `VCS_MARK_DEL` (`-`, red) with theme-aware color
+  via `theme_change_color`
+- `--style=auto | changes | no-changes` flag (default auto; on when
+  decorated and in a repo)
+- Gutter layout: `"     N " + "+/~/- " + "│ "`; marker column is
+  omitted entirely when `--style=no-changes` or when markers wouldn't
+  be shown, keeping the narrow gutter for non-repo files
+- Diff output capped at 64KB; huge diffs render partial markers
+- Silent no-op outside a repo, with unavailable `git`, or for
+  untracked / clean files — no errors, no stderr leakage
 
-**Testing:**
-- Modified file in a repo shows markers next to the right lines
-- Non-git file shows no markers, no errors, no performance penalty
-- Repo with no changes renders cleanly
+**Known limitations (M6 scaffold):**
+- Paths containing `'` or control bytes render without markers
+  (single-quote shell wrap; proper quoting deferred)
+- `git` is located via PATH env passed to `/bin/sh`; unusual installs
+  may not resolve
+- Not yet streaming — file must be rendered after diff is fully
+  captured
 
-**Done when:** reviewing a working-copy change with `owl` is faster than `git diff`.
+**Done when the SIT swap lands:** replace `_capture_shell` +
+`_parse_hunk_header` + `_apply_hunks` with calls into a SIT library
+dep. Interface above stays.
 
 ---
 
@@ -249,6 +267,7 @@ Keep a running list here as questions get answered during implementation:
 | 2026-04-22 | Theme format: reuse existing (e.g. TextMate/Sublime) or custom? | Custom CYML | Keeps toolchain consistent; refuses incumbent baggage |
 | 2026-04-23 | Grammar source for M3b? | vyakarana 1.0.2 (git-tag dep) | Library-first Cyrius-native tokenizer; ten-kind palette already matches theme shape |
 | 2026-04-23 | Highlight file-size ceiling? | 128 KB (`HIGHLIGHT_MAX`) | Bump allocator keeps file + tokenbuf + ANSI-inflated output resident; lifts with a freeing allocator or vyakarana streaming (their 2.x) |
+| 2026-04-23 | M6 VCS backend: implement git internals, shell out, or wait for SIT? | Shell out to `git diff` confined to `src/vcs.cyr` | SIT (AGNOS-native VCS) will replace the layer wholesale; a single-file scaffold is the minimum honest thing. `.git/index` + SHA-1 in Cyrius would also need rewriting |
 | —          | Native theming integration? | Deferred to post-v1 | Keeps v1 portable |
 
 ---
