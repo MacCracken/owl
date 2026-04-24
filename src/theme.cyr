@@ -31,6 +31,51 @@ fn theme_lineno_color(i) {
     return 7;
 }
 
+# ── Token palette (M3b) ────────────────────────────────────────────────
+#
+# Maps (theme, vyakarana token kind) → 256-color ANSI index. Returns -1
+# for "no color" — caller skips ansi_fg. Kind indices match vyakarana's
+# TK_* constants (token.cyr): 0=ident, 1=keyword, 2=string, 3=number,
+# 4=comment, 5=operator, 6=punctuation, 7=whitespace, 8=preprocessor,
+# 9=error.
+#
+# Whitespace is always unstyled — the ANSI around empty runs just adds
+# noise. Ident and punctuation fall through to the terminal default so
+# the file reads like normal text unless the token is semantically
+# loud (keyword, string, number, comment, etc.).
+
+fn theme_token_color(theme, kind) {
+    if (theme == 0) {
+        # dark
+        if (kind == 0) { return 0 - 1; }   # ident        — default
+        if (kind == 1) { return 141; }     # keyword      — purple
+        if (kind == 2) { return 113; }     # string       — green
+        if (kind == 3) { return 215; }     # number       — orange
+        if (kind == 4) { return 245; }     # comment      — grey
+        if (kind == 5) { return 110; }     # operator     — steel blue
+        if (kind == 6) { return 0 - 1; }   # punctuation  — default
+        if (kind == 7) { return 0 - 1; }   # whitespace   — default
+        if (kind == 8) { return 221; }     # preprocessor — yellow
+        if (kind == 9) { return 196; }     # error        — bright red
+        return 0 - 1;
+    }
+    if (theme == 1) {
+        # light
+        if (kind == 0) { return 0 - 1; }   # ident
+        if (kind == 1) { return 126; }     # keyword      — deep magenta
+        if (kind == 2) { return 28;  }     # string       — deep green
+        if (kind == 3) { return 166; }     # number       — deep orange
+        if (kind == 4) { return 244; }     # comment      — mid grey
+        if (kind == 5) { return 26;  }     # operator     — blue
+        if (kind == 6) { return 0 - 1; }   # punctuation
+        if (kind == 7) { return 0 - 1; }   # whitespace
+        if (kind == 8) { return 130; }     # preprocessor — ochre
+        if (kind == 9) { return 124; }     # error        — deep red
+        return 0 - 1;
+    }
+    return 0 - 1;
+}
+
 # ── Public API ─────────────────────────────────────────────────────────
 
 # Look up theme by name. Returns index or -1.
@@ -97,7 +142,15 @@ fn ansi_fg(code) {
 
 # Emit reset escape \e[0m on stdout. Unguarded — callers only call
 # this after ansi_fg, so the gate has already been checked.
+# Bytes built explicitly: Cyrius doesn't parse \x?? escapes in string
+# literals, and a literal "\x1b[0m" would emit the five characters
+# \, x, 1, b, [.
 fn ansi_reset() {
-    syscall(1, 1, "\x1b[0m", 4);
+    var rbuf[4];
+    store8(&rbuf + 0, 0x1B);
+    store8(&rbuf + 1, 91);    # '['
+    store8(&rbuf + 2, 48);    # '0'
+    store8(&rbuf + 3, 109);   # 'm'
+    syscall(1, 1, &rbuf, 4);
     return 0;
 }

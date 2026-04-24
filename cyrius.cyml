@@ -20,8 +20,9 @@ output = "owl"
 #   process               — pager spawn (M4, §7)
 #   assert                — tests/owl.tcyr
 # toml/cyml (config, M7) and any syntax-grammar deps come later.
-# No external deps yet — owl is first-party; add [deps.<name>] blocks
-# (git + tag + modules) if we pull in e.g. sakshi/patra/yukti later.
+# vyakarana — tokenizer library for M3b (token-level highlighting).
+# Ships the ten-kind palette + eleven starter grammars (shell, python,
+# js, ts, rust, c, cyrius, toml, json, yaml, markdown).
 [deps]
 stdlib = [
     "syscalls",
@@ -37,4 +38,9 @@ stdlib = [
     "process",
     "assert",
 ]
+
+[deps.vyakarana]
+git = "https://github.com/MacCracken/vyakarana.git"
+tag = "1.0.2"
+modules = ["dist/vyakarana.cyr"]
 ---

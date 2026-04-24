@@ -1,6 +1,7 @@
 # owl — main entry point
 # Stdlib auto-included via cyrius.cyml
 
+include "lib/vyakarana.cyr"
 include "src/lang.cyr"
 include "src/theme.cyr"
 include "src/pager.cyr"
@@ -10,6 +11,15 @@ include "src/pager.cyr"
 var OWL_VERSION = "owl 0.1.0";
 
 var BUFSIZE = 65536;
+
+# M3b — cap on file size for token-highlighted rendering. Larger files
+# fall back to plain streaming (decorations still render; token-level
+# color does not). Sized conservatively against the bump allocator:
+# the highlight path keeps the full file, the tokenbuf, and an
+# ANSI-inflated output buffer resident concurrently, so the working
+# set is ~4× the file size. Raising this needs a freeing allocator
+# or a streaming tokenizer (vyakarana 2.x / M5 per its ROADMAP).
+var HIGHLIGHT_MAX = 131072;
 
 # Exit codes per design spec §9
 var EXIT_OK       = 0;
@@ -306,6 +316,136 @@ fn render_chunk(buf, n) {
     return 0;
 }
 
+# ── Highlighted render (M3b) ───────────────────────────────────────────
+#
+# Called when language is detected, vyakarana has a grammar for it, and
+# color output is live. `buf` is the full file contents, null-terminated
+# at buf[n] (tokenize_source uses strlen internally). Returns 0 on
+# success, -1 if tokenization returned no tokenbuf (caller falls back
+# to plain passthrough on the same buffer).
+#
+# Layering: drives the loop byte-by-byte so the line-number gutter, tab
+# expansion, and -A non-printable glyphs all still work — M3b adds
+# color on top of M2/M5 behaviors, it doesn't replace them. ANSI reset
+# is emitted before newlines so line endings don't bleed color into
+# the next gutter.
+fn render_highlighted_buf(buf, n, lang) {
+    var tb = tokenize_source(buf, lang);
+    if (tb == 0) { return 0 - 1; }
+
+    var tok_count = tokenbuf_count(tb);
+    var tok_i = 0;
+    var show_nums = resolved_show_numbers();
+    var show_all  = g_flag_show_all;
+    var tabs      = g_flag_tabs;
+    var theme     = g_active_theme;
+    var active_color = 0 - 1;
+
+    var i = 0;
+    while (i < n) {
+        # Advance past tokens that ended before this byte.
+        while (tok_i < tok_count) {
+            var tok_end = tokenbuf_start(tb, tok_i) + tokenbuf_len(tb, tok_i);
+            if (tok_end <= i) { tok_i = tok_i + 1; }
+            else { break; }
+        }
+        var kind = 0 - 1;
+        if (tok_i < tok_count) {
+            if (tokenbuf_start(tb, tok_i) <= i) {
+                kind = tokenbuf_kind(tb, tok_i);
+            }
+        }
+        var color = 0 - 1;
+        if (kind >= 0) { color = theme_token_color(theme, kind); }
+
+        var c = load8(buf + i);
+
+        # Line-number gutter at line start — clear any active color so
+        # the gutter renders in its own lineno color.
+        if (show_nums == 1) {
+            if (g_at_line_start == 1) {
+                if (active_color != 0 - 1) { ansi_reset(); active_color = 0 - 1; }
+                emit_lineno(g_line_no);
+                g_at_line_start = 0;
+            }
+        }
+
+        # Color transitions: reset before \n, otherwise apply this
+        # token's color if different from what's active.
+        if (c == 10) {
+            if (active_color != 0 - 1) { ansi_reset(); active_color = 0 - 1; }
+        } else {
+            if (color != active_color) {
+                if (active_color != 0 - 1) { ansi_reset(); }
+                if (color != 0 - 1) { ansi_fg(color); }
+                active_color = color;
+            }
+        }
+
+        # Byte-level emission — mirrors render_chunk path 3.
+        if (c == 10) {
+            if (show_all == 1) { file_write(STDOUT, "$", 1); }
+            file_write(STDOUT, "\n", 1);
+            if (show_nums == 1) {
+                g_line_no = g_line_no + 1;
+                g_at_line_start = 1;
+            }
+        } else {
+            if (c == 9) {
+                if (show_all == 1) {
+                    file_write(STDOUT, "→", 3);
+                    var pad = tabs - 1;
+                    if (pad < 0) { pad = 0; }
+                    var p = 0;
+                    while (p < pad) {
+                        file_write(STDOUT, " ", 1);
+                        p = p + 1;
+                    }
+                } else {
+                    if (tabs == 0) {
+                        file_write(STDOUT, "\t", 1);
+                    } else {
+                        var p = 0;
+                        while (p < tabs) {
+                            file_write(STDOUT, " ", 1);
+                            p = p + 1;
+                        }
+                    }
+                }
+            } else {
+                if (c == 13) {
+                    if (show_all == 1) {
+                        file_write(STDOUT, "␍", 3);
+                    } else {
+                        file_write(STDOUT, buf + i, 1);
+                    }
+                } else {
+                    if (show_all == 1) {
+                        if (c < 32) {
+                            var ctrl[2];
+                            store8(&ctrl, 94);
+                            store8(&ctrl + 1, c + 64);
+                            file_write(STDOUT, &ctrl, 2);
+                        } else {
+                            if (c == 127) {
+                                file_write(STDOUT, "^?", 2);
+                            } else {
+                                file_write(STDOUT, buf + i, 1);
+                            }
+                        }
+                    } else {
+                        file_write(STDOUT, buf + i, 1);
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+
+    if (active_color != 0 - 1) { ansi_reset(); }
+    return 0;
+}
+
 fn render_fd_loop(fd) {
     var buf = alloc(BUFSIZE);
     while (1 == 1) {
@@ -326,7 +466,14 @@ fn render_fd(fd, path_for_header) {
 
 # Render a file path. Performs extension-based language detection, a
 # shebang peek on the first chunk if the extension didn't resolve,
-# and honors --language override.
+# and honors --language override. M3b splits into two render paths:
+#
+#   - Highlighted: file fits in HIGHLIGHT_MAX, color is live, and
+#     vyakarana has a grammar for the detected language. Whole file
+#     is buffered, tokenized once, and rendered with per-token color.
+#   - Streaming: everything else (big files, no grammar, no color,
+#     plain mode). First chunk renders through render_chunk, rest
+#     through render_fd_loop.
 fn render_path(path) {
     var fd = file_open(path, O_RDONLY, 0);
     if (fd < 0) {
@@ -336,8 +483,6 @@ fn render_path(path) {
 
     var lang = detect_language_from_path(path);
 
-    # Pre-read first chunk. Doubles as the shebang-peek buffer and the
-    # first chunk to render (no lseek).
     var first_buf = alloc(BUFSIZE);
     var first_n = file_read(fd, first_buf, BUFSIZE);
     if (first_n < 0) {
@@ -346,7 +491,6 @@ fn render_path(path) {
         return 0 - 1;
     }
 
-    # If extension detection fell through to "plain", try shebang.
     if (streq(lang, "plain") == 1) {
         if (first_n > 0) {
             var sh = detect_language_from_shebang(first_buf, first_n);
@@ -354,13 +498,79 @@ fn render_path(path) {
         }
     }
 
-    # --language overrides both.
     if (g_flag_lang != 0) { lang = g_flag_lang; }
 
     g_active_lang = lang;
 
+    # Highlighting eligibility. Gated on color (not on decorated) —
+    # piped output with --color=always should still color tokens even
+    # though the header/gutter stay off. Plain-mode (-p) already forced
+    # g_want_color to 0 upstream. `has_grammar` also lazily loads all
+    # bundled grammars on first call — cheap after the first file.
+    var highlight_ok = 0;
+    if (g_want_color == 1) {
+        if (streq(lang, "plain") == 0) {
+            if (has_grammar(lang) == 1) { highlight_ok = 1; }
+        }
+    }
+
     render_reset();
     if (resolved_show_header() == 1) { emit_header(path); }
+
+    if (highlight_ok == 1) {
+        # Buffer the full file (up to HIGHLIGHT_MAX) then tokenize.
+        # One extra byte for the trailing \0 that tokenize_source
+        # assumes (it uses strlen).
+        var big = alloc(HIGHLIGHT_MAX + 1);
+        var j = 0;
+        while (j < first_n) {
+            store8(big + j, load8(first_buf + j));
+            j = j + 1;
+        }
+        var total = first_n;
+        while (total < HIGHLIGHT_MAX) {
+            var got = file_read(fd, big + total, HIGHLIGHT_MAX - total);
+            if (got < 0) {
+                file_close(fd);
+                report_error(path, "read error");
+                return 0 - 1;
+            }
+            if (got == 0) { break; }
+            total = total + got;
+        }
+        # If we filled the cap, check whether the file is larger.
+        var overflow = 0;
+        if (total >= HIGHLIGHT_MAX) {
+            var probe[1];
+            var p = file_read(fd, &probe, 1);
+            if (p > 0) { overflow = 1; }
+        }
+        store8(big + total, 0);
+
+        if (overflow == 0) {
+            var hrc = render_highlighted_buf(big, total, lang);
+            file_close(fd);
+            if (hrc != 0) {
+                # Tokenization bailed — emit the buffer plainly so the
+                # user still sees the file (decorations already drawn).
+                render_chunk(big, total);
+            }
+            return 0;
+        }
+
+        # File exceeds HIGHLIGHT_MAX — flush what we have plainly and
+        # stream the remainder. No color, but line numbers / -A / tabs
+        # all still apply via render_chunk.
+        render_chunk(big, total);
+        var rc_big = render_fd_loop(fd);
+        file_close(fd);
+        if (rc_big < 0) {
+            report_error(path, "read error");
+            return 0 - 1;
+        }
+        return 0;
+    }
+
     render_chunk(first_buf, first_n);
     var rc = render_fd_loop(fd);
     file_close(fd);
