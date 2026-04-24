@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_call:                    # reusable by release.yml as a gate
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -32,15 +33,146 @@ jobs:
           echo "CYRIUS_HOME=$HOME/.cyrius" >> $GITHUB_ENV
 
       - name: Resolve dependencies
+        # Fetches vyakarana from the tag pinned in cyrius.cyml
+        # ([deps.vyakarana] git + tag + modules) into lib/.
         run: cyrius deps
 
       - name: Build
         run: |
           mkdir -p build
-          cyrius build src/main.cyr build/${{ github.event.repository.name }}
+          cyrius build src/main.cyr build/owl
+
+      - name: Verify ELF
+        run: xxd -l 4 build/owl | grep -q "7f45 4c46"
+
+      - name: Lint
+        # Every src file clean; the only tolerated warning is the
+        # `exceeds 120 characters` rule on comment-divider lines
+        # (cosmetic only). Anything else is a hard fail.
+        run: |
+          fail=0
+          for f in src/*.cyr; do
+            out=$(cyrius lint "$f" 2>&1)
+            echo "$out"
+            if echo "$out" | grep -E '^\s*warn ' | grep -v 'exceeds 120 characters' | grep -q .; then
+              fail=1
+            fi
+          done
+          [ $fail -eq 0 ] || { echo "lint: non-cosmetic warnings present"; exit 1; }
 
       - name: Test
-        run: cyrius test tests/owl.tcyr
+        run: cyrius test
 
-      - name: Smoke test
+      - name: Smoke test (M0–M8 + security hardening)
+        # scripts/smoke.sh gates every milestone behavior plus the
+        # four closed findings from docs/audit/2026-04-23-audit.md.
+        # The M6 and M8c gates touch real repo state (mutate README
+        # then restore), which the actions/checkout step provides.
         run: sh scripts/smoke.sh build/owl
+
+      - name: DCE parity check
+        # A release build and a debug build must produce the same
+        # behavior. Rebuild with CYRIUS_DCE=1 and re-run smoke.
+        run: |
+          mkdir -p build
+          CYRIUS_DCE=1 cyrius build src/main.cyr build/owl-dce
+          echo "owl-dce: $(wc -c < build/owl-dce) bytes"
+          sh scripts/smoke.sh build/owl-dce
+
+  security:
+    name: Security scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan for dangerous patterns in src/
+        # Mirror yukti's pattern scan, scoped to owl's surface.
+        # Rejects pattern hits in code; tolerates them in comments.
+        # These patterns encode the invariants closed by
+        # docs/audit/2026-04-23-audit.md.
+        run: |
+          FAIL=0
+          scan() {
+            local label="$1"; shift
+            local pat="$1"; shift
+            local hits
+            hits=$(grep -rn "$pat" src/ 2>/dev/null | awk -F: '
+              { line=$3; for(i=4;i<=NF;i++) line=line":"$i;
+                sub(/^[[:space:]]+/,"",line);
+                if (substr(line,1,1) != "#") print $1":"$2":"line }')
+            if [ -n "$hits" ]; then
+              echo "FAIL: $label"
+              echo "$hits"
+              FAIL=1
+            fi
+          }
+
+          # FINDING-003 regression guard: vcs.cyr and any future
+          # data-driven shell-out must go through execve+argv, not
+          # /bin/sh -c. pager.cyr's /bin/sh -c "$PAGER" is an
+          # intentional shell interpreter for the user's PAGER env
+          # (standard less / more pattern), so it's exempt.
+          sh_hits=$(grep -rn '"/bin/sh"' src/ 2>/dev/null \
+            | grep -v '^src/pager\.cyr:' \
+            | awk -F: '
+              { line=$3; for(i=4;i<=NF;i++) line=line":"$i;
+                sub(/^[[:space:]]+/,"",line);
+                if (substr(line,1,1) != "#") print $1":"$2":"line }')
+          if [ -n "$sh_hits" ]; then
+            echo "FAIL: /bin/sh invocation in code (non-pager)"
+            echo "$sh_hits"
+            FAIL=1
+          fi
+
+          # FINDING-004 regression guard: waitpid status buffer must
+          # be sized at 8 bytes, never 1.
+          scan "waitpid 1-byte buffer" 'status_buf\[1\]|stbuf\[1\]'
+
+          # Arbitrary system calls — flag sys_system and raw
+          # execve/fork numbers for manual review.
+          scan "sys_system call"   '\bsys_system\s*('
+          scan "raw execve(59)"    'syscall( *59'
+          scan "raw fork(57)"      'syscall( *57'
+
+          # Large stack buffers — CLAUDE.md: heap-allocate large data.
+          awk -F: '
+            /var [A-Za-z_][A-Za-z0-9_]*\[[0-9]+\]/ {
+              match($0, /\[[0-9]+\]/); s=substr($0,RSTART+1,RLENGTH-2); n=s+0;
+              if (n >= 65536) print FILENAME":"NR": large stack buffer ("n" bytes): "$0
+            }' src/*.cyr | tee /tmp/bigbuf.txt
+          [ -s /tmp/bigbuf.txt ] && FAIL=1
+
+          echo "security scan complete (fail: $FAIL)"
+          exit $FAIL
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required files
+        run: |
+          MISSING=0
+          for f in README.md CHANGELOG.md VERSION CONTRIBUTING.md LICENSE \
+                   cyrius.cyml owl-design-spec.md ROADMAP.md CLAUDE.md; do
+            if [ -f "$f" ]; then echo "  OK: $f"
+            else echo "  MISSING: $f"; MISSING=1; fi
+          done
+          exit $MISSING
+
+      - name: Verify version consistency
+        run: |
+          VERSION=$(cat VERSION | tr -d '[:space:]')
+          echo "VERSION file: $VERSION"
+          # CHANGELOG must have a section for this version.
+          grep -qE "^## \[${VERSION}\]" CHANGELOG.md \
+            || { echo "FAIL: CHANGELOG.md missing section [${VERSION}]"; exit 1; }
+          # cyrius.cyml pulls from VERSION via ${file:VERSION} — confirm the
+          # indirection hasn't drifted to a hardcoded value.
+          grep -qE '^version *= *"\$\{file:VERSION\}"' cyrius.cyml \
+            || { echo "FAIL: cyrius.cyml version no longer pulls from VERSION"; exit 1; }
+          # The OWL_VERSION string baked into the binary must match too.
+          grep -qE "OWL_VERSION *= *\"owl ${VERSION}\"" src/main.cyr \
+            || { echo "FAIL: OWL_VERSION in src/main.cyr != $VERSION"; exit 1; }
+          echo "Version consistent: VERSION = CHANGELOG = cyrius.cyml = OWL_VERSION = $VERSION"
