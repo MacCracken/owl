@@ -36,6 +36,7 @@ stdlib = [
     "args",
     "hashmap",
     "process",
+    "tagged",
     "assert",
 ]
 

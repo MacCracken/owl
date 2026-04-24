@@ -118,7 +118,7 @@ fn _cfg_err(path, line, reason) {
     }
     pi = pi + 1;
     eprint("owl: ", 5);
-    eprint(path, strlen(path));
+    eprint_sanitized(path, strlen(path));
     eprint(":", 1);
     eprint(&pbuf + pi, 15 - pi);
     eprint(": ", 2);

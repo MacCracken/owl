@@ -1,13 +1,15 @@
-# src/vcs.cyr — VCS change markers for the line-number gutter (M6)
+# src/vcs.cyr — VCS change markers for the line-number gutter
 #
 # Scope
 # -----
-# Shell out to `git diff --no-color -U0 -- <path>` once per rendered
-# file, parse the unified-diff hunk headers into per-line markers, and
-# expose a line-indexed lookup to the gutter renderer in main.cyr.
+# Fork + execve `git diff --no-color -U0 -- <path>` once per rendered
+# file (no shell — argv boundaries are kernel-enforced, closing the
+# classic quoting-bug class), parse the unified-diff hunk headers into
+# per-line markers, and expose a line-indexed lookup to the gutter
+# renderer in main.cyr.
 #
-# All git-specific code lives in this module. M6 is an interim scaffold
-# — when SIT (planned AGNOS-native VCS) ships, this file becomes a
+# All git-specific code lives in this module. Interim scaffold — when
+# SIT (planned AGNOS-native VCS) ships, this file becomes a
 # single-file rewrite: the interface stays (`vcs_compute_markers`,
 # `vcs_mark_for_line`, `vcs_reset`, `vcs_enabled`, `set_style`).
 #
@@ -18,15 +20,14 @@
 #   VCS_MARK_DEL  — deletion anchor; shown on the line after the lost
 #                   content, or on line 1 if the file lost its head
 #
-# Non-goals for M6
-# ----------------
+# Known limits
+# ------------
 #   - Submodules, packed refs, worktrees — whatever `git diff` handles
 #     in the user's environment is what we show
-#   - Performance under huge diffs — diff output is capped at 64KB; a
-#     file whose diff exceeds that renders partial markers
-#   - Proper shell-safe quoting of arbitrary paths — single-quote wrap
-#     plus reject of paths containing `'` or control bytes. Paths with
-#     embedded single quotes render without markers (silent no-op)
+#   - Diff output is capped at 64 KB; a file with a huge diff renders
+#     partial markers (audit FINDING-006)
+#   - If git is not installed under /usr/bin, /usr/local/bin, or /bin,
+#     the module silently no-ops
 
 var VCS_MARK_NONE = 0;
 var VCS_MARK_ADD  = 1;
@@ -63,48 +64,31 @@ fn vcs_enabled() {
     return 1;
 }
 
-# Reject paths containing single-quote or control bytes — these would
-# escape the single-quote shell wrap in _build_git_cmd. Proper quoting
-# deferred; affected paths just render without markers.
-fn _path_shell_safe(path) {
-    var plen = strlen(path);
-    var i = 0;
-    while (i < plen) {
-        var c = load8(path + i);
-        if (c == 39)  { return 0; }   # '
-        if (c < 32)   { return 0; }
-        if (c == 127) { return 0; }
-        i = i + 1;
-    }
-    return 1;
+# Resolve git's absolute path. Return pointer to the path string, or 0
+# if git isn't installed. Checks the three common install prefixes;
+# avoids PATH lookup entirely so we don't need to hand the child any
+# environment. Order matches Debian / Ubuntu / RHEL / Arch defaults.
+fn _find_git() {
+    var fd = sys_open("/usr/bin/git", 0, 0);
+    if (fd >= 0) { sys_close(fd); return "/usr/bin/git"; }
+    fd = sys_open("/usr/local/bin/git", 0, 0);
+    if (fd >= 0) { sys_close(fd); return "/usr/local/bin/git"; }
+    fd = sys_open("/bin/git", 0, 0);
+    if (fd >= 0) { sys_close(fd); return "/bin/git"; }
+    return 0;
 }
 
-# Compose: git diff --no-color -U0 -- '<path>' 2>/dev/null
-# Returns pointer to null-terminated buffer in the bump allocator.
-fn _build_git_cmd(path) {
-    var plen = strlen(path);
-    var cmd = alloc(plen + 64);
-    var cp = 0;
-    var pfx = "git diff --no-color -U0 -- '";
-    var pxl = strlen(pfx);
-    var j = 0;
-    while (j < pxl) { store8(cmd + cp, load8(pfx + j)); cp = cp + 1; j = j + 1; }
-    j = 0;
-    while (j < plen) { store8(cmd + cp, load8(path + j)); cp = cp + 1; j = j + 1; }
-    var sfx = "' 2>/dev/null";
-    var sxl = strlen(sfx);
-    j = 0;
-    while (j < sxl) { store8(cmd + cp, load8(sfx + j)); cp = cp + 1; j = j + 1; }
-    store8(cmd + cp, 0);
-    return cmd;
-}
+# Run `git diff --no-color -U0 -- <path>` via execve with explicit
+# argv — no /bin/sh, no quoting. Closes audit FINDING-003 (shell
+# injection class) and FINDING-005 (paths with `'` no longer need to
+# be rejected). git's stderr is redirected to /dev/null in the child
+# so "not a git repository" etc. never reach owl's stderr. Returns
+# bytes read, or -1 on fork/pipe/exec failure (git-not-found, ENOMEM,
+# etc.).
+fn _run_git_diff(path, diff_buf, diff_cap) {
+    var git = _find_git();
+    if (git == 0) { return 0 - 1; }
 
-# Fork /bin/sh -c "<cmd>" with PATH env injected, capture stdout into
-# buf up to buflen. Returns bytes read, or -1 on fork/pipe failure.
-# sh's exit code is ignored — empty diff output is the honest signal
-# that there are no markers to show (e.g. clean file, untracked file,
-# outside a repo).
-fn _capture_shell(cmd, buf, buflen) {
     var pipefd[16];
     if (sys_pipe(&pipefd) < 0) { return 0 - 1; }
     var rfd = load32(&pipefd);
@@ -121,27 +105,34 @@ fn _capture_shell(cmd, buf, buflen) {
         sys_close(rfd);
         sys_dup2(wfd, 1);
         sys_close(wfd);
-        var argv[8];
-        store64(&argv + 0,  "/bin/sh");
-        store64(&argv + 8,  "-c");
-        store64(&argv + 16, cmd);
-        store64(&argv + 24, 0);
-        var envp[4];
-        store64(&envp + 0, "PATH=/usr/local/bin:/usr/bin:/bin");
-        store64(&envp + 8, 0);
-        sys_execve("/bin/sh", &argv, &envp);
+        var devnull = sys_open("/dev/null", 1, 0);
+        if (devnull >= 0) { sys_dup2(devnull, 2); sys_close(devnull); }
+        var argv[56];
+        store64(&argv + 0,  git);
+        store64(&argv + 8,  "diff");
+        store64(&argv + 16, "--no-color");
+        store64(&argv + 24, "-U0");
+        store64(&argv + 32, "--");
+        store64(&argv + 40, path);
+        store64(&argv + 48, 0);
+        var envp[8];
+        store64(&envp + 0, 0);
+        sys_execve(git, &argv, &envp);
         sys_exit(127);
     }
 
     sys_close(wfd);
     var total = 0;
-    while (total < buflen) {
-        var n = sys_read(rfd, buf + total, buflen - total);
-        if (n <= 0) { break; }
+    var keep_reading = 1;
+    while (keep_reading == 1) {
+        if (total >= diff_cap) { keep_reading = 0; continue; }
+        var n = sys_read(rfd, diff_buf + total, diff_cap - total);
+        if (n <= 0) { keep_reading = 0; continue; }
         total = total + n;
     }
     sys_close(rfd);
-    var stbuf[1];
+    # waitpid writes a kernel int (4 bytes). See audit FINDING-004.
+    var stbuf[8];
     sys_waitpid(pid, &stbuf, 0);
     return total;
 }
@@ -306,12 +297,10 @@ fn _max_line_from_hunks(diff_buf, diff_n) {
 fn vcs_compute_markers(path) {
     vcs_reset();
     if (vcs_enabled() == 0) { return 0; }
-    if (_path_shell_safe(path) == 0) { return 0; }
 
-    var cmd = _build_git_cmd(path);
     var diff_cap = 65536;
     var diff_buf = alloc(diff_cap);
-    var diff_n = _capture_shell(cmd, diff_buf, diff_cap);
+    var diff_n = _run_git_diff(path, diff_buf, diff_cap);
     if (diff_n <= 0) { return 0; }
 
     var max_line = _max_line_from_hunks(diff_buf, diff_n);

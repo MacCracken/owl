@@ -94,7 +94,11 @@ fn stop_pager() {
         sys_close(g_pager_orig_out);
         g_pager_orig_out = 0;
     }
-    var status_buf[1];
+    # status_buf is 8 bytes: sys_waitpid writes a kernel int (4 bytes)
+    # into this pointer. Declaring [1] per the old convention wrote 3
+    # bytes past the slot — see docs/audit/2026-04-23-audit.md
+    # FINDING-004.
+    var status_buf[8];
     sys_waitpid(g_pager_pid, &status_buf, 0);
     g_pager_pid = 0;
     return 0;

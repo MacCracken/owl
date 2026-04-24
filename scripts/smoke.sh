@@ -563,4 +563,49 @@ printf '\xef\xbb\xbfhello\n' > "$TMPDIR/bom.txt"
 diff "$TMPDIR/bom.txt" <("$BIN" -p "$TMPDIR/bom.txt") > /dev/null \
     || fail "-p broke cat parity on BOM-prefixed file"
 
-echo "smoke: OK ($v_long) — M0 + M1 + M2 + M3a + M4 + M5 + M6 + M7 + M8a gates passing"
+# ============================================================
+# M8c — Security hardening (audit 2026-04-23 findings 001–004)
+# ============================================================
+
+# FINDING-002 — ESC in path is replaced with '?' on stderr so ANSI
+# can't inject into downstream stderr capture.
+esc_path=$(printf '/tmp/\x1b]0;evil\x07badpath')
+set +e
+"$BIN" "$esc_path" 2>"$TMPDIR/err" >/dev/null
+set -e
+grep -q $'\x1b' "$TMPDIR/err" \
+    && fail "FINDING-002 regression: ESC leaked into stderr"
+grep -q "badpath" "$TMPDIR/err" \
+    || fail "FINDING-002 regression: path body missing from stderr"
+
+# FINDING-001 — OSC 52 in file content is stripped in decorated mode;
+# -p, -A, -r all bypass the strip.
+printf 'before\x1b]52;c;evil\x07after\n' > "$TMPDIR/evil.txt"
+
+out=$("$BIN" --color=always "$TMPDIR/evil.txt")
+case "$out" in
+    *beforeafter*) ;;
+    *) fail "FINDING-001 regression: OSC 52 not stripped in decorated mode" ;;
+esac
+
+out=$("$BIN" -r --color=always "$TMPDIR/evil.txt")
+case "$out" in
+    *$'\x1b]52'*) ;;
+    *) fail "FINDING-001: --raw-control-chars did not pass ESC through" ;;
+esac
+
+# -p must be byte-identical to cat regardless of content.
+diff "$TMPDIR/evil.txt" <("$BIN" -p "$TMPDIR/evil.txt") >/dev/null \
+    || fail "-p broke cat parity on content with OSC"
+
+# FINDING-003 — git via argv (no shell). Markers still appear on a
+# dirty file inside the owl repo.
+cp README.md "$TMPDIR/README.bak"
+printf '\nsmoke-hardening-probe\n' >> README.md
+if ! "$BIN" -n --color=always README.md 2>/dev/null | grep -q '+'; then
+    cp "$TMPDIR/README.bak" README.md
+    fail "FINDING-003 regression: argv-git no longer produces ADD markers"
+fi
+cp "$TMPDIR/README.bak" README.md
+
+echo "smoke: OK ($v_long) — M0–M8 gates passing (security hardening FINDING-001/002/003/004 closed)"
