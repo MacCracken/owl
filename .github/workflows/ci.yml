@@ -49,12 +49,18 @@ jobs:
         # Every src file clean; the only tolerated warning is the
         # `exceeds 120 characters` rule on comment-divider lines
         # (cosmetic only). Anything else is a hard fail.
+        #
+        # cyrius lint exits non-zero when it has anything to report
+        # (even "0 warnings"), so both the tool invocation and the
+        # inner grep (which exits 1 on no match) need `|| true` to
+        # avoid colliding with the implicit `set -e` on `run:`.
         run: |
           fail=0
           for f in src/*.cyr; do
-            out=$(cyrius lint "$f" 2>&1)
+            out=$(cyrius lint "$f" 2>&1 || true)
             echo "$out"
-            if echo "$out" | grep -E '^\s*warn ' | grep -v 'exceeds 120 characters' | grep -q .; then
+            bad=$(echo "$out" | grep -E '^\s*warn ' | grep -v 'exceeds 120 characters' || true)
+            if [ -n "$bad" ]; then
               fail=1
             fi
           done
@@ -90,6 +96,10 @@ jobs:
         # Rejects pattern hits in code; tolerates them in comments.
         # These patterns encode the invariants closed by
         # docs/audit/2026-04-23-audit.md.
+        #
+        # GitHub Actions runs bash with `set -eo pipefail`, so every
+        # `grep | awk` pipeline where grep may find no matches needs
+        # a terminal `|| true` to keep the step alive on "clean".
         run: |
           FAIL=0
           scan() {
@@ -99,7 +109,7 @@ jobs:
             hits=$(grep -rn "$pat" src/ 2>/dev/null | awk -F: '
               { line=$3; for(i=4;i<=NF;i++) line=line":"$i;
                 sub(/^[[:space:]]+/,"",line);
-                if (substr(line,1,1) != "#") print $1":"$2":"line }')
+                if (substr(line,1,1) != "#") print $1":"$2":"line }' || true)
             if [ -n "$hits" ]; then
               echo "FAIL: $label"
               echo "$hits"
@@ -117,7 +127,7 @@ jobs:
             | awk -F: '
               { line=$3; for(i=4;i<=NF;i++) line=line":"$i;
                 sub(/^[[:space:]]+/,"",line);
-                if (substr(line,1,1) != "#") print $1":"$2":"line }')
+                if (substr(line,1,1) != "#") print $1":"$2":"line }' || true)
           if [ -n "$sh_hits" ]; then
             echo "FAIL: /bin/sh invocation in code (non-pager)"
             echo "$sh_hits"
@@ -139,8 +149,11 @@ jobs:
             /var [A-Za-z_][A-Za-z0-9_]*\[[0-9]+\]/ {
               match($0, /\[[0-9]+\]/); s=substr($0,RSTART+1,RLENGTH-2); n=s+0;
               if (n >= 65536) print FILENAME":"NR": large stack buffer ("n" bytes): "$0
-            }' src/*.cyr | tee /tmp/bigbuf.txt
-          [ -s /tmp/bigbuf.txt ] && FAIL=1
+            }' src/*.cyr > /tmp/bigbuf.txt
+          if [ -s /tmp/bigbuf.txt ]; then
+            cat /tmp/bigbuf.txt
+            FAIL=1
+          fi
 
           echo "security scan complete (fail: $FAIL)"
           exit $FAIL
