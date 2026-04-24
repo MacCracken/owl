@@ -1,12 +1,15 @@
 # `owl` — Design Specification
 
-**A watchful file viewer for AGNOS / Cyrius**
+**Observant Watcher of Lines — a file viewer for AGNOS / Cyrius**
 
-Version: 0.1 (draft)
-Status: Design spec, pre-implementation
+Version: 1.0
+Status: Released 2026-04-23
 Audience: Implementation agent / contributors
 Name: English "owl" — progenitor is Sanskrit **ulūka** (उलूक) via
-PIE *\*ulū-*. See `README.md` §Name.
+PIE *\*ulū-*. As a backronym: **O**bservant **W**atcher of **L**ines
+— *observant* for syntax / language / change detection, *watcher*
+for the per-line gutter + VCS markers, *lines* for the unit the tool
+operates on. See `README.md` §Name.
 
 ---
 

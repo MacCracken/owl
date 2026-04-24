@@ -1,6 +1,11 @@
-#!/bin/sh
-# owl smoke test — M0 (version/help) + M1 (plain-mode cat parity).
-# Usage: sh scripts/smoke.sh [path/to/owl]    (default: build/owl)
+#!/usr/bin/env bash
+# owl smoke test — M0–M8 gates + security hardening probes.
+# Usage: bash scripts/smoke.sh [path/to/owl]    (default: build/owl)
+#
+# bash is required: the script uses process substitution `<(...)` for
+# diff comparisons against dynamic output, and `$'\x1b'` C-string
+# escapes for ANSI probes. Running this through dash (Ubuntu's /bin/sh)
+# will fail on line 51 with a syntax error.
 set -eu
 
 BIN="${1:-build/owl}"

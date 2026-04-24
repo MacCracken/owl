@@ -1,6 +1,6 @@
 # owl 🦉
 
-> A watchful file viewer for AGNOS / Cyrius
+> **O**bservant **W**atcher of **L**ines — a file viewer for AGNOS / Cyrius
 
 `owl` reads files and prints them to your terminal — with syntax highlighting, line numbers, and git-aware decorations when you want them, and completely out of the way when you don't. Think `cat`, but it sees more.
 

@@ -2,7 +2,7 @@
 
 ## Project Identity
 
-**owl** (English: *watchful bird of prey*) — a `cat`/`bat`-style terminal file viewer for AGNOS / Cyrius.
+**owl** — *Observant Watcher of Lines*, a `cat`/`bat`-style terminal file viewer for AGNOS / Cyrius. The backronym maps to the feature set: *observant* = language detection + syntax highlighting, *watcher* = per-line gutter + VCS change markers, *lines* = the unit owl operates on. Name itself descends from Sanskrit **ulūka** via PIE *\*ulū-*; see README §Name.
 
 - **Type**: Binary
 - **License**: GPL-3.0-only

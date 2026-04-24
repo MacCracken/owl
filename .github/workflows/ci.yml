@@ -74,7 +74,10 @@ jobs:
         # four closed findings from docs/audit/2026-04-23-audit.md.
         # The M6 and M8c gates touch real repo state (mutate README
         # then restore), which the actions/checkout step provides.
-        run: sh scripts/smoke.sh build/owl
+        # Invoked as `bash` not `sh` — the script uses <(…) process
+        # substitution and $'\x1b' escapes, both bashisms. Ubuntu's
+        # /bin/sh is dash, so the shebang alone isn't enough.
+        run: bash scripts/smoke.sh build/owl
 
       - name: DCE parity check
         # A release build and a debug build must produce the same
@@ -83,7 +86,7 @@ jobs:
           mkdir -p build
           CYRIUS_DCE=1 cyrius build src/main.cyr build/owl-dce
           echo "owl-dce: $(wc -c < build/owl-dce) bytes"
-          sh scripts/smoke.sh build/owl-dce
+          bash scripts/smoke.sh build/owl-dce
 
   security:
     name: Security scan

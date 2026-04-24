@@ -105,7 +105,8 @@ jobs:
           echo "owl: $(wc -c < build/owl) bytes"
 
       - name: Re-run smoke on the release binary
-        run: sh scripts/smoke.sh build/owl
+        # See ci.yml note — smoke.sh requires bash, not dash.
+        run: bash scripts/smoke.sh build/owl
 
       - name: Package release artifact
         # Ships binary + grammars (runtime data that vyakarana loads
