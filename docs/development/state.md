@@ -6,6 +6,13 @@
 
 ## Version
 
+**1.1.4** — shipped 2026-04-25. Smarter detection + diff mode:
+content-based language detection as a third-pass fallback for files
+with no extension and no shebang (`{`/`[`→json, `[name]`→toml,
+`---`→yaml, `# `→markdown); `--diff` filters rendered output to
+lines with VCS ADD/MOD markers, forces VCS computation even when
+piped, composes with `--line-range` and `-n`.
+
 **1.1.3** — shipped 2026-04-25. Content fallbacks drop:
 `--hex`/`-x` flag plus auto hex-dump for binary files (replaces the
 pre-1.1.3 skip-notice); user-installable grammars
@@ -45,18 +52,18 @@ complete; full owl attack surface audited and hardened.
 
 ## Binary
 
-- ~191 KB (non-DCE build, `build/owl`)
+- ~193 KB (non-DCE build, `build/owl`)
 - Startup targets: `owl --version` 1–2 ms, tiny-file highlight 2 ms
   (25× under the 50 ms no-op target in `docs/design-spec.md`)
 
 ## Source
 
-- ~3,240 lines across 6 modules:
-  - `src/main.cyr` (~1,774) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump
+- ~3,336 lines across 6 modules:
+  - `src/main.cyr` (~1,794) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff
   - `src/theme.cyr` (~431) — bundled themes, 10-kind palette, ANSI emission, user-theme loader (1.1.3)
-  - `src/lang.cyr` (~300) — extension + shebang language detection + ext-override table
+  - `src/lang.cyr` (~371) — extension/shebang/content detection + ext-override table
+  - `src/vcs.cyr` (~328) — git VCS markers (M6) + --diff bypass for piped output
   - `src/config.cyr` (~298) — `key = value` config parser (M7) + `ext.*` keys (1.1.1)
-  - `src/vcs.cyr` (~323) — git VCS markers (M6)
   - `src/pager.cyr` (~114) — pager spawn + SIGPIPE handling
 
 ## Tests

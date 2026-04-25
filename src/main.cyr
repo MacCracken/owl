@@ -10,7 +10,7 @@ include "src/config.cyr"
 
 # Keep OWL_VERSION in sync with the VERSION file.
 # A M8 CI check will enforce equality; for now, manual.
-var OWL_VERSION = "owl 1.1.3";
+var OWL_VERSION = "owl 1.1.4";
 
 var BUFSIZE = 65536;
 
@@ -58,6 +58,10 @@ var g_flag_strip_ansi = 0;
 # Auto-fallback also fires when a binary file is detected via NUL-byte
 # scan, replacing the pre-1.1.3 skip-notice with a useful dump.
 var g_flag_hex = 0;
+# --diff: filter rendered output to lines with VCS markers (ADD/MOD).
+# Forces VCS computation regardless of decoration state. Composes with
+# --line-range and --color (just gates emission via _in_range).
+var g_flag_diff = 0;
 # --line-range=A:B (1-indexed, inclusive). 0 = unset; either or both
 # may stay open. Render paths gate byte emission on _in_range();
 # once g_line_no passes the end, g_render_done short-circuits the
@@ -688,6 +692,9 @@ fn _in_range() {
     if (g_line_range_end > 0) {
         if (g_line_no > g_line_range_end) { return 0; }
     }
+    if (g_flag_diff == 1) {
+        if (vcs_mark_for_line(g_line_no) == VCS_MARK_NONE) { return 0; }
+    }
     return 1;
 }
 
@@ -1310,6 +1317,17 @@ fn render_path(path) {
         }
     }
 
+    # 1.1.4 — content-based detection as a third-pass fallback. Fires
+    # only when extension AND shebang both missed; high-confidence
+    # patterns for json/yaml/toml/markdown only (programming languages
+    # excluded — false-positive risk).
+    if (streq(lang, "plain") == 1) {
+        if (first_n > 0) {
+            var ct = detect_language_from_content(first_buf, first_n);
+            if (ct != 0) { lang = ct; }
+        }
+    }
+
     if (g_flag_lang != 0) { lang = g_flag_lang; }
 
     g_active_lang = lang;
@@ -1451,6 +1469,7 @@ fn print_help() {
     println("  -A, --show-all         Show non-printables: tab as →, EOL as $,");
     println("                         CR as ␍, other controls as ^X");
     println("  -x, --hex              xxd-style hex dump (auto for binary files)");
+    println("      --diff             Show only changed lines (uses VCS markers)");
     println("  -r, --raw-control-chars  Pass file-origin terminal escapes through");
     println("                         unchanged (default: strip in decorated mode)");
     println("      --strip-ansi=<when> auto | always | never (less -R style alias of -r)");
@@ -1642,6 +1661,7 @@ fn main() {
         if (streq(a, "--verbose") == 1)  { g_flag_verbose = 1; i = i + 1; continue; }
         if (streq(a, "-x") == 1)         { g_flag_hex = 1; i = i + 1; continue; }
         if (streq(a, "--hex") == 1)      { g_flag_hex = 1; i = i + 1; continue; }
+        if (streq(a, "--diff") == 1)     { g_flag_diff = 1; i = i + 1; continue; }
         if (streq(a, "-r") == 1)                     { g_flag_raw_controls = 1; i = i + 1; continue; }
         if (streq(a, "--raw-control-chars") == 1)    { g_flag_raw_controls = 1; i = i + 1; continue; }
 

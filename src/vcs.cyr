@@ -60,6 +60,11 @@ fn set_style(value) {
 # Called by main.cyr before allocating line-indexed state.
 fn vcs_enabled() {
     if (g_vcs_flag == 0) { return 0; }
+    # 1.1.4 — --diff needs the marker table populated even when stdout
+    # is piped (g_decorated == 0). The diff filter inside _in_range()
+    # in main.cyr reads vcs_mark_for_line, so we must compute markers
+    # whenever --diff is set, regardless of TTY state.
+    if (g_flag_diff == 1) { return 1; }
     if (g_decorated == 0) { return 0; }
     return 1;
 }

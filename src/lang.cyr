@@ -290,6 +290,77 @@ fn detect_language_from_shebang(buf, n) {
     return 0;
 }
 
+# Content-based detection (1.1.4). Conservative anchored patterns
+# for file-format languages where the opening bytes are highly
+# diagnostic. Programming languages are intentionally NOT detected
+# this way — false-positive risk is too high for the small payoff.
+# Returns a language name or 0 (no match).
+#
+# Recognized openings:
+#   "{" / "[" non-alpha → json     (TOML section [name] disambiguates)
+#   "---" at file start → yaml
+#   "# " / "## "        → markdown
+fn _is_alpha_or_underscore(c) {
+    if (c == 95) { return 1; }              # _
+    if (c >= 65) { if (c <= 90)  { return 1; } }
+    if (c >= 97) { if (c <= 122) { return 1; } }
+    return 0;
+}
+
+fn detect_language_from_content(buf, n) {
+    if (n == 0) { return 0; }
+    # Skip leading blank lines + whitespace.
+    var i = 0;
+    while (i < n) {
+        var c = load8(buf + i);
+        if (c != 32) {
+            if (c != 9) {
+                if (c != 10) {
+                    if (c != 13) { break; }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    if (i >= n) { return 0; }
+
+    var c0 = load8(buf + i);
+
+    # JSON: first non-whitespace is "{" — high confidence.
+    if (c0 == 123) { return "json"; }   # {
+
+    # "[" is JSON array OR TOML section. Peek next non-space char.
+    if (c0 == 91) {                     # [
+        if (i + 1 < n) {
+            var c1 = load8(buf + i + 1);
+            if (_is_alpha_or_underscore(c1) == 1) { return "toml"; }
+        }
+        return "json";
+    }
+
+    # YAML: "---" at start of first non-blank line (document separator).
+    if (c0 == 45) {                     # -
+        if (i + 2 < n) {
+            if (load8(buf + i + 1) == 45) {
+                if (load8(buf + i + 2) == 45) {
+                    return "yaml";
+                }
+            }
+        }
+    }
+
+    # Markdown: ATX header "# " or "## ..."
+    if (c0 == 35) {                     # #
+        if (i + 1 < n) {
+            var c1 = load8(buf + i + 1);
+            if (c1 == 32) { return "markdown"; }
+            if (c1 == 35) { return "markdown"; }
+        }
+    }
+
+    return 0;
+}
+
 fn print_language_list() {
     var i = 0;
     while (i < LANG_COUNT) {

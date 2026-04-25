@@ -861,6 +861,60 @@ if ! "$BIN" -n --color=always README.md 2>/dev/null | grep -q '+'; then
     cp "$TMPDIR/README.bak" README.md
     fail "FINDING-003 regression: argv-git no longer produces ADD markers"
 fi
+
+# 1.1.4 — content-based language detection (post-shebang fallback).
+# Files with no extension and no shebang get a language label from the
+# opening bytes.
+printf '{"name": "owl"}\n' > "$TMPDIR/c_json"
+out=$("$BIN" -n --color=never "$TMPDIR/c_json")
+case "$out" in
+    *"(json)"*) ;;
+    *) fail "content-detect: '{ ...}' should resolve as json: $out" ;;
+esac
+printf -- '---\nkey: value\n' > "$TMPDIR/c_yaml"
+out=$("$BIN" -n --color=never "$TMPDIR/c_yaml")
+case "$out" in
+    *"(yaml)"*) ;;
+    *) fail "content-detect: '---' opener should resolve as yaml: $out" ;;
+esac
+printf '# Title\n' > "$TMPDIR/c_md"
+out=$("$BIN" -n --color=never "$TMPDIR/c_md")
+case "$out" in
+    *"(markdown)"*) ;;
+    *) fail "content-detect: '# ...' should resolve as markdown: $out" ;;
+esac
+printf '[package]\nname = "owl"\n' > "$TMPDIR/c_toml"
+out=$("$BIN" -n --color=never "$TMPDIR/c_toml")
+case "$out" in
+    *"(toml)"*) ;;
+    *) fail "content-detect: '[name]' should resolve as toml: $out" ;;
+esac
+# Plain text — no false positive.
+printf 'just some words\n' > "$TMPDIR/c_plain"
+out=$("$BIN" -n --color=never "$TMPDIR/c_plain")
+case "$out" in
+    *"("*) fail "content-detect false positive on plain text: $out" ;;
+    *) ;;
+esac
+
+# 1.1.4 — --diff mode. README.md was just modified above (via the
+# FINDING-003 setup); --diff should emit only the appended lines.
+out=$("$BIN" --diff README.md)
+case "$out" in
+    *"smoke-hardening-probe"*) ;;
+    *) fail "--diff did not emit appended hunk: $out" ;;
+esac
+# Untouched parts of the file should not appear.
+case "$out" in
+    *"# owl"*) fail "--diff emitted unchanged content (header line leaked)" ;;
+    *) ;;
+esac
+# --diff on a file outside any git repo: silent empty output.
+cp README.md "$TMPDIR/elsewhere.md"
+out=$("$BIN" --diff "$TMPDIR/elsewhere.md" 2>"$TMPDIR/err")
+[ -z "$out" ] || fail "--diff on non-tracked file should produce empty stdout, got: $out"
+[ ! -s "$TMPDIR/err" ] || fail "--diff on non-tracked file leaked stderr: $(cat "$TMPDIR/err")"
+
 cp "$TMPDIR/README.bak" README.md
 
 echo "smoke: OK ($v_long) — M0–M8 gates passing (security hardening FINDING-001/002/003/004 closed)"

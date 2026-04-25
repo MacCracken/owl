@@ -1,9 +1,10 @@
 # owl — Roadmap
 
-owl 1.1.3 shipped 2026-04-25 (content fallbacks: `--hex`/`-x` + auto
-hex-dump on binaries, user-installable grammars + themes via
-`$XDG_CONFIG_HOME/owl/`). M0–M8 + 1.1.0..1.1.3 details live in
-`CHANGELOG.md`; this file is the forward-looking planning surface.
+owl 1.1.4 shipped 2026-04-25 (smarter detection + `--diff`:
+content-based language detection as third-pass fallback, `--diff`
+filters render output to changed lines via the existing VCS layer).
+M0–M8 + 1.1.0..1.1.4 details live in `CHANGELOG.md`; this file is
+the forward-looking planning surface.
 
 ---
 
@@ -28,14 +29,8 @@ dependency or a breaking-change window. Grouped into patch drops by
 theme; each item adds a `scripts/smoke.sh` gate per the guiding
 principles. (1.1.1 shipped — see `CHANGELOG.md`.)
 
-### 1.1.4 — smarter detection + diff (M)
-
-Builds on M3a (language detection) and M6 (VCS layer).
-
-| Candidate | Rationale |
-|-----------|-----------|
-| Content-based language detection | Regex-anchored. Post-shebang fallback for files with no extension. |
-| `--diff` mode | Show only changed hunks (uses existing VCS layer). |
+_All currently-planned 1.x patches have shipped. Next forward-looking
+work is 2.x — see below._
 
 ---
 

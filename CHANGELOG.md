@@ -6,6 +6,38 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.1.4] — 2026-04-25
+
+Smarter detection + diff mode. Two contained features.
+
+### Added
+
+- **Content-based language detection.** Post-shebang fallback in
+  `render_path` for files with no extension and no shebang. Conservative
+  high-confidence patterns only:
+
+  | Opening bytes        | Language   |
+  |----------------------|------------|
+  | `{` or `[` (non-alpha next) | `json`     |
+  | `[<alpha>...]`       | `toml`     |
+  | `---` at file start  | `yaml`     |
+  | `# ` or `## `        | `markdown` |
+
+  Programming languages (rust, python, c, etc.) are intentionally
+  excluded — false-positive risk on plain text is too high for the
+  payoff. The detection chain is now: extension → shebang → content
+  → "plain".
+
+- **`--diff` mode.** Filter rendered output to lines with VCS markers
+  (ADD/MOD only; DEL has no surviving line in the file). Composes
+  cleanly with `--line-range` and `-n`. Forces VCS computation even
+  when stdout is piped (`vcs_enabled()` honors the flag), so
+  `owl --diff file > changed-lines.txt` works the same in a pipeline
+  as in a TTY. Files outside any git repo or with no changes emit an
+  empty diff (silent, no stderr). The gutter `+`/`~`/`-` markers from
+  the existing VCS layer make the changes visually obvious when `-n`
+  is also set.
+
 ## [1.1.3] — 2026-04-25
 
 Content fallbacks drop. Three contained features; no architectural
