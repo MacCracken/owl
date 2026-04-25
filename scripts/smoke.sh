@@ -62,7 +62,7 @@ v_verbose2=$("$BIN" --verbose --version) || fail "--verbose --version exited non
 printf 'line one\nline two\nline three\n' > "$TMPDIR/a.txt"
 printf 'second file\n' > "$TMPDIR/b.txt"
 : > "$TMPDIR/empty.txt"
-yes "this is owl" | head -c 1048576 > "$TMPDIR/big.txt"
+yes "this is owl" 2>/dev/null | head -c 1048576 > "$TMPDIR/big.txt"
 
 # Single-file byte identity with cat.
 diff "$TMPDIR/a.txt" <("$BIN" "$TMPDIR/a.txt") > /dev/null \
@@ -301,8 +301,15 @@ esac
 # user dir and confirming owl still highlights .py — exercises the
 # load path, even though identity output isn't a strict override
 # proof on its own. Crash-free + correct ANSI is the contract here.
+# Locate the grammars dir relative to the smoke script itself, not the
+# cwd: CI invokes `bash scripts/smoke.sh build/owl` from the repo root,
+# but the script must work regardless. The script lives in scripts/,
+# so grammars/ is one level up.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+GRAMMARS_SRC="$REPO_ROOT/grammars"
 mkdir -p "$TMPDIR/userhome/owl/grammars"
-cp /home/macro/Repos/owl/grammars/python.cyml "$TMPDIR/userhome/owl/grammars/python.cyml"
+cp "$GRAMMARS_SRC/python.cyml" "$TMPDIR/userhome/owl/grammars/python.cyml"
 printf 'def hi(): pass\n' > "$TMPDIR/sample.py"
 out=$(XDG_CONFIG_HOME="$TMPDIR/userhome" "$BIN" --color=always --paging=never "$TMPDIR/sample.py")
 case "$out" in
@@ -712,7 +719,7 @@ grep -q "^00000000" "$TMPDIR/out" || fail "mixed run missing hex-dump offsets fo
 
 # Large-file highlight fallback: creating a >128KB file should still
 # render (no crash) with color stripped and a stderr notice.
-yes "print('x')" | head -20000 > "$TMPDIR/big.py"
+yes "print('x')" 2>/dev/null | head -20000 > "$TMPDIR/big.py"
 "$BIN" --color=always "$TMPDIR/big.py" > "$TMPDIR/out" 2> "$TMPDIR/err" \
     || fail "large file highlight fallback failed exit"
 ! grep -q $'\x1b' "$TMPDIR/out" \
