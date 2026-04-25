@@ -1,10 +1,9 @@
 # owl — Roadmap
 
-owl 1.1.4 shipped 2026-04-25 (smarter detection + `--diff`:
-content-based language detection as third-pass fallback, `--diff`
-filters render output to changed lines via the existing VCS layer).
-M0–M8 + 1.1.0..1.1.4 details live in `CHANGELOG.md`; this file is
-the forward-looking planning surface.
+Forward-looking planning surface. Latest release and prior history
+live in `CHANGELOG.md`; this file tracks what's *next*. The 1.x patch
+backlog is empty as of 1.1.4 — next work is 2.x, gated on external
+dependencies.
 
 ---
 
@@ -19,18 +18,6 @@ the forward-looking planning surface.
   `tests/owl.tcyr` (unit).
 - **Defer what you can.** Keep later-release items out of
   earlier releases even when they look easy.
-
----
-
-## 1.x backlog
-
-Small, self-contained improvements that don't require a new
-dependency or a breaking-change window. Grouped into patch drops by
-theme; each item adds a `scripts/smoke.sh` gate per the guiding
-principles. (1.1.1 shipped — see `CHANGELOG.md`.)
-
-_All currently-planned 1.x patches have shipped. Next forward-looking
-work is 2.x — see below._
 
 ---
 
@@ -88,6 +75,5 @@ See [`../adr/README.md`](../adr/README.md) for the full index.
 |------|------------|
 | Pager integration breaks on AGNOS before the OS ships | `--paging=never` is a reliable fallback; test with `PAGER=cat` |
 | Vyakarana grammar changes break owl's token palette | Palette is frozen at 10 kinds; vyakarana CHANGELOG-flags any layout change. Pin vyakarana tag in `cyrius.cyml` |
-| `HIGHLIGHT_MAX` surprises a user with a 200 KB source file | Stderr notice on fallback (shipped in 1.0.0); M3b streaming lifts the cap |
-| Memory-allocator change exposes latent `waitpid` buffer bug | Closed by audit FINDING-004 — both sites now size correctly |
+| `HIGHLIGHT_MAX` surprises a user with a 200 KB source file | Stderr notice on fallback already in place; the streaming tokenizer 2.x item lifts the cap |
 | SIT takes longer than expected to ship | Current `git` scaffold is stable and covered by smoke; no urgency beyond SIT's own timeline |
