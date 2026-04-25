@@ -6,6 +6,41 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.1.1] — 2026-04-25
+
+Ergonomics drop. Five small, contained CLI improvements; no
+architectural changes.
+
+### Added
+
+- **`--version --verbose` / `-v`** — adds `vyakarana <tag>`,
+  `cyrius <pin>`, and `target linux-x86_64` lines under the version
+  string. Useful for bug reports; would have helped diagnose the
+  cyrius v5.6.45 ticket. Order-independent (`--verbose --version`
+  produces the same output).
+- **`--strip-ansi=auto|always|never`** — `less -R`-style alias of
+  `-r` / default. `never` matches `-r` (passthrough). `always`
+  forces strip even with `-r` set. `auto` is the existing default
+  (strip in decorated/colored output, passthrough otherwise). Plain
+  mode (`-p`) remains byte-identical to `cat` regardless — `always`
+  does not violate cat-parity.
+- **`--line-range=A:B`** — print only lines A..B (1-indexed,
+  inclusive). Either side may be open: `A:` prints from A to EOF,
+  `:B` prints lines 1..B, `A` (no colon) prints just line A.
+  Applies in plain (opt-in transform), decorated, and highlight
+  paths. Render short-circuits after the end line — no extra reads.
+- **Per-language extension override** — `ext.<extension> = <language>`
+  in `~/.config/owl/config.cyml` remaps a file extension to a
+  bundled language (e.g. `ext.conf = shell` colorizes `.conf` files
+  as shell). Up to 16 entries. Consulted before the built-in
+  extension table; bad language name reports `bad value` to stderr
+  and continues.
+- **`--wrap=character`** — hard-wrap output at terminal width
+  (TIOCGWINSZ on stdout; default 80 cols when piped). Counts UTF-8
+  codepoints (continuation bytes don't increment the column), so
+  multi-byte chars stay intact across wraps. Plain mode (`-p`)
+  preserves cat-parity — `--wrap=character` is a no-op there.
+
 ## [1.1.0] — 2026-04-25
 
 ### Changed

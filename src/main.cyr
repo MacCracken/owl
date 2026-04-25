@@ -10,7 +10,7 @@ include "src/config.cyr"
 
 # Keep OWL_VERSION in sync with the VERSION file.
 # A M8 CI check will enforce equality; for now, manual.
-var OWL_VERSION = "owl 1.1.0";
+var OWL_VERSION = "owl 1.1.1";
 
 var BUFSIZE = 65536;
 
@@ -48,6 +48,25 @@ var g_flag_tabs     = 4;           # --tabs=N; 0 = preserve literal \t
 # "never" matches the current behavior (terminal handles visual wrap);
 # "character" mode needs a TIOCGWINSZ col count — deferred to M8.
 var g_flag_wrap     = 0;           # 0 auto, 1 never, 2 character
+var g_flag_verbose  = 0;           # -v / --verbose; expands --version output
+# --strip-ansi=auto|always|never. 0=auto (current default: strip in
+# decorated/colored), 1=always (strip even in -p plain mode), 2=never
+# (alias of -r, passthrough). `-r` and `--raw-control-chars` remain the
+# canonical opt-out; this flag mirrors `less -R` naming for muscle memory.
+var g_flag_strip_ansi = 0;
+# --line-range=A:B (1-indexed, inclusive). 0 = unset; either or both
+# may stay open. Render paths gate byte emission on _in_range();
+# once g_line_no passes the end, g_render_done short-circuits the
+# read loop in render_fd_loop.
+var g_line_range_start = 0;
+var g_line_range_end   = 0;
+var g_render_done      = 0;
+# --wrap=character: terminal column width and current column. cols=0
+# means "unset / wrap disabled"; resolved in resolve_mode after the
+# TTY check. col tracks bytes emitted on the current visible row and
+# resets at every emitted '\n' (file-origin or wrap-inserted).
+var g_wrap_cols = 0;
+var g_wrap_col  = 0;
 
 # Audit FINDING-001: file-origin terminal escapes are stripped from
 # the byte stream in decorated/colored output. `-r` / `--raw-control-chars`
@@ -84,6 +103,18 @@ fn is_tty(fd) {
     return 1;
 }
 
+# Terminal column count via TIOCGWINSZ on stdout. Returns 0 if not a
+# TTY (callers default to 80). winsize = { ws_row, ws_col, ws_xpixel,
+# ws_ypixel } as four u16; ws_col is at offset 2.
+fn _term_cols() {
+    var ws[8];
+    var r = syscall(SYS_IOCTL, STDOUT, 0x5413, &ws);
+    if (r < 0) { return 0; }
+    var lo = load8(&ws + 2);
+    var hi = load8(&ws + 3);
+    return hi * 256 + lo;
+}
+
 # ── Mode resolution ────────────────────────────────────────────────────
 
 fn resolve_mode() {
@@ -113,6 +144,22 @@ fn resolve_mode() {
     if (g_flag_color == 1) { g_want_color = 1; }
     else { if (g_flag_color == 0) { g_want_color = 0; }
            else { g_want_color = is_tty(STDOUT); } }
+
+    # --wrap=character — pull terminal width once. Default to 80 when
+    # stdout isn't a TTY so the flag still produces fixed-width output
+    # under a pipe (which is the common scripted-capture case).
+    g_wrap_cols = 0;
+    if (g_flag_wrap == 2) {
+        var c = _term_cols();
+        if (c == 0) { c = 80; }
+        # Approximate gutter width (lineno padding + VCS slot + glyph)
+        # so wrapped content fits inside the visible terminal. Slight
+        # over-/underestimate is acceptable for v1.
+        if (resolved_show_numbers() == 1) {
+            if (c > 13) { c = c - 11; }
+        }
+        g_wrap_cols = c;
+    }
 
     return 0;
 }
@@ -164,6 +211,7 @@ fn emit_header(path) {
 # the gutter stays narrow when --style=no-changes / --no-color or
 # when we're outside a repo.
 fn emit_lineno(ln: i64) {
+    if (_in_range() == 0) { return 0; }
     var pbuf[8];
     var n = ln;
     var pi: i64 = 5;
@@ -251,6 +299,59 @@ fn render_reset() {
     g_line_no = 1;
     g_at_line_start = 1;
     g_esc_state = 0;
+    g_render_done = 0;
+    g_wrap_col = 0;
+    return 0;
+}
+
+# Is g_line_no inside the user's --line-range window?
+fn _in_range() {
+    if (g_line_range_start > 0) {
+        if (g_line_no < g_line_range_start) { return 0; }
+    }
+    if (g_line_range_end > 0) {
+        if (g_line_no > g_line_range_end) { return 0; }
+    }
+    return 1;
+}
+
+# Range-gated stdout write. Identical to file_write(STDOUT, …) when
+# no range is set; one comparison + branch overhead otherwise.
+fn _emit(buf, n) {
+    if (_in_range() == 0) { return 0; }
+    # Fast paths: wrap inactive, plain mode (sacred), or no terminal
+    # width. Plain mode still gates on _in_range above when
+    # --line-range is set, but never applies wrap.
+    if (g_flag_wrap != 2) { file_write(STDOUT, buf, n); return 0; }
+    if (g_flag_plain == 1) { file_write(STDOUT, buf, n); return 0; }
+    if (g_wrap_cols == 0)  { file_write(STDOUT, buf, n); return 0; }
+
+    # Wrap path: byte-by-byte with column tracking. Insert a wrap-\n
+    # before any UTF-8 leading byte that would push past g_wrap_cols.
+    # Continuation bytes (0x80..0xBF) don't count as columns, so
+    # multi-byte codepoints stay intact across wraps.
+    var k = 0;
+    while (k < n) {
+        var c = load8(buf + k);
+        if (c == 10) {
+            file_write(STDOUT, buf + k, 1);
+            g_wrap_col = 0;
+        } else {
+            var is_cont = 0;
+            if (c >= 0x80) {
+                if (c < 0xC0) { is_cont = 1; }
+            }
+            if (is_cont == 0) {
+                if (g_wrap_col >= g_wrap_cols) {
+                    file_write(STDOUT, "\n", 1);
+                    g_wrap_col = 0;
+                }
+                g_wrap_col = g_wrap_col + 1;
+            }
+            file_write(STDOUT, buf + k, 1);
+        }
+        k = k + 1;
+    }
     return 0;
 }
 
@@ -261,9 +362,19 @@ fn render_reset() {
 # mingled with owl's own SGR output, so the injection path doesn't
 # exist — skip stripping to preserve cat-parity latency.
 fn _strip_active() {
+    # Plain mode is sacred — byte-identical to cat regardless of any
+    # other flag (CLAUDE.md). show-all renders escapes as ^[ glyphs,
+    # so stripping would double-hide them.
     if (g_flag_plain == 1)        { return 0; }
     if (g_flag_show_all == 1)     { return 0; }
-    if (g_flag_raw_controls == 1) { return 0; }
+    # Explicit overrides — these only fire in non-plain mode and so
+    # never threaten cat-parity. always wins over -r intentionally:
+    # the more recently-named knob takes priority.
+    if (g_flag_strip_ansi == 1)   { return 1; }   # --strip-ansi=always
+    if (g_flag_strip_ansi == 2)   { return 0; }   # --strip-ansi=never
+    if (g_flag_raw_controls == 1) { return 0; }   # -r / --raw-control-chars
+    # Auto: strip in decorated/colored output (where owl emits its
+    # own SGR), passthrough otherwise.
     if (g_want_color == 0)        { return 0; }
     return 1;
 }
@@ -329,9 +440,31 @@ fn _emit_file_byte(c) {
 #   3. Any transform      → byte-by-byte
 fn render_chunk(buf, n) {
     # -p is cat-parity: byte-identical passthrough, regardless of -A /
-    # --tabs / -n / any other transform flag the user also set.
+    # --tabs / -n / any other transform flag the user also set. The
+    # one exception is --line-range — a user who explicitly asks for
+    # lines [A,B] of a file is opting out of full passthrough.
     if (g_flag_plain == 1) {
-        file_write(STDOUT, buf, n);
+        if (g_line_range_start == 0) {
+            if (g_line_range_end == 0) {
+                file_write(STDOUT, buf, n);
+                return 0;
+            }
+        }
+        var pi = 0;
+        while (pi < n) {
+            var pc = load8(buf + pi);
+            _emit(buf + pi, 1);
+            if (pc == 10) {
+                g_line_no = g_line_no + 1;
+                if (g_line_range_end > 0) {
+                    if (g_line_no > g_line_range_end) {
+                        g_render_done = 1;
+                        return 0;
+                    }
+                }
+            }
+            pi = pi + 1;
+        }
         return 0;
     }
 
@@ -340,20 +473,31 @@ fn render_chunk(buf, n) {
     var tabs      = g_flag_tabs;
     var strip     = _strip_active();
 
+    var range_active = 0;
+    if (g_line_range_start > 0) { range_active = 1; }
+    if (g_line_range_end > 0)   { range_active = 1; }
+
     # Path 1: no transforms at all. Safe for bulk write only when
     # escape-stripping is off — otherwise we'd leak file-origin
-    # escapes straight to the terminal.
+    # escapes straight to the terminal. Skipped under --line-range
+    # because the bulk spans newlines that would need per-line gating.
     if (strip == 0) {
-        if (show_nums == 0) {
-            if (show_all == 0) {
-                if (tabs == 0) {
-                    file_write(STDOUT, buf, n);
-                    return 0;
+        if (range_active == 0) {
+            if (g_flag_wrap != 2) {
+                if (show_nums == 0) {
+                    if (show_all == 0) {
+                        if (tabs == 0) {
+                            file_write(STDOUT, buf, n);
+                            return 0;
+                        }
+                    }
                 }
             }
         }
 
-        # Path 2: only line numbers, no byte-level changes.
+        # Path 2: only line numbers, no byte-level changes. Range
+        # filter applies via _emit (each bulk write covers exactly
+        # one line ending at \n, so per-line gating is correct).
         if (show_nums == 1) {
             if (show_all == 0) {
                 if (tabs == 0) {
@@ -365,15 +509,21 @@ fn render_chunk(buf, n) {
                             g_at_line_start = 0;
                         }
                         if (load8(buf + j) == 10) {
-                            file_write(STDOUT, buf + start, j - start + 1);
+                            _emit(buf + start, j - start + 1);
                             start = j + 1;
                             g_line_no = g_line_no + 1;
                             g_at_line_start = 1;
+                            if (g_line_range_end > 0) {
+                                if (g_line_no > g_line_range_end) {
+                                    g_render_done = 1;
+                                    return 0;
+                                }
+                            }
                         }
                         j = j + 1;
                     }
                     if (start < n) {
-                        file_write(STDOUT, buf + start, n - start);
+                        _emit(buf + start, n - start);
                     }
                     return 0;
                 }
@@ -401,63 +551,61 @@ fn render_chunk(buf, n) {
         }
 
         if (c == 10) {
-            # LF — -A adds a trailing $ before the newline.
-            if (show_all == 1) { file_write(STDOUT, "$", 1); }
-            file_write(STDOUT, "\n", 1);
-            if (show_nums == 1) {
-                g_line_no = g_line_no + 1;
-                g_at_line_start = 1;
+            if (show_all == 1) { _emit("$", 1); }
+            _emit("\n", 1);
+            g_line_no = g_line_no + 1;
+            g_at_line_start = 1;
+            if (g_line_range_end > 0) {
+                if (g_line_no > g_line_range_end) {
+                    g_render_done = 1;
+                    return 0;
+                }
             }
         } else {
             if (c == 9) {
-                # Tab — render the visible arrow + padding under -A, or
-                # N spaces / literal \t otherwise.
                 if (show_all == 1) {
-                    file_write(STDOUT, "→", 3);
+                    _emit("→", 3);
                     var pad = tabs - 1;
                     if (pad < 0) { pad = 0; }
                     var p = 0;
                     while (p < pad) {
-                        file_write(STDOUT, " ", 1);
+                        _emit(" ", 1);
                         p = p + 1;
                     }
                 } else {
                     if (tabs == 0) {
-                        file_write(STDOUT, "\t", 1);
+                        _emit("\t", 1);
                     } else {
                         var p = 0;
                         while (p < tabs) {
-                            file_write(STDOUT, " ", 1);
+                            _emit(" ", 1);
                             p = p + 1;
                         }
                     }
                 }
             } else {
                 if (c == 13) {
-                    # CR — ␍ glyph under -A; pass through otherwise.
                     if (show_all == 1) {
-                        file_write(STDOUT, "␍", 3);
+                        _emit("␍", 3);
                     } else {
-                        file_write(STDOUT, buf + i, 1);
+                        _emit(buf + i, 1);
                     }
                 } else {
                     if (show_all == 1) {
-                        # c < 32 (excluding 9/10/13 handled above) or c == 127
-                        # render as ^X notation. 127 (DEL) → ^?.
                         if (c < 32) {
                             var ctrl[2];
-                            store8(&ctrl, 94);        # '^'
+                            store8(&ctrl, 94);
                             store8(&ctrl + 1, c + 64);
-                            file_write(STDOUT, &ctrl, 2);
+                            _emit(&ctrl, 2);
                         } else {
                             if (c == 127) {
-                                file_write(STDOUT, "^?", 2);
+                                _emit("^?", 2);
                             } else {
-                                file_write(STDOUT, buf + i, 1);
+                                _emit(buf + i, 1);
                             }
                         }
                     } else {
-                        file_write(STDOUT, buf + i, 1);
+                        _emit(buf + i, 1);
                     }
                 }
             }
@@ -543,30 +691,35 @@ fn render_highlighted_buf(buf, n, lang) {
 
         # Byte-level emission — mirrors render_chunk path 3.
         if (c == 10) {
-            if (show_all == 1) { file_write(STDOUT, "$", 1); }
-            file_write(STDOUT, "\n", 1);
-            if (show_nums == 1) {
-                g_line_no = g_line_no + 1;
-                g_at_line_start = 1;
+            if (show_all == 1) { _emit("$", 1); }
+            _emit("\n", 1);
+            g_line_no = g_line_no + 1;
+            g_at_line_start = 1;
+            if (g_line_range_end > 0) {
+                if (g_line_no > g_line_range_end) {
+                    if (active_color != 0 - 1) { ansi_reset(); }
+                    g_render_done = 1;
+                    return 0;
+                }
             }
         } else {
             if (c == 9) {
                 if (show_all == 1) {
-                    file_write(STDOUT, "→", 3);
+                    _emit("→", 3);
                     var pad = tabs - 1;
                     if (pad < 0) { pad = 0; }
                     var p = 0;
                     while (p < pad) {
-                        file_write(STDOUT, " ", 1);
+                        _emit(" ", 1);
                         p = p + 1;
                     }
                 } else {
                     if (tabs == 0) {
-                        file_write(STDOUT, "\t", 1);
+                        _emit("\t", 1);
                     } else {
                         var p = 0;
                         while (p < tabs) {
-                            file_write(STDOUT, " ", 1);
+                            _emit(" ", 1);
                             p = p + 1;
                         }
                     }
@@ -574,9 +727,9 @@ fn render_highlighted_buf(buf, n, lang) {
             } else {
                 if (c == 13) {
                     if (show_all == 1) {
-                        file_write(STDOUT, "␍", 3);
+                        _emit("␍", 3);
                     } else {
-                        file_write(STDOUT, buf + i, 1);
+                        _emit(buf + i, 1);
                     }
                 } else {
                     if (show_all == 1) {
@@ -584,16 +737,16 @@ fn render_highlighted_buf(buf, n, lang) {
                             var ctrl[2];
                             store8(&ctrl, 94);
                             store8(&ctrl + 1, c + 64);
-                            file_write(STDOUT, &ctrl, 2);
+                            _emit(&ctrl, 2);
                         } else {
                             if (c == 127) {
-                                file_write(STDOUT, "^?", 2);
+                                _emit("^?", 2);
                             } else {
-                                file_write(STDOUT, buf + i, 1);
+                                _emit(buf + i, 1);
                             }
                         }
                     } else {
-                        file_write(STDOUT, buf + i, 1);
+                        _emit(buf + i, 1);
                     }
                 }
             }
@@ -608,6 +761,7 @@ fn render_highlighted_buf(buf, n, lang) {
 fn render_fd_loop(fd) {
     var buf = alloc(BUFSIZE);
     while (1 == 1) {
+        if (g_render_done == 1) { return 0; }
         var n = file_read(fd, buf, BUFSIZE);
         if (n < 0) { return 0 - 1; }
         if (n == 0) { return 0; }
@@ -868,6 +1022,15 @@ fn render_path(path) {
 
 fn print_version() {
     println(OWL_VERSION);
+    if (g_flag_verbose == 1) {
+        # Kept in sync with cyrius.cyml [deps.vyakarana].tag and
+        # [package].cyrius. Useful for bug reports — "owl 1.1.1
+        # vyakarana 1.0.2 cyrius 5.6.44 linux-x86_64" pins the exact
+        # toolchain + dep versions a user is running against.
+        println("vyakarana 1.0.2");
+        println("cyrius 5.6.44");
+        println("target linux-x86_64");
+    }
     return EXIT_OK;
 }
 
@@ -887,8 +1050,10 @@ fn print_help() {
     println("                         CR as ␍, other controls as ^X");
     println("  -r, --raw-control-chars  Pass file-origin terminal escapes through");
     println("                         unchanged (default: strip in decorated mode)");
+    println("      --strip-ansi=<when> auto | always | never (less -R style alias of -r)");
     println("      --tabs=<n>         Expand tabs to N spaces (default 4, 0 = literal)");
-    println("      --wrap=<mode>      auto | never | character (currently a no-op)");
+    println("      --line-range=A:B   Print only lines A..B (1-indexed; A: or :B open-ended)");
+    println("      --wrap=<mode>      auto | never | character (terminal-width hard wrap)");
     println("      --color=<when>     auto | always | never");
     println("      --paging=<when>    auto | always | never");
     println("      --style=<mode>     auto | changes | no-changes (gutter VCS markers)");
@@ -897,6 +1062,7 @@ fn print_help() {
     println("      --language=<name>  Force language (overrides auto-detect)");
     println("      --list-languages   List recognized languages");
     println("  -h, --help             Show this help and exit");
+    println("  -v, --verbose          With --version, also print dep + toolchain pins");
     println("  -V, --version          Show version and exit");
     println("");
     println("Config (optional):");
@@ -929,6 +1095,68 @@ fn set_wrap(value) {
     if (streq(value, "auto") == 1)      { g_flag_wrap = 0; return 0; }
     if (streq(value, "never") == 1)     { g_flag_wrap = 1; return 0; }
     if (streq(value, "character") == 1) { g_flag_wrap = 2; return 0; }
+    return 1;
+}
+
+# --line-range=A:B (1-indexed, inclusive). Either side may be open
+# (":B" = 1..B, "A:" = A..end). Single line "A" treated as "A:A".
+# Returns 0 on success, 1 on parse error.
+fn set_line_range(value) {
+    var vlen = strlen(value);
+    if (vlen == 0) { return 1; }
+    var i = 0;
+    var a = 0;
+    var has_a = 0;
+    while (i < vlen) {
+        var c = load8(value + i);
+        if (c == 58) { i = i + 1; break; }   # ':' separator
+        if (c < 48) { return 1; }
+        if (c > 57) { return 1; }
+        a = a * 10 + (c - 48);
+        has_a = 1;
+        i = i + 1;
+    }
+    var b = 0;
+    var has_b = 0;
+    while (i < vlen) {
+        var c = load8(value + i);
+        if (c < 48) { return 1; }
+        if (c > 57) { return 1; }
+        b = b * 10 + (c - 48);
+        has_b = 1;
+        i = i + 1;
+    }
+    # No colon at all: single-line form "A" → range [A,A].
+    var saw_colon = 0;
+    var k = 0;
+    while (k < vlen) {
+        if (load8(value + k) == 58) { saw_colon = 1; k = vlen; continue; }
+        k = k + 1;
+    }
+    if (saw_colon == 0) {
+        if (has_a == 0) { return 1; }
+        g_line_range_start = a;
+        g_line_range_end = a;
+        return 0;
+    }
+    if (has_a == 1) { g_line_range_start = a; }
+    else            { g_line_range_start = 0; }
+    if (has_b == 1) { g_line_range_end = b; }
+    else            { g_line_range_end = 0; }
+    if (g_line_range_start > 0) {
+        if (g_line_range_end > 0) {
+            if (g_line_range_start > g_line_range_end) { return 1; }
+        }
+    }
+    return 0;
+}
+
+# --strip-ansi=auto|always|never. less -R naming for the existing -r
+# behavior plus an "always" mode that strips even in plain output.
+fn set_strip_ansi(value) {
+    if (streq(value, "auto") == 1)   { g_flag_strip_ansi = 0; return 0; }
+    if (streq(value, "always") == 1) { g_flag_strip_ansi = 1; return 0; }
+    if (streq(value, "never") == 1)  { g_flag_strip_ansi = 2; return 0; }
     return 1;
 }
 
@@ -973,8 +1201,26 @@ fn main() {
     while (i < n) {
         var a = argv(i);
 
-        if (streq(a, "-V") == 1)        { return print_version(); }
-        if (streq(a, "--version") == 1) { return print_version(); }
+        if (streq(a, "-V") == 1) {
+            var k = i + 1;
+            while (k < n) {
+                var ak = argv(k);
+                if (streq(ak, "--verbose") == 1) { g_flag_verbose = 1; }
+                if (streq(ak, "-v") == 1)        { g_flag_verbose = 1; }
+                k = k + 1;
+            }
+            return print_version();
+        }
+        if (streq(a, "--version") == 1) {
+            var k = i + 1;
+            while (k < n) {
+                var ak = argv(k);
+                if (streq(ak, "--verbose") == 1) { g_flag_verbose = 1; }
+                if (streq(ak, "-v") == 1)        { g_flag_verbose = 1; }
+                k = k + 1;
+            }
+            return print_version();
+        }
         if (streq(a, "-h") == 1)        { return print_help(); }
         if (streq(a, "--help") == 1)    { return print_help(); }
 
@@ -989,6 +1235,8 @@ fn main() {
         if (streq(a, "--plain") == 1)    { g_flag_plain = 1; i = i + 1; continue; }
         if (streq(a, "-A") == 1)         { g_flag_show_all = 1; i = i + 1; continue; }
         if (streq(a, "--show-all") == 1) { g_flag_show_all = 1; i = i + 1; continue; }
+        if (streq(a, "-v") == 1)         { g_flag_verbose = 1; i = i + 1; continue; }
+        if (streq(a, "--verbose") == 1)  { g_flag_verbose = 1; i = i + 1; continue; }
         if (streq(a, "-r") == 1)                     { g_flag_raw_controls = 1; i = i + 1; continue; }
         if (streq(a, "--raw-control-chars") == 1)    { g_flag_raw_controls = 1; i = i + 1; continue; }
 
@@ -1053,6 +1301,24 @@ fn main() {
         if (v != 0) {
             if (set_wrap(v) != 0) {
                 report_error(a, "invalid value (want auto|never|character)");
+                return EXIT_USAGE;
+            }
+            i = i + 1;
+            continue;
+        }
+        v = match_eq_flag(a, "--strip-ansi");
+        if (v != 0) {
+            if (set_strip_ansi(v) != 0) {
+                report_error(a, "invalid value (want auto|always|never)");
+                return EXIT_USAGE;
+            }
+            i = i + 1;
+            continue;
+        }
+        v = match_eq_flag(a, "--line-range");
+        if (v != 0) {
+            if (set_line_range(v) != 0) {
+                report_error(a, "invalid value (want A:B, A:, :B, or A)");
                 return EXIT_USAGE;
             }
             i = i + 1;

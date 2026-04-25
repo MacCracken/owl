@@ -42,6 +42,18 @@ h_long=$("$BIN" --help) || fail "--help exited non-zero"
 h_short=$("$BIN" -h) || fail "-h exited non-zero"
 [ "$h_long" = "$h_short" ] || fail "-h disagrees with --help"
 
+# --version --verbose adds vyakarana + cyrius pins (1.1.1).
+v_verbose=$("$BIN" --version --verbose) || fail "--version --verbose exited non-zero"
+case "$v_verbose" in
+    *vyakarana*cyrius*) ;;
+    *) fail "--version --verbose missing vyakarana/cyrius lines: $v_verbose" ;;
+esac
+# Order independence — --verbose --version should match.
+v_verbose2=$("$BIN" --verbose --version) || fail "--verbose --version exited non-zero"
+[ "$v_verbose" = "$v_verbose2" ] || fail "--version --verbose ≠ --verbose --version"
+# Plain --version stays terse (regression guard).
+[ "$v_long" != "$v_verbose" ] || fail "--version regressed to verbose by default"
+
 # ============================================================
 # M1 — plain-mode cat parity
 # ============================================================
@@ -505,6 +517,53 @@ OWL_CONFIG="$TMPDIR/badkey.cyml" "$BIN" "$TMPDIR/hi.py" > /dev/null 2>"$TMPDIR/e
 grep -q ":1: unknown config key" "$TMPDIR/err" \
     || fail "unknown key not reported on stderr"
 
+# 1.1.1 — --wrap=character hard-wraps at terminal width. Default
+# falls back to 80 cols when stdout isn't a TTY (this is, since the
+# test pipes through $().
+long_line=$(printf 'a%.0s' $(seq 1 200))
+out=$("$BIN" --wrap=character --paging=never <<<"$long_line")
+# After wrap, 200 a's should be split with at least one \n inserted.
+nl_count=$(printf '%s' "$out" | tr -cd '\n' | wc -c)
+[ "$nl_count" -ge 1 ] || fail "--wrap=character did not insert any newline in 200-char line"
+# Each non-final line should be ~80 chars long. awk 'length' avoids
+# wc -c's trailing-LF count.
+first_line_len=$(printf '%s' "$out" | awk 'NR==1 { print length; exit }')
+[ "$first_line_len" -le 80 ] || fail "--wrap=character first line too long: $first_line_len"
+
+# UTF-8 safety: codepoint count, not byte count, drives wrap.
+# 79 ASCII chars + one 2-byte ä = 80 codepoints, fits one line.
+mixed=$(printf 'a%.0s' $(seq 1 79); printf '\xc3\xa4')
+out=$(printf '%s' "$mixed" | "$BIN" --wrap=character --paging=never)
+# Should stay one line (no wrap).
+nl_count=$(printf '%s' "$out" | tr -cd '\n' | wc -c)
+[ "$nl_count" = "0" ] || fail "--wrap=character broke UTF-8 boundary at 80 cols"
+
+# Plain mode preserves cat parity even with --wrap=character.
+diff <(printf '%s\n' "$long_line") <("$BIN" -p --wrap=character <<<"$long_line") > /dev/null \
+    || fail "--wrap=character broke -p cat parity"
+
+# 1.1.1 — ext.<extension> = <language> override. Map an arbitrary
+# extension to a known language; verify the file header gains the
+# language label that the built-in table wouldn't have produced.
+cat > "$TMPDIR/extover.cyml" <<'EOF'
+ext.confx = shell
+EOF
+printf 'echo no-shebang\n' > "$TMPDIR/over.confx"
+out=$(OWL_CONFIG="$TMPDIR/extover.cyml" "$BIN" -n --color=never "$TMPDIR/over.confx")
+case "$out" in
+    *"(shell)"*) ;;
+    *) fail "ext.confx=shell override did not relabel: $out" ;;
+esac
+# Bad lang in override reports "bad value" — uses the same line-error
+# path config.cyr already has for malformed values.
+cat > "$TMPDIR/badext.cyml" <<'EOF'
+ext.confx = bogus
+EOF
+OWL_CONFIG="$TMPDIR/badext.cyml" "$BIN" "$TMPDIR/over.confx" > /dev/null 2>"$TMPDIR/err" \
+    || fail "bad ext-override should continue (error to stderr only)"
+grep -q ":1: bad value" "$TMPDIR/err" \
+    || fail "bad ext-override did not report :1: bad value"
+
 # ============================================================
 # M8a — Robustness (binary detect, large-file notice, weird inputs)
 # ============================================================
@@ -618,6 +677,77 @@ esac
 # -p must be byte-identical to cat regardless of content.
 diff "$TMPDIR/evil.txt" <("$BIN" -p "$TMPDIR/evil.txt") >/dev/null \
     || fail "-p broke cat parity on content with OSC"
+
+# 1.1.1 — --strip-ansi=never aliases -r (passthrough).
+out=$("$BIN" --strip-ansi=never --color=always "$TMPDIR/evil.txt")
+case "$out" in
+    *$'\x1b]52'*) ;;
+    *) fail "--strip-ansi=never did not pass ESC through (alias of -r)" ;;
+esac
+
+# 1.1.1 — --strip-ansi=always overrides -r in decorated mode.
+out=$("$BIN" --strip-ansi=always -r --color=always "$TMPDIR/evil.txt")
+case "$out" in
+    *beforeafter*) ;;
+    *) fail "--strip-ansi=always failed to override -r in decorated mode" ;;
+esac
+
+# 1.1.1 — --strip-ansi=always preserves -p cat parity (plain is sacred).
+diff "$TMPDIR/evil.txt" <("$BIN" --strip-ansi=always -p "$TMPDIR/evil.txt") >/dev/null \
+    || fail "--strip-ansi=always broke -p cat parity"
+
+# 1.1.1 — --strip-ansi=bogus → exit 2.
+set +e
+"$BIN" --strip-ansi=bogus "$TMPDIR/evil.txt" > /dev/null 2>"$TMPDIR/err"
+rc=$?
+set -e
+[ "$rc" = "2" ] || fail "--strip-ansi=bogus exit: got $rc, expected 2"
+
+# 1.1.1 — --line-range filters output across plain, decorated, and highlight paths.
+printf 'one\ntwo\nthree\nfour\nfive\n' > "$TMPDIR/lr.txt"
+out=$("$BIN" --line-range=2:4 "$TMPDIR/lr.txt")
+[ "$out" = "$(printf 'two\nthree\nfour')" ] || fail "--line-range=2:4 plain output: got '$out'"
+out=$("$BIN" --line-range=:3 "$TMPDIR/lr.txt")
+[ "$out" = "$(printf 'one\ntwo\nthree')" ] || fail "--line-range=:3 (open start): got '$out'"
+out=$("$BIN" --line-range=4: "$TMPDIR/lr.txt")
+[ "$out" = "$(printf 'four\nfive')" ] || fail "--line-range=4: (open end): got '$out'"
+out=$("$BIN" --line-range=3 "$TMPDIR/lr.txt")
+[ "$out" = "three" ] || fail "--line-range=3 (single line): got '$out'"
+# Range applies in -p mode (explicit user opt-in to a transform).
+out=$("$BIN" -p --line-range=2:4 "$TMPDIR/lr.txt")
+[ "$out" = "$(printf 'two\nthree\nfour')" ] || fail "--line-range under -p: got '$out'"
+# Decorated -n with range — gutter shows the actual line numbers (2,3,4).
+out=$("$BIN" -n --color=never --line-range=2:4 "$TMPDIR/lr.txt")
+case "$out" in
+    *"     2"*"two"*"     3"*"three"*"     4"*"four"*) ;;
+    *) fail "--line-range -n gutter wrong: $out" ;;
+esac
+# Highlight path honors range — colored bytes only for lines in range.
+# Strip owl's own ANSI before string-matching so the test sees only
+# the underlying text.
+printf 'fn a() {}\nfn b() {}\nfn c() {}\n' > "$TMPDIR/lr.rs"
+out=$("$BIN" --color=always --paging=never --line-range=2:2 "$TMPDIR/lr.rs" \
+        | sed $'s/\x1b\\[[0-9;]*m//g')
+case "$out" in
+    *"fn b()"*) ;;
+    *) fail "--line-range highlight path missed line 2: $out" ;;
+esac
+case "$out" in
+    *"fn c()"*) fail "--line-range highlight emitted past end: $out" ;;
+    *) ;;
+esac
+case "$out" in
+    *"fn a()"*) fail "--line-range highlight emitted before start: $out" ;;
+    *) ;;
+esac
+# Error cases — exit 2.
+for bad in bogus 5:2 ""; do
+    set +e
+    "$BIN" --line-range="$bad" "$TMPDIR/lr.txt" > /dev/null 2>"$TMPDIR/err"
+    rc=$?
+    set -e
+    [ "$rc" = "2" ] || fail "--line-range=$bad exit: got $rc, expected 2"
+done
 
 # FINDING-003 — git via argv (no shell). Markers still appear on a
 # dirty file inside the owl repo.

@@ -25,6 +25,7 @@
 #   style   = auto | changes | no-changes
 #   tabs    = <non-negative integer>
 #   wrap    = auto | never | character
+#   ext.<extension> = <language>     (e.g. ext.conf = shell)
 #
 # Location (first hit wins)
 # -------------------------
@@ -162,6 +163,26 @@ fn _cfg_apply(key, klen, value, vlen) {
     if (_cfg_keyeq(key, klen, "wrap") == 1) {
         if (set_wrap(&vbuf) != 0) { return 2; }
         return 0;
+    }
+    # ext.<extension> = <language> — per-extension language override.
+    # Lets a user remap e.g. ".conf" to "shell" without a code change.
+    # Capped at lang.cyr's USER_EXT_MAX (16). Bad value if the language
+    # name is unknown or the extension is empty.
+    if (klen > 4) {
+        if (memeq(key, "ext.", 4) == 1) {
+            var elen = klen - 4;
+            if (elen >= 63) { return 2; }
+            var ebuf[64];
+            var ki = 0;
+            while (ki < elen) {
+                store8(&ebuf + ki, load8(key + 4 + ki));
+                ki = ki + 1;
+            }
+            store8(&ebuf + ki, 0);
+            var rc = lang_register_ext_override(&ebuf, &vbuf);
+            if (rc != 0) { return 2; }
+            return 0;
+        }
     }
     return 1;
 }

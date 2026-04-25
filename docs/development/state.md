@@ -6,6 +6,15 @@
 
 ## Version
 
+**1.1.1** — shipped 2026-04-25. Ergonomics drop: `--version --verbose`
+prints vyakarana + cyrius pins; `--strip-ansi=auto|always|never`
+aliases `-r`; `--line-range=A:B` filters output to a 1-indexed
+inclusive range across plain/decorated/highlight paths;
+`ext.<extension> = <language>` config keys remap extensions to
+bundled languages (max 16 overrides); `--wrap=character` hard-wraps
+at terminal width (TIOCGWINSZ on stdout, 80-col default when piped),
+UTF-8-aware.
+
 **1.1.0** — shipped 2026-04-25. Stdin syntax highlighting: `owl -` and
 bare-`owl` with piped input now apply token color when `--color=always`
 and `--language=<lang>` are set, mirroring the file-path branch.
@@ -21,19 +30,19 @@ complete; full owl attack surface audited and hardened.
 
 ## Binary
 
-- ~167 KB (non-DCE build, `build/owl`)
+- ~174 KB (non-DCE build, `build/owl`)
 - Startup targets: `owl --version` 1–2 ms, tiny-file highlight 2 ms
   (25× under the 50 ms no-op target in `owl-design-spec.md`)
 
 ## Source
 
-- ~2,230 lines across 6 modules:
-  - `src/main.cyr` (~1,103) — entry, CLI, render dispatch, TTY/mode resolution
-  - `src/lang.cyr` (~233) — extension + shebang language detection
+- ~2,584 lines across 6 modules:
+  - `src/main.cyr` (~1,369) — entry, CLI, render dispatch, TTY/mode resolution
+  - `src/lang.cyr` (~300) — extension + shebang language detection + ext-override table
   - `src/theme.cyr` (~180) — bundled themes, 10-kind palette, ANSI emission
   - `src/pager.cyr` (~114) — pager spawn + SIGPIPE handling
   - `src/vcs.cyr` (~323) — git VCS markers (M6)
-  - `src/config.cyr` (~277) — `key = value` config parser (M7)
+  - `src/config.cyr` (~298) — `key = value` config parser (M7) + `ext.*` keys (1.1.1)
 
 ## Tests
 

@@ -1,8 +1,9 @@
 # owl — Roadmap
 
-owl 1.1.0 shipped 2026-04-25 (stdin highlight fix). Everything that
-landed in the M0–M8 arc lives in `CHANGELOG.md`; this file is the
-forward-looking planning surface.
+owl 1.1.1 shipped 2026-04-25 (ergonomics drop: `--version --verbose`,
+`--strip-ansi=*`, `--line-range=A:B`, per-language config overrides,
+`--wrap=character`). M0–M8 + 1.1.0 + 1.1.1 details live in
+`CHANGELOG.md`; this file is the forward-looking planning surface.
 
 ---
 
@@ -23,20 +24,29 @@ forward-looking planning surface.
 ## 1.x backlog
 
 Small, self-contained improvements that don't require a new
-dependency or a breaking-change window. Each could ship as a
-patch release when there's a pull from users.
+dependency or a breaking-change window. Grouped into patch drops by
+theme; each item adds a `scripts/smoke.sh` gate per the guiding
+principles. (1.1.1 shipped — see `CHANGELOG.md`.)
 
-| Candidate | Rationale | Effort |
-|-----------|-----------|--------|
-| `--wrap=character` implementation | Parsed but no-op today. Needs `TIOCGWINSZ`. | S |
-| `--line-range=A:B` | Print only a subset. Aligns with bat. | S |
-| Binary-file hex-dump mode | Fallback for `owl binary.bin` beyond the skip-notice. | M |
-| User-installable grammars + themes | `$XDG_CONFIG_HOME/owl/{grammars,themes}/`. | M |
-| `--strip-ansi=never/always/auto` naming parity with `less -R` | Alias of today's `-r` / default. | S |
-| Per-language extension override in config | e.g. `.conf → shell`. | S |
-| Content-based language detection | Regex-anchored; post-shebang fallback. | M |
-| `owl --version --verbose` shows vyakarana tag + build profile | Useful for bug reports. | S |
-| `--diff` mode (show only changed hunks) | Uses the existing VCS layer. | M |
+### 1.1.2 — content fallbacks (M)
+
+Items affect what owl does when the default path doesn't fit the
+input, plus the post-1.1.0 follow-up to the file-path color path.
+
+| Candidate | Rationale |
+|-----------|-----------|
+| `--color=always` actually emits ANSI for **file paths** when stdout is a pipe | **Follow-up to 2026-04-25 decision-log entry.** That entry recorded "file paths already honored that — the actual gap was that the stdin render path (`render_fd`) had no highlight branch at all. Fixed in 1.1.0." Owner re-verified 2026-04-25 against owl 1.1.0: issue still present in the file-path scenario (`owl --color=always --paging=never <file.cyr> \| xxd` produces zero `0x1b` bytes; also reproduced with `--language=shell` on a shell file, ruling out cyrius-grammar specifics). The stdin path was indeed fixed in 1.1.0; the file-path-into-pipe case was not — either the decision-log claim was wrong about the file-path side or there's a regression. Update the decision-log entry once the actual root cause is known. |
+| Binary-file hex-dump fallback | `owl binary.bin` today emits a skip-notice; offer `xxd`-style hex dump as an opt-in or auto fallback. |
+| User-installable grammars + themes | `$XDG_CONFIG_HOME/owl/{grammars,themes}/` overlays on top of the bundled set. Lets users add coverage without a vyakarana PR. |
+
+### 1.1.3 — smarter detection + diff (M)
+
+Builds on M3a (language detection) and M6 (VCS layer).
+
+| Candidate | Rationale |
+|-----------|-----------|
+| Content-based language detection | Regex-anchored. Post-shebang fallback for files with no extension. |
+| `--diff` mode | Show only changed hunks (uses existing VCS layer). |
 
 ---
 
@@ -89,6 +99,7 @@ accidentally pull them into a patch.
 | 2026-04-23 | Config file format? | CYML key=value, no sections, own parser | Surface too small for sections; avoiding a `cyml` stdlib dep keeps the owl binary lean |
 | 2026-04-23 | Strip file-origin terminal escapes in decorated mode? | Yes; `-r` / `--raw-control-chars` opt-out | Audit FINDING-001: OSC-52, title-report, DA-reply, iTerm2 OSC-1337 attack classes. `less -R` precedent. |
 | 2026-04-25 | Should stdin support syntax highlighting? | Yes — slurp up to `HIGHLIGHT_MAX`, tokenize, fall back to streaming on overflow | Symmetry with file path. The cyrius v5.6.45 ticket originally reported this as "`--color=always` ignored when stdout is piped" but file paths already honored that — the actual gap was that the stdin render path (`render_fd`) had no highlight branch at all. Fixed in 1.1.0 |
+| 2026-04-25 | 1.1.1 release scope and pacing | Five S-effort CLI improvements bundled as one patch (`--version --verbose`, `--strip-ansi=*`, `--line-range=A:B`, `ext.<extension>` config, `--wrap=character`) | Strict SemVer would put new flags in minor versions; owl's pre-2.0 phase intentionally treats patches as "small, frequent ergonomics" so users get incremental value without minor-bump churn. Each feature has a smoke gate; total +354 lines of source, +7 KB binary |
 
 ---
 
