@@ -20,9 +20,16 @@ Pipe `owl` into another command and it quietly steps aside — no decorations, n
 # AGNOS / Cyrius native package manager
 pkg install owl
 
-# From source
-<build instructions to follow>
+# From source — Cyrius toolchain 5.6.44+ on $PATH
+git clone https://github.com/MacCracken/owl
+cd owl
+cyrius deps                            # populate lib/ from cyrius.cyml
+cyrius build src/main.cyr build/owl    # → build/owl
 ```
+
+`lib/` is gitignored and regenerated on demand from
+[cyrius.cyml](cyrius.cyml) — `cyrius deps` is mandatory after a fresh
+checkout.
 
 ---
 

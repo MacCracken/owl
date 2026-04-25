@@ -10,7 +10,7 @@ include "src/config.cyr"
 
 # Keep OWL_VERSION in sync with the VERSION file.
 # A M8 CI check will enforce equality; for now, manual.
-var OWL_VERSION = "owl 1.0.0";
+var OWL_VERSION = "owl 1.1.0";
 
 var BUFSIZE = 65536;
 
@@ -618,10 +618,80 @@ fn render_fd_loop(fd) {
 
 fn render_fd(fd, path_for_header) {
     render_reset();
-    g_active_lang = "plain";
     vcs_reset();
+
+    var lang = "plain";
+    if (g_flag_lang != 0) { lang = g_flag_lang; }
+    g_active_lang = lang;
+
     if (resolved_show_header() == 1) { emit_header(path_for_header); }
-    return render_fd_loop(fd);
+
+    # Highlight eligibility — same gate as render_path. Stdin gets the
+    # same token color treatment as a file path when --language is set
+    # and color is live. Without --language there's no extension or
+    # path to detect from, so stdin without a hint stays plain.
+    var highlight_ok = 0;
+    if (g_want_color == 1) {
+        if (streq(lang, "plain") == 0) {
+            if (has_grammar(lang) == 1) { highlight_ok = 1; }
+        }
+    }
+
+    if (highlight_ok == 0) {
+        return render_fd_loop(fd);
+    }
+
+    # Slurp up to HIGHLIGHT_MAX. Stdin can be unbounded so we cap and
+    # fall back to streaming on overflow, mirroring the render_path
+    # branch. One extra byte for tokenize_source's trailing \0.
+    var big = alloc(HIGHLIGHT_MAX + 1);
+    var total = 0;
+    while (total < HIGHLIGHT_MAX) {
+        var got = file_read(fd, big + total, HIGHLIGHT_MAX - total);
+        if (got < 0) { return 0 - 1; }
+        if (got == 0) { break; }
+        total = total + got;
+    }
+    var overflow = 0;
+    if (total >= HIGHLIGHT_MAX) {
+        var probe[1];
+        var pr = file_read(fd, &probe, 1);
+        if (pr > 0) { overflow = 1; }
+    }
+    store8(big + total, 0);
+
+    if (overflow == 0) {
+        var hrc = render_highlighted_buf(big, total, lang);
+        if (hrc != 0) { render_chunk(big, total); }
+        return 0;
+    }
+
+    # Overflow — same fallback notice render_path uses, then stream
+    # the remainder plainly.
+    eprint("owl: ", 5);
+    eprint_sanitized(path_for_header, strlen(path_for_header));
+    var msg = ": input too large for highlighting (> ";
+    eprint(msg, strlen(msg));
+    var kb_buf[12];
+    var kb = HIGHLIGHT_MAX / 1024;
+    var kpi = 11;
+    store8(&kb_buf + kpi, 0);
+    kpi = kpi - 1;
+    if (kb == 0) { store8(&kb_buf + kpi, 48); kpi = kpi - 1; }
+    while (kb > 0) {
+        store8(&kb_buf + kpi, 48 + kb % 10);
+        kpi = kpi - 1;
+        kb = kb / 10;
+    }
+    kpi = kpi + 1;
+    eprint(&kb_buf + kpi, 11 - kpi);
+    var tail = " KB), rendering without color\n";
+    eprint(tail, strlen(tail));
+
+    render_chunk(big, total);
+    var rc_big = render_fd_loop(fd);
+    if (rc_big < 0) { return 0 - 1; }
+    return 0;
 }
 
 # Render a file path. Performs extension-based language detection, a

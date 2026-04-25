@@ -4,14 +4,18 @@ Thanks for wanting to help `owl` see more.
 
 ## Prerequisites
 
-- Cyrius toolchain 5.6.0+ (`cyrius` on `$PATH`) — <https://github.com/MacCracken/cyrius>
+- Cyrius toolchain 5.6.44+ (`cyrius` on `$PATH`) — <https://github.com/MacCracken/cyrius>
 - A POSIX-ish host (Linux primary; macOS best-effort). `owl` targets
   AGNOS long-term, but the development shape is portable.
 
 ## Development Workflow
 
 1. Fork and clone
-2. `cyrius deps` — vendors stdlib into `lib/`
+2. `cyrius deps` — populates `lib/` from `cyrius.cyml [deps]`. `lib/`
+   is gitignored, so this step is mandatory after every fresh
+   checkout. The toolchain pin in `cyrius.cyml [package].cyrius`
+   (currently `5.6.44`) is the only authority for the Cyrius version
+   — never create a `.cyrius-toolchain` file.
 3. Branch from `main`
 4. Make your change
 5. `sh scripts/smoke.sh build/owl` and `cyrius test tests/owl.tcyr` before opening a PR

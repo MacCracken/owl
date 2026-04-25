@@ -6,23 +6,29 @@
 
 ## Version
 
+**1.1.0** — shipped 2026-04-25. Stdin syntax highlighting: `owl -` and
+bare-`owl` with piped input now apply token color when `--color=always`
+and `--language=<lang>` are set, mirroring the file-path branch.
+Slurp-then-tokenize up to `HIGHLIGHT_MAX`; streaming fallback on
+overflow with the same stderr notice `render_path` emits.
+
 **1.0.0** — shipped 2026-04-23. First stable release. M0 through M8
 complete; full owl attack surface audited and hardened.
 
 ## Toolchain
 
-- **Cyrius pin**: `5.6.0` (in `cyrius.cyml [package].cyrius`)
+- **Cyrius pin**: `5.6.44` (in `cyrius.cyml [package].cyrius`)
 
 ## Binary
 
-- ~157 KB (non-DCE build, `build/owl`)
+- ~167 KB (non-DCE build, `build/owl`)
 - Startup targets: `owl --version` 1–2 ms, tiny-file highlight 2 ms
   (25× under the 50 ms no-op target in `owl-design-spec.md`)
 
 ## Source
 
-- ~2,160 lines across 6 modules:
-  - `src/main.cyr` (~1,033) — entry, CLI, render dispatch, TTY/mode resolution
+- ~2,230 lines across 6 modules:
+  - `src/main.cyr` (~1,103) — entry, CLI, render dispatch, TTY/mode resolution
   - `src/lang.cyr` (~233) — extension + shebang language detection
   - `src/theme.cyr` (~180) — bundled themes, 10-kind palette, ANSI emission
   - `src/pager.cyr` (~114) — pager spawn + SIGPIPE handling
@@ -71,4 +77,5 @@ No FFI. No third-party deps beyond vyakarana.
 
 Post-v1 work: M7 may add a formal CYML parser from stdlib when `cyml` lands,
 and M9+ will broaden grammar coverage via vyakarana's CYML loader (M2).
-See `ROADMAP.md`.
+1.x backlog (per `ROADMAP.md`): `--wrap=character`, `--line-range=A:B`,
+hex-dump fallback for binary files, user-installable grammars/themes.

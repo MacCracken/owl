@@ -6,6 +6,40 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.1.0] — 2026-04-25
+
+### Changed
+
+- **Toolchain pin** — bumped `cyrius.cyml [package].cyrius` from
+  `5.6.0` to `5.6.44`. Pulls in the v5.6.34 `alloc(>1MB)`-near-brk
+  SIGSEGV fix (`lib/alloc.cyr` rounds the new heap end up to a 1MB
+  boundary covering `_heap_ptr` instead of stepping by exactly
+  `0x100000`). Relevant for the new stdin-slurp path, which can
+  alloc `HIGHLIGHT_MAX + 1` (~128 KB) into a bump arena that already
+  holds a tokenbuf and ANSI-inflated output buffer.
+- **Vendored deps no longer tracked.** `lib/` is now fully gitignored
+  (yukti style); `cyrius deps` regenerates it from `cyrius.cyml`
+  `[deps]` on demand. Removes 70 tracked stdlib files (only 14 of
+  which were actually used — the rest were vestigial scaffolding
+  bloat) and ensures the vendored copy always matches the manifest
+  pin. Run `cyrius deps` after a fresh checkout.
+
+### Fixed
+
+- **stdin syntax highlighting** — `owl --color=always --language=<lang>`
+  now applies token-level color when reading from stdin (`owl -` and
+  bare-`owl` with piped input), matching the file-path behavior. Prior
+  to 1.1.0 the stdin path went straight to `render_chunk` and ignored
+  `--language` for highlighting purposes, so consumers piping owl
+  (Claude Code's `Read` routing, scripted log capture, `script(1)`
+  sessions) saw plain text even with explicit color + language flags.
+  Slurp-then-tokenize mirrors the file-path branch: stdin is buffered
+  up to `HIGHLIGHT_MAX` (128 KB), tokenized once, then byte-emitted
+  with per-token color. Inputs that exceed the cap fall through to
+  streaming `render_chunk` with the same stderr fallback notice
+  `render_path` emits. Stdin without `--language` stays plain — there
+  is no extension or path to detect from.
+
 ## [1.0.0] — 2026-04-23
 
 First stable release. M0 through M8 shipped; full owl attack surface

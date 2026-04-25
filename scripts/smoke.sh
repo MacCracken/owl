@@ -265,6 +265,22 @@ case "$out" in
     *) fail "--color=always did not emit ANSI escape when piped" ;;
 esac
 
+# stdin + --language + --color=always highlights tokens. Symmetric with
+# the file path: piped consumers (Claude Code's Read routing, scripted
+# log capture, `script(1)` recording) need color from the stdin path too.
+out=$(printf 'fn x() {}\n' | "$BIN" --color=always --paging=never --language=rust)
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "stdin + --color=always + --language=rust did not emit ANSI" ;;
+esac
+
+# Stdin without --language stays plain (no extension/path to detect from).
+out=$(printf 'fn x() {}\n' | "$BIN" --color=always --paging=never)
+case "$out" in
+    *$(printf '\033')*) fail "stdin without --language should not colorize" ;;
+    *) ;;
+esac
+
 # --color=always + --theme=light produces different bytes than --theme=dark
 # (palette values differ, so the escape-code digits are different).
 dark_out=$("$BIN"  --color=always --theme=dark  -n "$TMPDIR/a.txt")

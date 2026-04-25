@@ -1,8 +1,8 @@
 # owl — Roadmap
 
-owl 1.0.0 shipped 2026-04-23. Everything that landed in the M0–M8
-arc lives in `CHANGELOG.md`; this file is the forward-looking
-planning surface.
+owl 1.1.0 shipped 2026-04-25 (stdin highlight fix). Everything that
+landed in the M0–M8 arc lives in `CHANGELOG.md`; this file is the
+forward-looking planning surface.
 
 ---
 
@@ -28,7 +28,6 @@ patch release when there's a pull from users.
 
 | Candidate | Rationale | Effort |
 |-----------|-----------|--------|
-| `--color=always` actually emits ANSI when stdout is a pipe | **Bug, not feature.** Currently produces zero `\x1b[` escape sequences when stdout is non-TTY, even with the explicit `--color=always` flag. Reproduced 2026-04-25 across `--language=cyrius` and `--language=rust` on small source files (`xxd` shows no 0x1b bytes). Suggests either (a) the TTY check overrides `--color=always` instead of the documented inversion, or (b) the colorize-and-emit path bails early when stdout isn't a terminal. Surfaced by cyrius v5.6.45 — Claude Code now routes `Read(**/*.cyr)` through `Bash(owl --color=always --paging=never <path>)` so colored output reaches the conversation transcript; without the flag honoring intent, the routing returns plain text. Affects every consumer that pipes owl into a transcript / log / CI gate / `script(1)` recording. | S |
 | `--wrap=character` implementation | Parsed but no-op today. Needs `TIOCGWINSZ`. | S |
 | `--line-range=A:B` | Print only a subset. Aligns with bat. | S |
 | Binary-file hex-dump mode | Fallback for `owl binary.bin` beyond the skip-notice. | M |
@@ -89,6 +88,7 @@ accidentally pull them into a patch.
 | 2026-04-23 | M6 VCS backend before SIT? | Shell-free `execve` `git diff` confined to `src/vcs.cyr` | SIT will replace this layer wholesale; minimum-honest scaffold in the meantime. Argv-based (not `sh -c`) per audit FINDING-003 |
 | 2026-04-23 | Config file format? | CYML key=value, no sections, own parser | Surface too small for sections; avoiding a `cyml` stdlib dep keeps the owl binary lean |
 | 2026-04-23 | Strip file-origin terminal escapes in decorated mode? | Yes; `-r` / `--raw-control-chars` opt-out | Audit FINDING-001: OSC-52, title-report, DA-reply, iTerm2 OSC-1337 attack classes. `less -R` precedent. |
+| 2026-04-25 | Should stdin support syntax highlighting? | Yes — slurp up to `HIGHLIGHT_MAX`, tokenize, fall back to streaming on overflow | Symmetry with file path. The cyrius v5.6.45 ticket originally reported this as "`--color=always` ignored when stdout is piped" but file paths already honored that — the actual gap was that the stdin render path (`render_fd`) had no highlight branch at all. Fixed in 1.1.0 |
 
 ---
 
