@@ -28,6 +28,7 @@ patch release when there's a pull from users.
 
 | Candidate | Rationale | Effort |
 |-----------|-----------|--------|
+| `--color=always` actually emits ANSI when stdout is a pipe | **Bug, not feature.** Currently produces zero `\x1b[` escape sequences when stdout is non-TTY, even with the explicit `--color=always` flag. Reproduced 2026-04-25 across `--language=cyrius` and `--language=rust` on small source files (`xxd` shows no 0x1b bytes). Suggests either (a) the TTY check overrides `--color=always` instead of the documented inversion, or (b) the colorize-and-emit path bails early when stdout isn't a terminal. Surfaced by cyrius v5.6.45 — Claude Code now routes `Read(**/*.cyr)` through `Bash(owl --color=always --paging=never <path>)` so colored output reaches the conversation transcript; without the flag honoring intent, the routing returns plain text. Affects every consumer that pipes owl into a transcript / log / CI gate / `script(1)` recording. | S |
 | `--wrap=character` implementation | Parsed but no-op today. Needs `TIOCGWINSZ`. | S |
 | `--line-range=A:B` | Print only a subset. Aligns with bat. | S |
 | Binary-file hex-dump mode | Fallback for `owl binary.bin` beyond the skip-notice. | M |
