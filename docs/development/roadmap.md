@@ -90,16 +90,11 @@ accidentally pull them into a patch.
 
 ## Decision log
 
-| Date       | Question | Decision | Rationale |
-|------------|----------|----------|-----------|
-| 2026-04-22 | Theme format: reuse existing (e.g. TextMate/Sublime) or custom? | Custom CYML | Keeps toolchain consistent; refuses incumbent baggage |
-| 2026-04-23 | Grammar source for M3b? | vyakarana 1.0.2 (git-tag dep) | Library-first Cyrius-native tokenizer; ten-kind palette already matches theme shape |
-| 2026-04-23 | Highlight file-size ceiling? | 128 KB (`HIGHLIGHT_MAX`) | Bump allocator keeps file + tokenbuf + ANSI-inflated output resident; lifts with a freeing allocator or vyakarana streaming (their 2.x) |
-| 2026-04-23 | M6 VCS backend before SIT? | Shell-free `execve` `git diff` confined to `src/vcs.cyr` | SIT will replace this layer wholesale; minimum-honest scaffold in the meantime. Argv-based (not `sh -c`) per audit FINDING-003 |
-| 2026-04-23 | Config file format? | CYML key=value, no sections, own parser | Surface too small for sections; avoiding a `cyml` stdlib dep keeps the owl binary lean |
-| 2026-04-23 | Strip file-origin terminal escapes in decorated mode? | Yes; `-r` / `--raw-control-chars` opt-out | Audit FINDING-001: OSC-52, title-report, DA-reply, iTerm2 OSC-1337 attack classes. `less -R` precedent. |
-| 2026-04-25 | Should stdin support syntax highlighting? | Yes — slurp up to `HIGHLIGHT_MAX`, tokenize, fall back to streaming on overflow | Symmetry with file path. The cyrius v5.6.45 ticket originally reported this as "`--color=always` ignored when stdout is piped" but file paths already honored that — the actual gap was that the stdin render path (`render_fd`) had no highlight branch at all. Fixed in 1.1.0 |
-| 2026-04-25 | 1.1.1 release scope and pacing | Five S-effort CLI improvements bundled as one patch (`--version --verbose`, `--strip-ansi=*`, `--line-range=A:B`, `ext.<extension>` config, `--wrap=character`) | Strict SemVer would put new flags in minor versions; owl's pre-2.0 phase intentionally treats patches as "small, frequent ergonomics" so users get incremental value without minor-bump churn. Each feature has a smoke gate; total +354 lines of source, +7 KB binary |
+Architectural decisions live in [`../adr/`](../adr/) as individual,
+immutable records. This roadmap tracks forward-looking work; the
+ADR set tracks the *why* behind structural choices already made.
+
+See [`../adr/README.md`](../adr/README.md) for the full index.
 
 ---
 

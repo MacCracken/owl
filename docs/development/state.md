@@ -32,7 +32,7 @@ complete; full owl attack surface audited and hardened.
 
 - ~174 KB (non-DCE build, `build/owl`)
 - Startup targets: `owl --version` 1–2 ms, tiny-file highlight 2 ms
-  (25× under the 50 ms no-op target in `owl-design-spec.md`)
+  (25× under the 50 ms no-op target in `docs/design-spec.md`)
 
 ## Source
 
@@ -86,5 +86,6 @@ No FFI. No third-party deps beyond vyakarana.
 
 Post-v1 work: M7 may add a formal CYML parser from stdlib when `cyml` lands,
 and M9+ will broaden grammar coverage via vyakarana's CYML loader (M2).
-1.x backlog (per `ROADMAP.md`): `--wrap=character`, `--line-range=A:B`,
-hex-dump fallback for binary files, user-installable grammars/themes.
+1.x backlog (per `roadmap.md` in this directory): hex-dump fallback for
+binary files, user-installable grammars/themes, content-based language
+detection, `--diff` mode.

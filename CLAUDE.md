@@ -71,7 +71,7 @@ Include order in `main.cyr`: `lib/vyakarana.cyr` first, then owl modules. Runtim
 
 ### Work Loop
 
-1. Pick the next item from `ROADMAP.md`
+1. Pick the next item from `docs/development/roadmap.md`
 2. Implement + update `scripts/smoke.sh` with a behavioral gate for it
 3. `cyrius build` → `cyrius test` → `sh scripts/smoke.sh`
 4. Manual TTY check — features depending on TTY detection need a real terminal run (type checks can't catch ANSI regressions)
@@ -92,13 +92,13 @@ Include order in `main.cyr`: `lib/vyakarana.cyr` first, then owl modules. Runtim
 1. Full test + smoke — both green from clean checkout
 2. `cyrius lint src/*.cyr` — no unaddressed findings
 3. `CYRIUS_DCE=1 cyrius build` — release binary builds; note size in CHANGELOG and `state.md`
-4. ROADMAP decision log + milestone checkboxes reflect reality
+4. ADRs (`docs/adr/`) capture any structural decision made during the milestone; ROADMAP milestone checkboxes reflect reality
 5. Version triple (`VERSION`, `cyrius.cyml`, CHANGELOG header) in sync
 6. `state.md` current — version, binary size, test/smoke status, deps, consumers all match reality
 
 ## Key Principles
 
-- **Correctness before features** — a v1 that does five things perfectly beats a v1 that does fifteen unreliably (see `ROADMAP.md` guiding principles)
+- **Correctness before features** — a v1 that does five things perfectly beats a v1 that does fifteen unreliably (see `docs/development/roadmap.md` guiding principles)
 - **Ship plain mode first, decorations later** — plain mode is the foundation; decorations are icing
 - **Defer what you can** — keep later-milestone items out of earlier milestones even when they look easy; scope creep is the enemy
 - **Byte-for-byte testable** — behavioral gates in `scripts/smoke.sh` diff owl's output against expected bytes. `cat -v`-level visual checks catch ANSI regressions type checking can't
@@ -127,8 +127,9 @@ Include order in `main.cyr`: `lib/vyakarana.cyr` first, then owl modules. Runtim
 ## Key References
 
 - `README.md` — user-facing intro
-- `ROADMAP.md` — milestone plan + decision log
-- `owl-design-spec.md` — behavioral spec: CLI flags, exit codes, mode matrix
+- `docs/development/roadmap.md` — forward-looking milestone plan
+- `docs/adr/` — architecture decision records (immutable, individually citable)
+- `docs/design-spec.md` — behavioral spec: CLI flags, exit codes, mode matrix
 - `CHANGELOG.md` — what landed, when
 - `docs/development/state.md` — **live state snapshot**
 - `docs/audit/` — security audit reports

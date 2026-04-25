@@ -36,11 +36,11 @@ Never shell out to `cc5` directly.
 ## Scope Discipline
 
 `owl` is a file viewer. Not an editor. Not a pager. Not a search tool.
-The [design spec](owl-design-spec.md) §1 enumerates out-of-scope items —
+The [design spec](docs/design-spec.md) §1 enumerates out-of-scope items —
 read it before proposing a feature in those areas. If you think the
 line should move, update the spec in the same PR that moves it.
 
-The [ROADMAP](ROADMAP.md) is the source of truth for milestone order.
+The [ROADMAP](docs/development/roadmap.md) is the source of truth for milestone order.
 One milestone at a time; don't skip ahead. Post-v1 ideas live in the
 roadmap's "Post-v1 ideas (deferred)" section — don't sneak them into
 earlier milestones, even when they seem trivial.

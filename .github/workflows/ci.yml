@@ -171,7 +171,7 @@ jobs:
         run: |
           MISSING=0
           for f in README.md CHANGELOG.md VERSION CONTRIBUTING.md LICENSE \
-                   cyrius.cyml owl-design-spec.md ROADMAP.md CLAUDE.md; do
+                   cyrius.cyml docs/design-spec.md docs/development/roadmap.md CLAUDE.md; do
             if [ -f "$f" ]; then echo "  OK: $f"
             else echo "  MISSING: $f"; MISSING=1; fi
           done
