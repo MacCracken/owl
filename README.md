@@ -164,6 +164,25 @@ In plain mode, `owl` matches `cat`'s behavior closely enough that you can substi
 
 ---
 
+## Claude Code integration
+
+owl serves as Claude Code's colored-`cat` substitute when an agent reads source files in a conversation. The user adds a permission rule to `~/.claude/settings.json` that denies the `Read` tool on a file glob and explicitly allows owl via `Bash`:
+
+```json
+"permissions": {
+  "deny":  ["Read(**/*.cyr)"],
+  "allow": ["Bash(owl *)"]
+}
+```
+
+The agent is then forced to invoke `owl --color=always --paging=never <path>` instead of the built-in Read tool. owl emits ANSI escape sequences into the conversation transcript, where the user's terminal renders them as colored output — visible regardless of whether the model itself "sees" the colors (it doesn't; it sees the raw escape bytes). The user gets a syntax-highlighted view of the source with no extra effort.
+
+Requires owl **1.1.2+**: earlier versions resolved bundled grammars via a cwd-relative path and silently fell back to plain output when invoked from outside owl's own source repo (which is the common case when an agent is working in another project). 1.1.2 fixed this by resolving grammars relative to `/proc/self/exe`. The cyrius project's [`CLAUDE.md`](https://github.com/MacCracken/cyrius/blob/main/CLAUDE.md) documents the agent-side conventions in more detail.
+
+Extending the pattern to other source types is just a matter of adding the glob: `Read(**/*.cyr)` for cyrius, `Read(**/*.go)` for Go, etc. Each added glob assumes owl can highlight that language — see `owl --list-languages`.
+
+---
+
 ## Exit codes
 
 | Code | Meaning |

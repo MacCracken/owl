@@ -1,9 +1,9 @@
 # owl — Roadmap
 
-owl 1.1.2 shipped 2026-04-25 (grammar lookup is now `/proc/self/exe`-
-relative; closes cyrius v5.6.45). M0–M8 + 1.1.0 + 1.1.1 + 1.1.2
-details live in `CHANGELOG.md`; this file is the forward-looking
-planning surface.
+owl 1.1.3 shipped 2026-04-25 (content fallbacks: `--hex`/`-x` + auto
+hex-dump on binaries, user-installable grammars + themes via
+`$XDG_CONFIG_HOME/owl/`). M0–M8 + 1.1.0..1.1.3 details live in
+`CHANGELOG.md`; this file is the forward-looking planning surface.
 
 ---
 
@@ -28,18 +28,7 @@ dependency or a breaking-change window. Grouped into patch drops by
 theme; each item adds a `scripts/smoke.sh` gate per the guiding
 principles. (1.1.1 shipped — see `CHANGELOG.md`.)
 
-### 1.1.2 — content fallbacks (M)
-
-Items affect what owl does when the default path doesn't fit the
-input. (The grammar-cwd-portability bug originally pinned here
-shipped in 1.1.2 — see `CHANGELOG.md`.)
-
-| Candidate | Rationale |
-|-----------|-----------|
-| Binary-file hex-dump fallback | `owl binary.bin` today emits a skip-notice; offer `xxd`-style hex dump as an opt-in or auto fallback. |
-| User-installable grammars + themes | `$XDG_CONFIG_HOME/owl/{grammars,themes}/` overlays on top of the bundled set. Lets users add coverage without a vyakarana PR. |
-
-### 1.1.3 — smarter detection + diff (M)
+### 1.1.4 — smarter detection + diff (M)
 
 Builds on M3a (language detection) and M6 (VCS layer).
 

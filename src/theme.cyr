@@ -16,18 +16,21 @@ var THEME_COUNT = 2;
 fn theme_name(i) {
     if (i == 0) { return "dark"; }
     if (i == 1) { return "light"; }
+    if (i == 2) { return g_user_theme_name; }
     return "dark";
 }
 
 fn theme_header_color(i) {
     if (i == 0) { return 45; }   # cyan-ish (256-color index)
     if (i == 1) { return 24; }   # deep blue
+    if (i == 2) { return g_user_theme_header; }
     return 7;
 }
 
 fn theme_lineno_color(i) {
     if (i == 0) { return 240; }  # dark grey
     if (i == 1) { return 250; }  # light grey
+    if (i == 2) { return g_user_theme_lineno; }
     return 7;
 }
 
@@ -73,6 +76,12 @@ fn theme_token_color(theme, kind) {
         if (kind == 9) { return 124; }     # error        — deep red
         return 0 - 1;
     }
+    if (theme == 2) {
+        if (kind < 0) { return 0 - 1; }
+        if (kind > 9) { return 0 - 1; }
+        if (g_user_theme_tokens == 0) { return 0 - 1; }
+        return load64(g_user_theme_tokens + kind * 8);
+    }
     return 0 - 1;
 }
 
@@ -97,6 +106,12 @@ fn theme_change_color(theme, kind) {
         if (kind == 3) { return 124; }   # DEL — deep red
         return 0 - 1;
     }
+    if (theme == 2) {
+        if (kind < 1) { return 0 - 1; }
+        if (kind > 3) { return 0 - 1; }
+        if (g_user_theme_vcs == 0) { return 0 - 1; }
+        return load64(g_user_theme_vcs + kind * 8);
+    }
     return 0 - 1;
 }
 
@@ -109,6 +124,13 @@ fn theme_index(name) {
         if (streq(theme_name(i), name) == 1) { return i; }
         i = i + 1;
     }
+    # 1.1.3 — user theme overlay. Lazy-load $XDG_CONFIG_HOME/owl/themes/<name>.cyml
+    # (or $HOME/.config/owl/themes/<name>.cyml). Single slot at THEME_USER_INDEX.
+    if (g_user_theme_loaded == 1) {
+        if (streq(g_user_theme_name, name) == 1) { return THEME_USER_INDEX; }
+        return 0 - 1;
+    }
+    if (_user_theme_load_by_name(name) == 0) { return THEME_USER_INDEX; }
     return 0 - 1;
 }
 
@@ -177,4 +199,233 @@ fn ansi_reset() {
     store8(&rbuf + 3, 109);   # 'm'
     syscall(1, 1, &rbuf, 4);
     return 0;
+}
+
+# ── User themes (1.1.3) ────────────────────────────────────────────────
+# Single-slot lazy-loaded theme at index THEME_USER_INDEX. Triggered
+# when --theme=<name> is set and <name> doesn't match a bundled theme
+# (theme_index falls through to _user_theme_load_by_name). File path:
+# $XDG_CONFIG_HOME/owl/themes/<name>.cyml or $HOME/.config/owl/themes/.
+#
+# Format (flat CYML, ignoring blank lines and `#` comments):
+#   header_color = 45
+#   lineno_color = 240
+#   token.ident       = -1     # -1 = "no color", terminal default
+#   token.keyword     = 141
+#   token.string      = 113
+#   ... (kinds 0..9 per theme_token_color spec)
+#   vcs.add = 113
+#   vcs.mod = 215
+#   vcs.del = 167
+#
+# Limitations: only one user theme can be loaded per invocation (can't
+# switch via --theme= mid-run; owl invokes once per file batch). User
+# themes do not appear in --list-themes (no dir-scanning at startup).
+
+var THEME_USER_INDEX     = 2;
+var g_user_theme_loaded  = 0;
+var g_user_theme_name    = "user";   # replaced by load
+var g_user_theme_header  = 7;
+var g_user_theme_lineno  = 7;
+var g_user_theme_tokens  = 0;        # alloc'd: 10 * 8 bytes
+var g_user_theme_vcs     = 0;        # alloc'd: 4  * 8 bytes (idx 1=ADD, 2=MOD, 3=DEL)
+
+fn _user_theme_init() {
+    if (g_user_theme_tokens == 0) {
+        g_user_theme_tokens = alloc(10 * 8);
+        g_user_theme_vcs    = alloc(4  * 8);
+        var i = 0;
+        while (i < 10) { store64(g_user_theme_tokens + i * 8, 0 - 1); i = i + 1; }
+        i = 0;
+        while (i < 4)  { store64(g_user_theme_vcs    + i * 8, 0 - 1); i = i + 1; }
+    }
+    return 0;
+}
+
+fn _theme_keyeq(buf, len, s) {
+    var sl = strlen(s);
+    if (sl != len) { return 0; }
+    return memeq(buf, s, len);
+}
+
+# Parse signed integer from buf[s..e). Stores result in *out via
+# pointer-write convention; returns 0 success, 1 invalid.
+fn _theme_parse_int(buf, s, e) {
+    if (s >= e) { return 0 - 99999; }
+    var sign = 1;
+    var p = s;
+    if (load8(buf + p) == 45) { sign = 0 - 1; p = p + 1; }
+    if (p >= e) { return 0 - 99999; }
+    var v = 0;
+    while (p < e) {
+        var c = load8(buf + p);
+        if (c < 48) { return 0 - 99999; }
+        if (c > 57) { return 0 - 99999; }
+        v = v * 10 + (c - 48);
+        p = p + 1;
+    }
+    return v * sign;
+}
+
+# Apply one parsed line. key span [ks, ke); value span [vs, ve).
+# Unknown keys are silently ignored (forward-compat).
+fn _theme_apply(buf, ks, ke, vs, ve) {
+    var klen = ke - ks;
+    var v = _theme_parse_int(buf, vs, ve);
+    if (v == 0 - 99999) { return 0; }   # bad value — ignore line
+
+    if (_theme_keyeq(buf + ks, klen, "header_color") == 1) { g_user_theme_header = v; return 0; }
+    if (_theme_keyeq(buf + ks, klen, "lineno_color") == 1) { g_user_theme_lineno = v; return 0; }
+    if (_theme_keyeq(buf + ks, klen, "token.ident") == 1)        { store64(g_user_theme_tokens + 0 * 8, v); return 0; }
+    if (_theme_keyeq(buf + ks, klen, "token.keyword") == 1)      { store64(g_user_theme_tokens + 1 * 8, v); return 0; }
+    if (_theme_keyeq(buf + ks, klen, "token.string") == 1)       { store64(g_user_theme_tokens + 2 * 8, v); return 0; }
+    if (_theme_keyeq(buf + ks, klen, "token.number") == 1)       { store64(g_user_theme_tokens + 3 * 8, v); return 0; }
+    if (_theme_keyeq(buf + ks, klen, "token.comment") == 1)      { store64(g_user_theme_tokens + 4 * 8, v); return 0; }
+    if (_theme_keyeq(buf + ks, klen, "token.operator") == 1)     { store64(g_user_theme_tokens + 5 * 8, v); return 0; }
+    if (_theme_keyeq(buf + ks, klen, "token.punctuation") == 1)  { store64(g_user_theme_tokens + 6 * 8, v); return 0; }
+    if (_theme_keyeq(buf + ks, klen, "token.whitespace") == 1)   { store64(g_user_theme_tokens + 7 * 8, v); return 0; }
+    if (_theme_keyeq(buf + ks, klen, "token.preprocessor") == 1) { store64(g_user_theme_tokens + 8 * 8, v); return 0; }
+    if (_theme_keyeq(buf + ks, klen, "token.error") == 1)        { store64(g_user_theme_tokens + 9 * 8, v); return 0; }
+    if (_theme_keyeq(buf + ks, klen, "vcs.add") == 1) { store64(g_user_theme_vcs + 1 * 8, v); return 0; }
+    if (_theme_keyeq(buf + ks, klen, "vcs.mod") == 1) { store64(g_user_theme_vcs + 2 * 8, v); return 0; }
+    if (_theme_keyeq(buf + ks, klen, "vcs.del") == 1) { store64(g_user_theme_vcs + 3 * 8, v); return 0; }
+    return 0;
+}
+
+fn _theme_is_ws(c) {
+    if (c == 32) { return 1; }
+    if (c == 9)  { return 1; }
+    if (c == 13) { return 1; }
+    return 0;
+}
+
+# Process one line of the theme file.
+fn _theme_parse_line(buf, s, e) {
+    while (s < e) {
+        if (_theme_is_ws(load8(buf + s)) == 0) { break; }
+        s = s + 1;
+    }
+    while (e > s) {
+        if (_theme_is_ws(load8(buf + e - 1)) == 0) { break; }
+        e = e - 1;
+    }
+    if (s >= e) { return 0; }
+    if (load8(buf + s) == 35) { return 0; }   # comment
+
+    var eq = s;
+    while (eq < e) {
+        if (load8(buf + eq) == 61) { break; }
+        eq = eq + 1;
+    }
+    if (eq >= e) { return 0; }   # no '=' — skip
+
+    var ke = eq;
+    while (ke > s) {
+        if (_theme_is_ws(load8(buf + ke - 1)) == 0) { break; }
+        ke = ke - 1;
+    }
+    if (ke <= s) { return 0; }
+
+    var vs = eq + 1;
+    while (vs < e) {
+        if (_theme_is_ws(load8(buf + vs)) == 0) { break; }
+        vs = vs + 1;
+    }
+    if (vs >= e) { return 0; }
+
+    _theme_apply(buf, s, ke, vs, e);
+    return 0;
+}
+
+# Read theme file at `path` and populate user-theme globals. Returns 0
+# success, 1 if file is missing / unreadable / empty.
+fn _theme_file_load(path) {
+    var fd = file_open(path, O_RDONLY, 0);
+    if (fd < 0) { return 1; }
+    var cap = 8192;
+    var buf = alloc(cap);
+    var total = 0;
+    var done = 0;
+    while (done == 0) {
+        var got = file_read(fd, buf + total, cap - total);
+        if (got < 0) { file_close(fd); return 1; }
+        if (got == 0) { done = 1; continue; }
+        total = total + got;
+        if (total >= cap) { done = 1; continue; }
+    }
+    file_close(fd);
+    if (total == 0) { return 1; }
+
+    _user_theme_init();
+
+    var ls = 0;
+    var i = 0;
+    while (i < total) {
+        if (load8(buf + i) == 10) {
+            _theme_parse_line(buf, ls, i);
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    if (ls < total) { _theme_parse_line(buf, ls, total); }
+    return 0;
+}
+
+# Build "<base><sep>owl/themes/<name>.cyml" path. Returns alloc'd buf.
+fn _theme_join_path(base, sep, name) {
+    var blen = strlen(base);
+    var slen = strlen(sep);
+    var middle = "owl/themes/";
+    var mlen = strlen(middle);
+    var nlen = strlen(name);
+    var ext = ".cyml";
+    var elen = strlen(ext);
+    var total = blen + slen + mlen + nlen + elen + 1;
+    var out = alloc(total);
+    var off = 0;
+    var k = 0;
+    while (k < blen) { store8(out + off + k, load8(base + k)); k = k + 1; }
+    off = off + blen;
+    k = 0;
+    while (k < slen) { store8(out + off + k, load8(sep + k)); k = k + 1; }
+    off = off + slen;
+    k = 0;
+    while (k < mlen) { store8(out + off + k, load8(middle + k)); k = k + 1; }
+    off = off + mlen;
+    k = 0;
+    while (k < nlen) { store8(out + off + k, load8(name + k)); k = k + 1; }
+    off = off + nlen;
+    k = 0;
+    while (k < elen) { store8(out + off + k, load8(ext + k)); k = k + 1; }
+    off = off + elen;
+    store8(out + off, 0);
+    return out;
+}
+
+# Try to load a user theme by name. On success records the name and
+# returns 0; otherwise returns 1.
+fn _user_theme_load_by_name(name) {
+    var xdg = getenv("XDG_CONFIG_HOME");
+    if (xdg != 0) {
+        if (load8(xdg) != 0) {
+            var p = _theme_join_path(xdg, "/", name);
+            if (_theme_file_load(p) == 0) {
+                g_user_theme_name = name;
+                g_user_theme_loaded = 1;
+                return 0;
+            }
+        }
+    }
+    var home = getenv("HOME");
+    if (home != 0) {
+        if (load8(home) != 0) {
+            var p = _theme_join_path(home, "/.config/", name);
+            if (_theme_file_load(p) == 0) {
+                g_user_theme_name = name;
+                g_user_theme_loaded = 1;
+                return 0;
+            }
+        }
+    }
+    return 1;
 }

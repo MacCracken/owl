@@ -6,6 +6,13 @@
 
 ## Version
 
+**1.1.3** — shipped 2026-04-25. Content fallbacks drop:
+`--hex`/`-x` flag plus auto hex-dump for binary files (replaces the
+pre-1.1.3 skip-notice); user-installable grammars
+(`$XDG_CONFIG_HOME/owl/grammars/<name>.cyml` overrides bundled by
+name); user-installable themes (`$XDG_CONFIG_HOME/owl/themes/<name>.cyml`
+lazy-loaded via `--theme=<name>` when the name doesn't match bundled).
+
 **1.1.2** — shipped 2026-04-25. Bundled grammars now resolve via
 `/proc/self/exe` instead of cwd-relative `grammars/<name>.cyml`. Prior
 versions silently produced zero ANSI bytes when invoked from any cwd
@@ -38,19 +45,19 @@ complete; full owl attack surface audited and hardened.
 
 ## Binary
 
-- ~178 KB (non-DCE build, `build/owl`)
+- ~191 KB (non-DCE build, `build/owl`)
 - Startup targets: `owl --version` 1–2 ms, tiny-file highlight 2 ms
   (25× under the 50 ms no-op target in `docs/design-spec.md`)
 
 ## Source
 
-- ~2,734 lines across 6 modules:
-  - `src/main.cyr` (~1,519) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup
+- ~3,240 lines across 6 modules:
+  - `src/main.cyr` (~1,774) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump
+  - `src/theme.cyr` (~431) — bundled themes, 10-kind palette, ANSI emission, user-theme loader (1.1.3)
   - `src/lang.cyr` (~300) — extension + shebang language detection + ext-override table
-  - `src/theme.cyr` (~180) — bundled themes, 10-kind palette, ANSI emission
-  - `src/pager.cyr` (~114) — pager spawn + SIGPIPE handling
-  - `src/vcs.cyr` (~323) — git VCS markers (M6)
   - `src/config.cyr` (~298) — `key = value` config parser (M7) + `ext.*` keys (1.1.1)
+  - `src/vcs.cyr` (~323) — git VCS markers (M6)
+  - `src/pager.cyr` (~114) — pager spawn + SIGPIPE handling
 
 ## Tests
 

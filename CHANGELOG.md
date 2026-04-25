@@ -6,6 +6,60 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.1.3] — 2026-04-25
+
+Content fallbacks drop. Three contained features; no architectural
+changes.
+
+### Added
+
+- **`--hex` / `-x` and binary auto-fallback.** `owl --hex <file>`
+  emits an `xxd`-style dump (`OFFSET  16 hex bytes  |ASCII|`) on
+  any file, text or binary. Binary files (NUL-byte detection in
+  the first chunk) now hex-dump automatically instead of emitting
+  the pre-1.1.3 `binary file (use -p to dump)` skip-notice — exit
+  code is 0 with content on stdout. Plain mode (`-p`) still
+  byte-streams binary verbatim (cat-parity is sacred).
+- **User-installable grammars.** Drop a `.cyml` grammar file at
+  `$XDG_CONFIG_HOME/owl/grammars/<name>.cyml` (or
+  `~/.config/owl/grammars/<name>.cyml`) to override the bundled
+  grammar of the same name. Override-only scope for v1: extending
+  the language list (e.g. adding `elixir`) requires a vyakarana PR
+  and an entry in `lang.cyr`. User overlay is loaded BEFORE
+  bundled, so vyakarana's first-match registry returns the user
+  version. Up to the 11 bundled grammar names are eligible for
+  override.
+- **User-installable themes.** `--theme=<name>` lazy-loads
+  `$XDG_CONFIG_HOME/owl/themes/<name>.cyml` (or
+  `~/.config/owl/themes/<name>.cyml`) when `<name>` doesn't match
+  a bundled theme. Format is flat CYML:
+
+  ```cyml
+  # ~/.config/owl/themes/neon.cyml
+  header_color = 201
+  lineno_color = 240
+  token.keyword = 207     # 256-color ANSI index; -1 = terminal default
+  token.string  = 154
+  token.number  = 220
+  token.comment = 247
+  vcs.add = 154
+  vcs.mod = 220
+  vcs.del = 196
+  ```
+
+  Single-slot scope for v1: only one user theme can be loaded per
+  invocation (the one named via `--theme=`). Bundled themes still
+  take priority on name collision. User themes do not appear in
+  `--list-themes` (no startup dir-scan).
+
+### Changed
+
+- **Mixed-file partial-failure on binary input is gone.** Pre-1.1.3,
+  `owl text.txt binary.bin text2.txt` exited 1 (partial) with the
+  binary file skipped. Now all three render — binary inline as hex
+  — and the run exits 0. The corresponding smoke gate
+  (`mixed-with-binary`) was updated to assert the new shape.
+
 ## [1.1.2] — 2026-04-25
 
 ### Fixed

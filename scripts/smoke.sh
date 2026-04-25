@@ -294,6 +294,60 @@ case "$out" in
 esac
 
 # ---------------------------------------------------------------------
+# 1.1.3 — user grammar overlay via $XDG_CONFIG_HOME/owl/grammars/.
+# Override-only scope: the user dir is consulted before bundled, so a
+# user file with a known name (e.g. python.cyml) wins. Missing dir is
+# a silent no-op. We test by copying the bundled python grammar to a
+# user dir and confirming owl still highlights .py — exercises the
+# load path, even though identity output isn't a strict override
+# proof on its own. Crash-free + correct ANSI is the contract here.
+mkdir -p "$TMPDIR/userhome/owl/grammars"
+cp /home/macro/Repos/owl/grammars/python.cyml "$TMPDIR/userhome/owl/grammars/python.cyml"
+printf 'def hi(): pass\n' > "$TMPDIR/sample.py"
+out=$(XDG_CONFIG_HOME="$TMPDIR/userhome" "$BIN" --color=always --paging=never "$TMPDIR/sample.py")
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "user grammar overlay broke .py highlighting" ;;
+esac
+# Missing user dir is a silent no-op — no error, no warning.
+out=$(XDG_CONFIG_HOME="$TMPDIR/nonexistent" "$BIN" --color=always --paging=never "$TMPDIR/sample.py" 2>"$TMPDIR/err")
+[ ! -s "$TMPDIR/err" ] || fail "missing user grammars dir leaked stderr: $(cat "$TMPDIR/err")"
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "missing user grammars dir broke .py highlighting fallback" ;;
+esac
+
+# 1.1.3 — user theme overlay via $XDG_CONFIG_HOME/owl/themes/<name>.cyml.
+# Single-slot lazy-load on theme_index miss. Verify a user-supplied
+# "test_theme.cyml" actually overrides bundled token colors by picking
+# a header_color value that NO bundled theme uses (37) and asserting
+# it appears in the file header SGR escape.
+mkdir -p "$TMPDIR/userhome/owl/themes"
+cat > "$TMPDIR/userhome/owl/themes/test_theme.cyml" <<'EOF'
+header_color = 37
+lineno_color = 240
+token.keyword = 207
+token.string = 154
+token.number = 220
+token.comment = 247
+EOF
+printf 'fn x() {}\n' > "$TMPDIR/sample.rs"
+out=$(XDG_CONFIG_HOME="$TMPDIR/userhome" "$BIN" -n --color=always --paging=never --theme=test_theme "$TMPDIR/sample.rs")
+case "$out" in
+    *"[38;5;37m"*) ;;
+    *) fail "user theme test_theme did not apply header_color=37" ;;
+esac
+case "$out" in
+    *"[38;5;207m"*) ;;
+    *) fail "user theme test_theme did not apply token.keyword=207" ;;
+esac
+# Theme name not found → exit 2 (same as bogus bundled theme).
+set +e
+"$BIN" --theme=zzz_definitely_missing "$TMPDIR/sample.rs" > /dev/null 2>"$TMPDIR/err"
+rc=$?
+set -e
+[ "$rc" = "2" ] || fail "missing theme exit: got $rc, expected 2"
+
 # 1.1.2 REGRESSION LOCK — bundled grammars cwd-portability
 # ---------------------------------------------------------------------
 # Was a KNOWN-FAILURE in 1.1.1; fixed in 1.1.2 by resolving grammars
@@ -594,21 +648,35 @@ grep -q ":1: bad value" "$TMPDIR/err" \
 # M8a — Robustness (binary detect, large-file notice, weird inputs)
 # ============================================================
 
-# Binary file: NUL byte in first chunk → skip with notice, don't dump.
+# Binary file: 1.1.3 changed pre-1.1.3 skip-notice → auto hex-dump.
+# stdout now carries an xxd-style dump; stderr stays clean; exit 0.
 printf '\x00binary\x00content\x00' > "$TMPDIR/bin.dat"
-set +e
-"$BIN" "$TMPDIR/bin.dat" > "$TMPDIR/out" 2> "$TMPDIR/err"
-rc=$?
-set -e
-[ ! -s "$TMPDIR/out" ] || fail "binary file dumped to stdout instead of skipping"
-grep -q "binary file" "$TMPDIR/err" \
-    || fail "binary skip did not mention 'binary file' on stderr"
-# One file, all-fail → exit 4.
-[ "$rc" = "4" ] || fail "binary-skip single-file exit: got $rc, expected 4"
+"$BIN" "$TMPDIR/bin.dat" > "$TMPDIR/out" 2> "$TMPDIR/err" \
+    || fail "binary auto hex-dump should exit 0 (got non-zero)"
+[ -s "$TMPDIR/out" ] || fail "binary auto hex-dump emitted no stdout"
+grep -q "binary" "$TMPDIR/out" \
+    || fail "binary auto hex-dump missing ASCII column with 'binary' substring"
+[ ! -s "$TMPDIR/err" ] || fail "binary auto hex-dump leaked stderr: $(cat "$TMPDIR/err")"
 
 # Binary with -p (cat parity) MUST dump byte-identically.
 diff "$TMPDIR/bin.dat" <("$BIN" -p "$TMPDIR/bin.dat") > /dev/null \
     || fail "-p did not byte-identically dump binary file (cat-parity)"
+
+# 1.1.3 — explicit --hex / -x forces xxd-style on text files too.
+printf 'hello\nworld\n' > "$TMPDIR/text.txt"
+out=$("$BIN" --hex "$TMPDIR/text.txt")
+case "$out" in
+    *"68 65 6c 6c 6f 0a"*"|hello."*) ;;
+    *) fail "--hex did not emit xxd-style hex+ASCII on text file: $out" ;;
+esac
+out=$("$BIN" -x "$TMPDIR/text.txt")
+case "$out" in
+    *"68 65 6c 6c 6f"*) ;;
+    *) fail "-x short form does not match --hex" ;;
+esac
+# -p wins over --hex (cat parity sacred).
+diff "$TMPDIR/text.txt" <("$BIN" -p --hex "$TMPDIR/text.txt") > /dev/null \
+    || fail "-p --hex broke cat parity"
 
 # Binary with -A MUST render (escape glyphs), not skip.
 "$BIN" -A "$TMPDIR/bin.dat" > "$TMPDIR/out" 2> "$TMPDIR/err" \
@@ -630,14 +698,17 @@ rc=$?
 set -e
 # -p bypasses binary detection — all three files dump. Exit code 0.
 [ "$rc" = "0" ] || fail "-p mixed exit: got $rc, expected 0"
-# Without -p, binary is skipped, others render. Expect exit 1 (partial).
-set +e
+# 1.1.3 — without -p, binary auto-hex-dumps inline; all three files
+# render successfully. Pre-1.1.3 this was a partial-failure case
+# (binary skipped, exit 1, "binary file" notice on stderr). Note a.txt
+# and b.txt were just re-printed above with "hello\n" / "world\n".
 "$BIN" "$TMPDIR/a.txt" "$TMPDIR/bin.dat" "$TMPDIR/b.txt" \
-    > "$TMPDIR/out" 2> "$TMPDIR/err"
-rc=$?
-set -e
-[ "$rc" = "1" ] || fail "mixed-with-binary exit: got $rc, expected 1 (partial)"
-grep -q "binary file" "$TMPDIR/err" || fail "binary notice missing in mixed run"
+    > "$TMPDIR/out" 2> "$TMPDIR/err" \
+    || fail "mixed-with-binary should now exit 0 (hex-dump fallback)"
+[ ! -s "$TMPDIR/err" ] || fail "mixed-with-binary leaked stderr: $(cat "$TMPDIR/err")"
+grep -q "^hello$"   "$TMPDIR/out" || fail "mixed run missing a.txt content"
+grep -q "^world$"   "$TMPDIR/out" || fail "mixed run missing b.txt content"
+grep -q "^00000000" "$TMPDIR/out" || fail "mixed run missing hex-dump offsets for binary"
 
 # Large-file highlight fallback: creating a >128KB file should still
 # render (no crash) with color stripped and a stderr notice.
