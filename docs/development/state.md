@@ -6,6 +6,14 @@
 
 ## Version
 
+**1.1.2** — shipped 2026-04-25. Bundled grammars now resolve via
+`/proc/self/exe` instead of cwd-relative `grammars/<name>.cyml`. Prior
+versions silently produced zero ANSI bytes when invoked from any cwd
+without a `grammars/` subdirectory (cyrius v5.6.45 ticket). Resolution
+order: `<exe-dir>/grammars/` → `<exe-dir>/../grammars/` (dev: `build/owl`
++ sibling `./grammars/`) → cwd-relative legacy fallback. Smoke gate
+locked to `fail()` from this version forward.
+
 **1.1.1** — shipped 2026-04-25. Ergonomics drop: `--version --verbose`
 prints vyakarana + cyrius pins; `--strip-ansi=auto|always|never`
 aliases `-r`; `--line-range=A:B` filters output to a 1-indexed
@@ -30,14 +38,14 @@ complete; full owl attack surface audited and hardened.
 
 ## Binary
 
-- ~174 KB (non-DCE build, `build/owl`)
+- ~178 KB (non-DCE build, `build/owl`)
 - Startup targets: `owl --version` 1–2 ms, tiny-file highlight 2 ms
   (25× under the 50 ms no-op target in `docs/design-spec.md`)
 
 ## Source
 
-- ~2,584 lines across 6 modules:
-  - `src/main.cyr` (~1,369) — entry, CLI, render dispatch, TTY/mode resolution
+- ~2,734 lines across 6 modules:
+  - `src/main.cyr` (~1,519) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup
   - `src/lang.cyr` (~300) — extension + shebang language detection + ext-override table
   - `src/theme.cyr` (~180) — bundled themes, 10-kind palette, ANSI emission
   - `src/pager.cyr` (~114) — pager spawn + SIGPIPE handling

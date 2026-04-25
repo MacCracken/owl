@@ -49,3 +49,30 @@ deferred to a follow-up ADR if it becomes a forcing function.
   ADR 0003.
 - Released in owl 1.1.0.
 - Documented in CHANGELOG.md under `[1.1.0]` "Fixed".
+
+## Amendment — 2026-04-25
+
+The Context section above stated that "the file-path code path
+(`render_path`) already honored `--color=always` correctly." This
+was true *only when owl was invoked from its own source repo cwd*.
+From any other cwd (cyrius repo, `$HOME`, `/tmp`, an end-user's
+project tree), the file-path branch *also* produced zero ANSI bytes
+— root cause: the binary loads bundled grammars via the relative
+path `grammars/<name>.cyml` (verified via `strings build/owl |
+grep grammars/`), which silently fails when the cwd has no
+`grammars/` subdirectory.
+
+The stdin highlight gap fixed by this ADR was real and structurally
+independent — `render_fd` had no highlight branch at all,
+regardless of cwd. The grammar-cwd-portability issue is a separate
+bug affecting both render paths once they call into vyakarana.
+
+The cyrius v5.6.45 ticket required *both* fixes to fully close:
+- 1.1.0 — `render_fd` gains a highlight branch (this ADR).
+- 1.1.2 (planned) — grammar lookup becomes cwd-independent.
+
+The 1.1.2 fix gets its own ADR once the approach is chosen
+(inline at compile time vs. well-known absolute paths vs.
+exe-relative resolution). A KNOWN-FAILURE smoke gate at
+`scripts/smoke.sh` pins the bug and auto-flips to a hard
+regression lock when the fix lands.

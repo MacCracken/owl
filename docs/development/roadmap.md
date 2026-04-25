@@ -1,9 +1,9 @@
 # owl — Roadmap
 
-owl 1.1.1 shipped 2026-04-25 (ergonomics drop: `--version --verbose`,
-`--strip-ansi=*`, `--line-range=A:B`, per-language config overrides,
-`--wrap=character`). M0–M8 + 1.1.0 + 1.1.1 details live in
-`CHANGELOG.md`; this file is the forward-looking planning surface.
+owl 1.1.2 shipped 2026-04-25 (grammar lookup is now `/proc/self/exe`-
+relative; closes cyrius v5.6.45). M0–M8 + 1.1.0 + 1.1.1 + 1.1.2
+details live in `CHANGELOG.md`; this file is the forward-looking
+planning surface.
 
 ---
 
@@ -31,11 +31,11 @@ principles. (1.1.1 shipped — see `CHANGELOG.md`.)
 ### 1.1.2 — content fallbacks (M)
 
 Items affect what owl does when the default path doesn't fit the
-input, plus the post-1.1.0 follow-up to the file-path color path.
+input. (The grammar-cwd-portability bug originally pinned here
+shipped in 1.1.2 — see `CHANGELOG.md`.)
 
 | Candidate | Rationale |
 |-----------|-----------|
-| Bundled grammars are loaded via relative `grammars/<name>.cyml` path — fail when invoked from non-owl cwd | **Root cause confirmed 2026-04-25 against owl 1.1.1.** The owl binary references its bundled grammars at the relative path `grammars/<name>.cyml` (verified by `strings build/owl \| grep grammars/`). When invoked from owl's source repo cwd, the lookup succeeds via `./grammars/`; from any other cwd (cyrius repo, `$HOME`, `/tmp`, an end-user's project tree), the grammar files are not found and owl silently falls back to plain output — `--color=always` becomes a no-op for syntax tokens. Surfaces NOT as a parse error or warning, just as zero ANSI bytes. **This was the actual cause of the cyrius v5.6.45 ticket.** The decision-log entry claiming "file paths already honored `--color=always`" was correct ONLY for invocations from inside the owl repo; the user-visible Claude Code routing case (`Read(**/*.cyr)` → `Bash(owl ...)` from cyrius cwd) hits the bug. Smoke gate added at `scripts/smoke.sh` (KNOWN-FAILURE marker; auto-flips to hard regression lock when fix lands). **Fix options:** (a) inline grammars into the binary at compile time (cleanest — small CYML files); (b) search absolute well-known paths (`/usr/share/owl/grammars/`, `$XDG_DATA_HOME/owl/grammars/`, `<dirname /proc/self/exe>/../share/owl/grammars/`); (c) read binary's own location and look relative to that. (b) and (c) keep the current packaging shape; (a) eliminates external file dependency entirely. Update the ADR / decision log entry once the fix approach is chosen. |
 | Binary-file hex-dump fallback | `owl binary.bin` today emits a skip-notice; offer `xxd`-style hex dump as an opt-in or auto fallback. |
 | User-installable grammars + themes | `$XDG_CONFIG_HOME/owl/{grammars,themes}/` overlays on top of the bundled set. Lets users add coverage without a vyakarana PR. |
 

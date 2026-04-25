@@ -6,6 +6,32 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.1.2] — 2026-04-25
+
+### Fixed
+
+- **Bundled grammars now resolve via `/proc/self/exe` instead of
+  cwd.** Prior to 1.1.2 the binary loaded grammars from the literal
+  relative path `grammars/<name>.cyml`, so `--color=always` produced
+  zero ANSI bytes when owl was invoked from any cwd that didn't
+  happen to contain a `grammars/` subdirectory (cyrius repo, `$HOME`,
+  `/tmp`, end-user project trees). The cyrius v5.6.45 ticket — which
+  routes Claude Code's `Read(**/*.cyr)` through `Bash(owl …)` from
+  the cyrius repo cwd — was the public-facing symptom.
+
+  owl now resolves the grammars directory at first highlight need:
+  `<exe-dir>/grammars/` first (installed-adjacent layout), then
+  `<exe-dir>/../grammars/` (covers the dev workflow where `build/owl`
+  sits next to `./grammars/`), with cwd-relative as a final fallback
+  for pre-1.1.2 muscle memory. Probe is `cyrius.cyml`; on success,
+  every bundled grammar pre-loads via absolute paths and vyakarana's
+  lazy relative-path bootstrap is bypassed.
+
+  The 1.1.0 stdin highlight fix was structurally correct but did not
+  close the cyrius v5.6.45 ticket on its own — see the
+  2026-04-25 amendment in
+  [`docs/adr/0007-stdin-syntax-highlighting.md`](docs/adr/0007-stdin-syntax-highlighting.md).
+
 ## [1.1.1] — 2026-04-25
 
 Ergonomics drop. Five small, contained CLI improvements; no

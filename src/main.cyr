@@ -10,7 +10,7 @@ include "src/config.cyr"
 
 # Keep OWL_VERSION in sync with the VERSION file.
 # A M8 CI check will enforce equality; for now, manual.
-var OWL_VERSION = "owl 1.1.1";
+var OWL_VERSION = "owl 1.1.2";
 
 var BUFSIZE = 65536;
 
@@ -293,6 +293,156 @@ fn report_error(path, reason) {
     eprint(reason, strlen(reason));
     eprint("\n", 1);
     return 0;
+}
+
+# ── Grammar resolution (1.1.2) ─────────────────────────────────────────
+# vyakarana's bootstrap loads grammars via the literal relative path
+# "grammars/<lang>.cyml" (lib/vyakarana.cyr:1774). That breaks for any
+# invocation where the cwd doesn't happen to contain a grammars/
+# subdirectory — silently, because grammar_load returns 0 and the
+# registry just stays empty, so has_grammar(lang) reports false and
+# render_path skips the highlight branch entirely. The user sees plain
+# bytes with no error.
+#
+# Fix: owl resolves grammars/ via /proc/self/exe (binary location)
+# before vyakarana's lazy bootstrap fires, pre-loads every grammar
+# with an absolute path, and sets _grammars_bootstrapped = 1 so
+# vyakarana's relative-path fallback never runs. Tries:
+#   1. <exe-dir>/grammars/                       (installed-adjacent)
+#   2. <exe-dir>/../grammars/                    (dev: build/owl + ./grammars/)
+#   3. cwd-relative via vyakarana's legacy path  (resolved-by 0 on failure)
+# Probe is grammars/cyrius.cyml — every owl build has it.
+
+var g_grammars_dir          = 0;   # NUL-term abs path of grammars/, or 0
+var g_grammars_dir_resolved = 0;   # cache flag: don't re-resolve
+
+fn _grammar_dir_has_cyrius(dir) {
+    # Build "<dir>cyrius.cyml" in a probe buffer, file_open it.
+    var dlen = strlen(dir);
+    if (dlen + 12 >= 512) { return 0; }
+    var probe[512];
+    var k = 0;
+    while (k < dlen) { store8(&probe + k, load8(dir + k)); k = k + 1; }
+    var name = "cyrius.cyml";
+    var nlen = strlen(name);
+    var j = 0;
+    while (j < nlen) { store8(&probe + dlen + j, load8(name + j)); j = j + 1; }
+    store8(&probe + dlen + nlen, 0);
+    var fd = file_open(&probe, O_RDONLY, 0);
+    if (fd < 0) { return 0; }
+    file_close(fd);
+    return 1;
+}
+
+# Build "<base>grammars/" into out (alloc'd). Returns out.
+fn _join_grammars(base, base_len) {
+    var suffix = "grammars/";
+    var slen = strlen(suffix);
+    var total = base_len + slen + 1;
+    var out = alloc(total);
+    var k = 0;
+    while (k < base_len) { store8(out + k, load8(base + k)); k = k + 1; }
+    var j = 0;
+    while (j < slen) { store8(out + base_len + j, load8(suffix + j)); j = j + 1; }
+    store8(out + base_len + slen, 0);
+    return out;
+}
+
+fn _resolve_grammars_dir() {
+    if (g_grammars_dir_resolved == 1) { return g_grammars_dir; }
+    g_grammars_dir_resolved = 1;
+
+    # readlink /proc/self/exe → absolute binary path. SYS_readlink = 89
+    # on Linux x86_64. Returns negative on failure (no /proc, etc.).
+    var link[512];
+    var n = syscall(89, "/proc/self/exe", &link, 511);
+    if (n <= 0) { g_grammars_dir = 0; return 0; }
+    store8(&link + n, 0);
+
+    # Find last "/" — everything before it (inclusive) is the exe dir.
+    var slash = n;
+    while (slash > 0) {
+        if (load8(&link + slash - 1) == 47) { break; }
+        slash = slash - 1;
+    }
+
+    # Candidate 1: <exe-dir>/grammars/
+    var c1 = _join_grammars(&link, slash);
+    if (_grammar_dir_has_cyrius(c1) == 1) {
+        g_grammars_dir = c1;
+        return c1;
+    }
+
+    # Candidate 2: <exe-dir>/../grammars/  (covers build/owl + ./grammars/)
+    # Strip one trailing path component from the exe dir to get parent.
+    if (slash > 1) {
+        var parent_end = slash - 1;     # skip trailing "/"
+        while (parent_end > 0) {
+            if (load8(&link + parent_end - 1) == 47) { break; }
+            parent_end = parent_end - 1;
+        }
+        var c2 = _join_grammars(&link, parent_end);
+        if (_grammar_dir_has_cyrius(c2) == 1) {
+            g_grammars_dir = c2;
+            return c2;
+        }
+    }
+
+    # No exe-relative dir found. Leave g_grammars_dir = 0; caller will
+    # let vyakarana fall back to cwd-relative load. That fallback works
+    # only when cwd has grammars/ — same as pre-1.1.2 behavior.
+    g_grammars_dir = 0;
+    return 0;
+}
+
+# Load one grammar by name (e.g. "shell.cyml") from the resolved dir.
+# Caller pre-allocates path_buf to avoid alloc-per-language churn.
+fn _owl_load_grammar(dir, path_buf, name) {
+    var dlen = strlen(dir);
+    var nlen = strlen(name);
+    var k = 0;
+    while (k < dlen) { store8(path_buf + k, load8(dir + k)); k = k + 1; }
+    var j = 0;
+    while (j < nlen) { store8(path_buf + dlen + j, load8(name + j)); j = j + 1; }
+    store8(path_buf + dlen + nlen, 0);
+    var g = grammar_load(path_buf);
+    if (g != 0) { registry_add(g); }
+    return 0;
+}
+
+# Owl-side bootstrap. Pre-loads every bundled grammar via an absolute
+# path resolved from /proc/self/exe, then sets vyakarana's
+# _grammars_bootstrapped flag so its lazy relative-path bootstrap
+# doesn't fire and overwrite the registry with failed loads.
+# Idempotent. Cheap on the second call.
+fn _owl_bootstrap_grammars() {
+    if (_grammars_bootstrapped == 1) { return 0; }
+    var dir = _resolve_grammars_dir();
+    if (dir == 0) { return 0; }   # let vyakarana's relative path try
+
+    registry_init();
+    var path = alloc(1024);
+    _owl_load_grammar(dir, path, "shell.cyml");
+    _owl_load_grammar(dir, path, "toml.cyml");
+    _owl_load_grammar(dir, path, "json.cyml");
+    _owl_load_grammar(dir, path, "cyrius.cyml");
+    _owl_load_grammar(dir, path, "rust.cyml");
+    _owl_load_grammar(dir, path, "yaml.cyml");
+    _owl_load_grammar(dir, path, "markdown.cyml");
+    _owl_load_grammar(dir, path, "c.cyml");
+    _owl_load_grammar(dir, path, "typescript.cyml");
+    _owl_load_grammar(dir, path, "javascript.cyml");
+    _owl_load_grammar(dir, path, "python.cyml");
+
+    _grammars_bootstrapped = 1;
+    return 0;
+}
+
+# Wrapper around vyakarana's has_grammar that ensures owl's
+# absolute-path bootstrap runs first.
+fn _owl_has_grammar(lang) {
+    _owl_bootstrap_grammars();
+    return has_grammar(lang);
 }
 
 fn render_reset() {
@@ -787,7 +937,7 @@ fn render_fd(fd, path_for_header) {
     var highlight_ok = 0;
     if (g_want_color == 1) {
         if (streq(lang, "plain") == 0) {
-            if (has_grammar(lang) == 1) { highlight_ok = 1; }
+            if (_owl_has_grammar(lang) == 1) { highlight_ok = 1; }
         }
     }
 
@@ -925,7 +1075,7 @@ fn render_path(path) {
     var highlight_ok = 0;
     if (g_want_color == 1) {
         if (streq(lang, "plain") == 0) {
-            if (has_grammar(lang) == 1) { highlight_ok = 1; }
+            if (_owl_has_grammar(lang) == 1) { highlight_ok = 1; }
         }
     }
 

@@ -294,61 +294,29 @@ case "$out" in
 esac
 
 # ---------------------------------------------------------------------
-# 1.1.2 PRE-FIX REGRESSION GATE — bundled grammars cwd-portability
+# 1.1.2 REGRESSION LOCK — bundled grammars cwd-portability
 # ---------------------------------------------------------------------
-# Pinned in docs/development/roadmap.md § 1.1.2.
+# Was a KNOWN-FAILURE in 1.1.1; fixed in 1.1.2 by resolving grammars
+# via /proc/self/exe. Now a hard fail() — if owl ever loses the
+# exe-relative lookup, this trips immediately.
 #
-# Root cause (diagnosed 2026-04-25): the owl binary references its
-# bundled grammars via the RELATIVE path `grammars/<name>.cyml`
-# (verified by `strings build/owl | grep grammars/`). When owl is
-# invoked from its own source repo cwd, the lookup succeeds because
-# `./grammars/` exists there. When invoked from ANY OTHER cwd
-# (cyrius repo, $HOME, /tmp, an end-user's project tree), the
-# grammar files are not found, owl silently falls back to plain
-# output, and `--color=always` becomes a no-op for syntax tokens.
-#
-# This is the Claude Code `Read(**/*.cyr)` routing case (owl invoked
-# from cyrius repo cwd) and any end-user usage where owl isn't
-# launched from its own source tree. Surfaces NOT as a parse error
-# or warning — silently as zero color bytes.
-#
-# Fix options for 1.1.2: (a) inline the grammars into the binary at
-# compile time; (b) search absolute well-known paths
-# (`/usr/share/owl/grammars/`, `$XDG_DATA_HOME/owl/grammars/`,
-# `<dirname /proc/self/exe>/../share/owl/grammars/`); (c) read
-# binary's own location and look relative to that.
-#
-# This block currently fails on 1.1.1 — emits KNOWN-FAILURE on
-# stderr but does NOT exit non-zero (avoids breaking CI for a
-# pinned-for-fix issue). When 1.1.2 ships, the success branch fires
-# and reminds the maintainer to flip to a hard `fail "..."` —
-# locking regression protection from that point forward.
-#
-# CRITICAL: must `cd` out of the owl repo first, otherwise the
-# grammar lookup accidentally succeeds via the relative path and
-# the test gives a false PASS. This was caught when the initial
-# version of this gate (without the cd) reported PASS while the
-# user-reproducible bug still existed.
+# CRITICAL: must `cd` out of the owl repo first. The initial version
+# of this gate (without the cd) reported PASS while the user-
+# reproducible bug still existed, because the cwd-relative grammar
+# lookup accidentally succeeded inside the owl source tree.
 printf 'fn greet() { return "hi"; }\nvar count = 42;\n' > "$TMPDIR/sample.cyr"
 ABS_BIN="$(realpath "$BIN")"
 out=$(cd "$TMPDIR" && "$ABS_BIN" --color=always --paging=never "$TMPDIR/sample.cyr")
 case "$out" in
-    *$(printf '\033')*)
-        echo "  smoke: 1.1.2 grammar-cwd-portability gate now PASSES on $("$BIN" --version) — convert this block to a hard fail() lock" >&2 ;;
-    *)
-        echo "  smoke: KNOWN-FAILURE — owl invoked from non-owl cwd ($TMPDIR) emits no ANSI for .cyr file on $("$BIN" --version); root cause: relative grammars/ path lookup; pinned for 1.1.2" >&2 ;;
+    *$(printf '\033')*) ;;
+    *) fail "1.1.2 regression: owl from non-owl cwd ($TMPDIR) emits no ANSI for .cyr file — grammar lookup not exe-relative" ;;
 esac
-
-# Also exercise the explicit --language= case from outside the owl
-# repo. If the grammar lookup is the issue, BOTH variants fail
-# identically. If --language= happens to use a different code path
-# that works, the failure modes diverge and that's diagnostic.
+# Same scenario with explicit --language=cyrius — exercises the
+# render path that doesn't rely on extension detection.
 out=$(cd "$TMPDIR" && "$ABS_BIN" --color=always --paging=never --language=cyrius "$TMPDIR/sample.cyr")
 case "$out" in
-    *$(printf '\033')*)
-        echo "  smoke: 1.1.2 cwd + --language=cyrius gate now PASSES — convert this block to a hard fail() lock" >&2 ;;
-    *)
-        echo "  smoke: KNOWN-FAILURE — owl invoked from non-owl cwd ($TMPDIR) with --language=cyrius emits no ANSI on $("$BIN" --version); pinned for 1.1.2" >&2 ;;
+    *$(printf '\033')*) ;;
+    *) fail "1.1.2 regression: owl from non-owl cwd with --language=cyrius emits no ANSI" ;;
 esac
 
 # --color=always + --theme=light produces different bytes than --theme=dark
