@@ -51,12 +51,18 @@ fn start_pager() {
     }
 
     if (pid == 0) {
-        # Child: wire pipe's read-end to stdin, exec shell with a
-        # minimum env so sh can locate `less` / user pager on PATH.
-        # Cyrius has no helper to forward /proc/self/environ as an
-        # argv-style envp yet; a single PATH entry covers the common
-        # case. Add forwarding when a real user needs LESS / LINES /
-        # etc.
+        # Child: wire pipe's read-end to stdin, then forward the
+        # parent's full environment to the pager. PATH-only used to
+        # be enough for sh to find `less` on $PATH, but less itself
+        # needs TERM (terminfo init), HOME (~/.lesshst), LANG/LC_*
+        # (UTF-8 handling), LESS (default flags), COLORTERM, etc.
+        # Without TERM less prints
+        #   'unknown': I need something more specific.
+        # to stderr and exits, leaving owl writing into a dead pipe
+        # → SIGPIPE → exit 141. Forwarding /proc/self/environ keeps
+        # the pager working without re-introducing shell injection
+        # (PAGER values still flow through `/bin/sh -c` exactly as
+        # before).
         sys_close(write_fd);
         sys_dup2(read_fd, 0);
         sys_close(read_fd);
@@ -65,9 +71,36 @@ fn start_pager() {
         store64(&argv + 8,  "-c");
         store64(&argv + 16, cmd);
         store64(&argv + 24, 0);
-        var envp[32];
-        store64(&envp + 0, "PATH=/usr/local/bin:/usr/bin:/bin");
-        store64(&envp + 8, 0);
+
+        var envbuf[16384];
+        var envp[2048];
+        var nbytes = 0;
+        var efd = file_open("/proc/self/environ", 0, 0);
+        if (efd >= 0) {
+            nbytes = file_read(efd, &envbuf, 16384);
+            file_close(efd);
+            if (nbytes < 0) { nbytes = 0; }
+        }
+        var slot = 0;
+        if (nbytes > 0) {
+            if (load8(&envbuf) != 0) {
+                store64(&envp + 0, &envbuf);
+                slot = 1;
+            }
+            var pos = 0;
+            while (pos < nbytes - 1) {
+                if (load8(&envbuf + pos) == 0 && (pos + 1) < nbytes && load8(&envbuf + pos + 1) != 0 && slot < 255) {
+                    store64(&envp + slot * 8, &envbuf + pos + 1);
+                    slot = slot + 1;
+                }
+                pos = pos + 1;
+            }
+        }
+        if (slot == 0) {
+            store64(&envp + 0, "PATH=/usr/local/bin:/usr/bin:/bin");
+            slot = 1;
+        }
+        store64(&envp + slot * 8, 0);
         sys_execve("/bin/sh", &argv, &envp);
         sys_exit(127);
     }

@@ -436,6 +436,21 @@ if command -v script > /dev/null 2>&1; then
                 < /dev/null > /dev/null 2>&1 || true
         [ ! -f "$TMPDIR/pager_marker" ] \
             || fail "pager invoked despite --paging=never"
+
+        # Spawned pager must inherit parent env (TERM, HOME, LESS, ...).
+        # Regression guard for the bug where only PATH was forwarded:
+        # less could not init terminfo, printed
+        #   'unknown': I need something more specific.
+        # to stderr and exited, leaving owl writing into a dead pipe
+        # (SIGPIPE -> exit 141).
+        rm -f "$TMPDIR/pager_term"
+        TERM=xterm-256color \
+        OWL_PAGER="sh -c 'printf %s \"\$TERM\" > \"$TMPDIR/pager_term\"; cat'" \
+            script -qc "'$BIN' --paging=always '$TMPDIR/a.txt'" /dev/null \
+                < /dev/null > /dev/null 2>&1 || true
+        captured=$(cat "$TMPDIR/pager_term" 2>/dev/null || true)
+        [ "$captured" = "xterm-256color" ] \
+            || fail "pager did not inherit TERM (got: '$captured')"
     fi
 fi
 

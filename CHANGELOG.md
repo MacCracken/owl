@@ -4,7 +4,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-_No unreleased changes._
+### Fixed
+
+- **Pager spawn now forwards the parent environment.** The child
+  process previously received only `PATH=/usr/local/bin:/usr/bin:/bin`,
+  so `less` could not init terminfo (no `TERM`), printed
+  `'unknown': I need something more specific.` to stderr and exited.
+  Owl was then mid-write into the dead pipe and got `SIGPIPE` →
+  `exit 141`. `pager.cyr` now reads `/proc/self/environ` in the child
+  and rebuilds `envp` from it (TERM, HOME, LANG, LESS, COLORTERM, …
+  all flow through). Falls back to the previous PATH-only behavior if
+  `/proc/self/environ` is unreadable, so containers without `/proc`
+  do not regress. Pager values still flow through `/bin/sh -c` exactly
+  as before — no new shell-injection surface.
+
+  Smoke gate added: spawned pager must capture the parent's `TERM`.
 
 ## [1.1.4] — 2026-04-25
 
