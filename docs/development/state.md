@@ -6,6 +6,13 @@
 
 ## Version
 
+**1.1.6** — shipped 2026-04-26. Documentation polish + toolchain
+bump. `--line-range` help line now carries an inline
+`head -n N idiom: --line-range=:N` hint (cyrius-bb dogfood feedback —
+users coming from `head(1)` muscle memory weren't connecting the
+open-ended `:N` form with "first N lines"). No flag behavior change.
+Toolchain pin moved to cyrius 5.7.7.
+
 **1.1.5** — shipped 2026-04-26. Pager-spawn correctness fix.
 `pager.cyr` now forwards `/proc/self/environ` to the pager child
 instead of only `PATH`. Without this, `less` had no `TERM` and
@@ -57,20 +64,20 @@ complete; full owl attack surface audited and hardened.
 
 ## Toolchain
 
-- **Cyrius pin**: `5.6.44` (in `cyrius.cyml [package].cyrius`)
+- **Cyrius pin**: `5.7.7` (in `cyrius.cyml [package].cyrius`)
 
 ## Binary
 
-- ~207 KB (211,800 bytes; DCE and non-DCE identical, `build/owl`)
-- +14 KB vs 1.1.4 — env-forward loop in `pager.cyr` plus the 16 KiB
-  stack envbuf
+- ~207 KB (211,872 bytes; DCE and non-DCE identical, `build/owl`)
+- +72 bytes vs 1.1.5 — single new help-string line for the
+  `--line-range` head idiom hint
 - Startup targets: `owl --version` 1–2 ms, tiny-file highlight 2 ms
   (25× under the 50 ms no-op target in `docs/design-spec.md`)
 
 ## Source
 
-- ~3,369 lines across 6 modules:
-  - `src/main.cyr` (~1,794) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff
+- ~3,370 lines across 6 modules:
+  - `src/main.cyr` (~1,795) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff
   - `src/theme.cyr` (~431) — bundled themes, 10-kind palette, ANSI emission, user-theme loader (1.1.3)
   - `src/lang.cyr` (~371) — extension/shebang/content detection + ext-override table
   - `src/vcs.cyr` (~328) — git VCS markers (M6) + --diff bypass for piped output

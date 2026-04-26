@@ -10,7 +10,7 @@ include "src/config.cyr"
 
 # Keep OWL_VERSION in sync with the VERSION file.
 # A M8 CI check will enforce equality; for now, manual.
-var OWL_VERSION = "owl 1.1.5";
+var OWL_VERSION = "owl 1.1.6";
 
 var BUFSIZE = 65536;
 
@@ -1445,10 +1445,10 @@ fn print_version() {
     if (g_flag_verbose == 1) {
         # Kept in sync with cyrius.cyml [deps.vyakarana].tag and
         # [package].cyrius. Useful for bug reports — "owl 1.1.1
-        # vyakarana 1.0.2 cyrius 5.6.44 linux-x86_64" pins the exact
+        # vyakarana 1.0.2 cyrius 5.7.7 linux-x86_64" pins the exact
         # toolchain + dep versions a user is running against.
         println("vyakarana 1.0.2");
-        println("cyrius 5.6.44");
+        println("cyrius 5.7.7");
         println("target linux-x86_64");
     }
     return EXIT_OK;
@@ -1475,6 +1475,7 @@ fn print_help() {
     println("      --strip-ansi=<when> auto | always | never (less -R style alias of -r)");
     println("      --tabs=<n>         Expand tabs to N spaces (default 4, 0 = literal)");
     println("      --line-range=A:B   Print only lines A..B (1-indexed; A: or :B open-ended)");
+    println("                         head -n N idiom: --line-range=:N");
     println("      --wrap=<mode>      auto | never | character (terminal-width hard wrap)");
     println("      --color=<when>     auto | always | never");
     println("      --paging=<when>    auto | always | never");

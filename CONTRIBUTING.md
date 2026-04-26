@@ -4,7 +4,7 @@ Thanks for wanting to help `owl` see more.
 
 ## Prerequisites
 
-- Cyrius toolchain 5.6.44+ (`cyrius` on `$PATH`) — <https://github.com/MacCracken/cyrius>
+- Cyrius toolchain 5.7.7+ (`cyrius` on `$PATH`) — <https://github.com/MacCracken/cyrius>
 - A POSIX-ish host (Linux primary; macOS best-effort). `owl` targets
   AGNOS long-term, but the development shape is portable.
 
@@ -14,7 +14,7 @@ Thanks for wanting to help `owl` see more.
 2. `cyrius deps` — populates `lib/` from `cyrius.cyml [deps]`. `lib/`
    is gitignored, so this step is mandatory after every fresh
    checkout. The toolchain pin in `cyrius.cyml [package].cyrius`
-   (currently `5.6.44`) is the only authority for the Cyrius version
+   (currently `5.7.7`) is the only authority for the Cyrius version
    — never create a `.cyrius-toolchain` file.
 3. Branch from `main`
 4. Make your change

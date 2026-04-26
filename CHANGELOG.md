@@ -6,6 +6,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.1.6] — 2026-04-26
+
+Documentation polish + toolchain bump. Single-issue patch.
+
+### Changed
+
+- **`--line-range` help now calls out the head/tail idiom.** Field
+  notes from cyrius-bb dogfooding flagged that users coming from
+  `head(1)` muscle memory don't immediately connect the open-ended
+  `:N` form with "first N lines". The help line for `--line-range`
+  now carries an inline hint: `head -n N idiom: --line-range=:N`.
+  No behavior change — the flag itself is unchanged
+  (`src/main.cyr`, `print_help`).
+
+- **Toolchain pin bumped to cyrius 5.7.7.** `cyrius.cyml`,
+  `--verbose` banner, `CONTRIBUTING.md`, and `README.md` install
+  step all updated. No source changes required for the bump.
+
 ## [1.1.5] — 2026-04-26
 
 Pager-spawn correctness fix. Single-issue patch.
