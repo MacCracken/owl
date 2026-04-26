@@ -4,6 +4,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+_No unreleased changes._
+
+## [1.1.5] — 2026-04-26
+
+Pager-spawn correctness fix. Single-issue patch.
+
 ### Fixed
 
 - **Pager spawn now forwards the parent environment.** The child
@@ -11,14 +17,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   so `less` could not init terminfo (no `TERM`), printed
   `'unknown': I need something more specific.` to stderr and exited.
   Owl was then mid-write into the dead pipe and got `SIGPIPE` →
-  `exit 141`. `pager.cyr` now reads `/proc/self/environ` in the child
-  and rebuilds `envp` from it (TERM, HOME, LANG, LESS, COLORTERM, …
-  all flow through). Falls back to the previous PATH-only behavior if
+  `exit 141`, surfacing as a broken `owl <file>` on a TTY in any
+  shell where `TERM` was the only thing the child needed. `pager.cyr`
+  now reads `/proc/self/environ` in the child and rebuilds `envp`
+  from it (TERM, HOME, LANG, LESS, COLORTERM, … all flow through).
+  Falls back to the previous PATH-only behavior if
   `/proc/self/environ` is unreadable, so containers without `/proc`
-  do not regress. Pager values still flow through `/bin/sh -c` exactly
-  as before — no new shell-injection surface.
+  do not regress. Pager values still flow through `/bin/sh -c`
+  exactly as before — no new shell-injection surface.
 
   Smoke gate added: spawned pager must capture the parent's `TERM`.
+
+### Notes
+
+- DCE binary: 211,800 bytes (~207 KB; was ~193 KB at 1.1.4 — +14 KB
+  from the env-forward loop and 16 KiB stack envbuf).
+- `src/pager.cyr`: 114 → 147 lines.
 
 ## [1.1.4] — 2026-04-25
 

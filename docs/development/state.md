@@ -6,6 +6,15 @@
 
 ## Version
 
+**1.1.5** — shipped 2026-04-26. Pager-spawn correctness fix.
+`pager.cyr` now forwards `/proc/self/environ` to the pager child
+instead of only `PATH`. Without this, `less` had no `TERM` and
+exited at terminfo init (`'unknown': I need something more specific.`),
+SIGPIPE'd owl mid-write, and any TTY-mode `owl <file>` exited 141.
+Falls back to the prior PATH-only envp if `/proc/self/environ` is
+unreadable. Smoke gate locks in the regression: spawned pager must
+inherit parent `TERM`.
+
 **1.1.4** — shipped 2026-04-25. Smarter detection + diff mode:
 content-based language detection as a third-pass fallback for files
 with no extension and no shebang (`{`/`[`→json, `[name]`→toml,
@@ -52,19 +61,21 @@ complete; full owl attack surface audited and hardened.
 
 ## Binary
 
-- ~193 KB (non-DCE build, `build/owl`)
+- ~207 KB (211,800 bytes; DCE and non-DCE identical, `build/owl`)
+- +14 KB vs 1.1.4 — env-forward loop in `pager.cyr` plus the 16 KiB
+  stack envbuf
 - Startup targets: `owl --version` 1–2 ms, tiny-file highlight 2 ms
   (25× under the 50 ms no-op target in `docs/design-spec.md`)
 
 ## Source
 
-- ~3,336 lines across 6 modules:
+- ~3,369 lines across 6 modules:
   - `src/main.cyr` (~1,794) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff
   - `src/theme.cyr` (~431) — bundled themes, 10-kind palette, ANSI emission, user-theme loader (1.1.3)
   - `src/lang.cyr` (~371) — extension/shebang/content detection + ext-override table
   - `src/vcs.cyr` (~328) — git VCS markers (M6) + --diff bypass for piped output
   - `src/config.cyr` (~298) — `key = value` config parser (M7) + `ext.*` keys (1.1.1)
-  - `src/pager.cyr` (~114) — pager spawn + SIGPIPE handling
+  - `src/pager.cyr` (~147) — pager spawn + SIGPIPE handling + env forward (1.1.5)
 
 ## Tests
 

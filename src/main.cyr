@@ -10,7 +10,7 @@ include "src/config.cyr"
 
 # Keep OWL_VERSION in sync with the VERSION file.
 # A M8 CI check will enforce equality; for now, manual.
-var OWL_VERSION = "owl 1.1.4";
+var OWL_VERSION = "owl 1.1.5";
 
 var BUFSIZE = 65536;
 
