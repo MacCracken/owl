@@ -10,7 +10,7 @@ include "src/config.cyr"
 
 # Keep OWL_VERSION in sync with the VERSION file.
 # A M8 CI check will enforce equality; for now, manual.
-var OWL_VERSION = "owl 1.1.8";
+var OWL_VERSION = "owl 1.1.9";
 
 var BUFSIZE = 65536;
 
@@ -789,11 +789,14 @@ fn _in_range() {
     return 1;
 }
 
-# 1.1.8 — wrap line break with continuation gutter. Saves the active
-# token color (set by render_highlighted_buf), resets so the gutter
-# renders cleanly in lineno color, then restores the token color so
-# the next byte continues with its highlighting intact. render_chunk
-# leaves g_render_active_color at -1 so the save/restore is a no-op.
+# 1.1.8/1.1.9 — wrap line break with continuation gutter. Saves the
+# active token color (set by render_highlighted_buf), resets so the
+# gutter renders cleanly in lineno color, then restores the token
+# color so the next byte continues with its highlighting intact.
+# render_chunk leaves g_render_active_color at -1 so the save/restore
+# is a no-op. 1.1.9: continuation glyph is U+21AA "↪" (3 bytes) so
+# wrapped rows are visually distinct from the U+2502 "│" divider that
+# starts a new file line.
 fn _emit_wrap_break() {
     var saved = g_render_active_color;
     if (saved != 0 - 1) {
@@ -807,7 +810,7 @@ fn _emit_wrap_break() {
         syscall(1, 1, " ", 1);
         pad = pad + 1;
     }
-    syscall(1, 1, "│ ", 4);
+    syscall(1, 1, "↪ ", 4);
     if (g_want_color == 1) { ansi_reset(); }
     if (saved != 0 - 1) {
         if (g_want_color == 1) { ansi_fg(saved); }

@@ -6,6 +6,13 @@
 
 ## Version
 
+**1.1.9** — shipped 2026-04-27. Wrap-arrow polish. Wrap-continuation
+gutter switched from `│` (which matched the line divider and made
+stacked wrapped rows visually ambiguous against new file lines) to
+`↪` (U+21AA, bat's convention). `│` now means "start of a new file
+line"; `↪` means "continuation of the previous line", so a wrapped
+paragraph reads as one logical line at a glance.
+
 **1.1.8** — shipped 2026-04-27. Frame containment. `--wrap=auto`
 (default) now wraps content when the decorated frame is active so
 long lines stay inside the bottom rule; wrap-injected breaks emit a
@@ -91,17 +98,17 @@ complete; full owl attack surface audited and hardened.
 
 ## Binary
 
-- ~209 KB (213,776 bytes; DCE and non-DCE identical, `build/owl`)
-- +744 bytes vs 1.1.7 — `_emit_wrap_break` continuation-gutter
-  helper, wrap-resolution refactor in `resolve_mode`, and
-  `g_render_active_color` plumbing through `render_highlighted_buf`
+- ~209 KB (213,784 bytes; DCE and non-DCE identical, `build/owl`)
+- +8 bytes vs 1.1.8 — wrap-continuation glyph swap (`│` → `↪`);
+  arrow's UTF-8 bytes match the divider width, so the diff is just
+  the string-pool slot
 - Startup targets: `owl --version` 1–2 ms, tiny-file highlight 2 ms
   (25× under the 50 ms no-op target in `docs/design-spec.md`)
 
 ## Source
 
 - ~3,490 lines across 6 modules:
-  - `src/main.cyr` (~1,920) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff, bat-style header frame (1.1.7), wrap-continuation gutter (1.1.8)
+  - `src/main.cyr` (~1,920) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff, bat-style header frame (1.1.7), wrap-continuation gutter (1.1.8), `↪` wrap-arrow glyph (1.1.9)
   - `src/theme.cyr` (~431) — bundled themes, 10-kind palette, ANSI emission, user-theme loader (1.1.3)
   - `src/lang.cyr` (~371) — extension/shebang/content detection + ext-override table
   - `src/vcs.cyr` (~328) — git VCS markers (M6) + --diff bypass for piped output

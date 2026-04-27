@@ -653,11 +653,12 @@ nl_count=$(printf '%s' "$out" | tr -cd '\n' | wc -c)
 # Header rule + file line + middle rule + content (1 file-origin nl
 # + at least 1 wrap nl) + bottom rule = >= 6 newlines.
 [ "$nl_count" -ge 6 ] || fail "--wrap=auto did not wrap under -n: $nl_count newlines"
-# Wrap continuation lines start with whitespace + '│ ' (the divider
-# in lineno color). Existence proves continuation gutter aligned.
+# Wrap continuation lines start with whitespace + '↪ ' (the 1.1.9
+# wrap-arrow glyph in lineno color, distinct from '│' which marks
+# the start of a new file line). Existence proves alignment.
 case "$out" in
-    *"         │ a"*) ;;
-    *) fail "--wrap=auto missing divider continuation gutter under -n" ;;
+    *"         ↪ a"*) ;;
+    *) fail "--wrap=auto missing ↪ continuation gutter under -n" ;;
 esac
 
 # 1.1.8 — --wrap=never lets long lines overflow even when decorated.

@@ -6,6 +6,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.1.9] — 2026-04-27
+
+Wrap-arrow polish.
+
+### Changed
+
+- **Wrap-continuation gutter now uses `↪` (U+21AA) instead of `│`.**
+  In 1.1.8 the continuation glyph matched the line divider, which
+  made tightly-stacked wrapped rows visually ambiguous against new
+  file lines. The 1.1.9 glyph (bat's convention) keeps `│` for "this
+  is the start of a new file line" and `↪` for "this is the
+  continuation of the previous line", so a wrapped paragraph reads
+  as one logical line at a glance (`src/main.cyr`,
+  `_emit_wrap_break`).
+
+  Smoke gate updated: continuation assertion now looks for `↪ a`
+  under the wrap test instead of `│ a`.
+
+### Notes
+
+- DCE binary: 213,784 bytes (~209 KB; +8 bytes vs 1.1.8 — the
+  arrow's UTF-8 bytes match `│` width, so the diff is just the
+  string-pool slot).
+
 ## [1.1.8] — 2026-04-27
 
 Frame containment. The 1.1.7 bat-style header rendered correctly but
