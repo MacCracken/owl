@@ -6,6 +6,39 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.1.7] — 2026-04-27
+
+Header aesthetic refresh. Single-issue cosmetic update.
+
+### Changed
+
+- **File header is now a bat-style three-rule frame.** The single
+  `─── File: <path> ─` ribbon is replaced with a top rule
+  (`────┬────…`), an aligned `│ File: <path> (<lang>)` line, a
+  middle rule (`────┼────…`), the file body, and a bottom rule
+  (`────┴────…`). Rules span the actual terminal width via
+  `TIOCGWINSZ` on stdout (80-col fallback when winsize is
+  unavailable) and the junction column tracks the gutter divider
+  (col 7 without VCS markers, col 9 with). Rules render in the
+  active theme's `lineno_color`; the "File: …" label keeps
+  `header_color`. New `emit_footer()` pairs with `emit_header()`
+  via a `g_header_open` flag so every render path (plain stream,
+  highlighted, hex, binary auto-fallback) emits a matching bottom
+  rule. Plain mode (`-p`) and piped output stay byte-identical to
+  `cat` — the frame is decorated-mode only (`src/main.cyr`,
+  `emit_header` / new `emit_footer` / `_emit_rule` /
+  `_gutter_divider_col`).
+
+  Smoke gate updated: `── File:` substring matches now look for
+  `│ File:` (the path is on a separate line under the new layout).
+
+### Notes
+
+- DCE binary: 213,032 bytes (~208 KB; was ~207 KB at 1.1.6 —
+  +1,160 bytes for the rule helpers, footer pair, and two new
+  globals).
+- `src/main.cyr`: 1,795 → ~1,870 lines.
+
 ## [1.1.6] — 2026-04-26
 
 Documentation polish + toolchain bump. Single-issue patch.

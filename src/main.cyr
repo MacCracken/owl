@@ -10,7 +10,7 @@ include "src/config.cyr"
 
 # Keep OWL_VERSION in sync with the VERSION file.
 # A M8 CI check will enforce equality; for now, manual.
-var OWL_VERSION = "owl 1.1.6";
+var OWL_VERSION = "owl 1.1.7";
 
 var BUFSIZE = 65536;
 
@@ -75,6 +75,13 @@ var g_render_done      = 0;
 # resets at every emitted '\n' (file-origin or wrap-inserted).
 var g_wrap_cols = 0;
 var g_wrap_col  = 0;
+
+# 1.1.7 — bat-style header frame. _term_cols result cached per file so
+# top/middle/bottom rules render at a consistent width even if the
+# window resizes mid-file. g_header_open pairs emit_header with a
+# matching emit_footer in the main loop after each rendered file.
+var g_term_cols   = 0;
+var g_header_open = 0;
 
 # Audit FINDING-001: file-origin terminal escapes are stripped from
 # the byte stream in decorated/colored output. `-r` / `--raw-control-chars`
@@ -188,25 +195,96 @@ fn resolved_show_header() {
 
 # ── Decoration rendering ───────────────────────────────────────────────
 
+# 1.1.7 — bat-style three-rule header frame.
+#
+# Layout when VCS markers are inactive (gutter prefix is 9 cols):
+#   "───────┬──────────────────────…\n"
+#   "       │ File: <path> (<lang>)\n"
+#   "───────┼──────────────────────…\n"
+#   "     1 │ <content>\n"
+#   …
+#   "───────┴──────────────────────…\n"
+#
+# When VCS markers are active the gutter prefix grows by 2 cols and
+# each junction shifts from col 7 → col 9 to track the xe2x94x82
+# position. Rules span the full terminal width (TIOCGWINSZ on stdout,
+# 80-col fallback when not a TTY — header path itself is gated TTY-only
+# via resolved_show_header, so the fallback only kicks in for the rare
+# decorated-but-no-winsize case).
+
+fn _gutter_divider_col() {
+    if (vcs_enabled() == 1) { return 9; }
+    return 7;
+}
+
+fn _emit_dashes(n: i64) {
+    var i: i64 = 0;
+    while (i < n) {
+        syscall(1, 1, "─", 3);
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Emit one horizontal rule with the given junction glyph at the
+# divider column. junction is a 3-byte UTF-8 string ("┬" / "┼" / "┴").
+fn _emit_rule(junction) {
+    var div_col = _gutter_divider_col();
+    var cols    = g_term_cols;
+    if (cols <= 0)          { cols = 80; }
+    if (cols < div_col + 2) { cols = div_col + 2; }
+    if (g_want_color == 1) { ansi_fg(theme_lineno_color(g_active_theme)); }
+    _emit_dashes(div_col);
+    syscall(1, 1, junction, 3);
+    _emit_dashes(cols - div_col - 1);
+    if (g_want_color == 1) { ansi_reset(); }
+    syscall(1, 1, "\n", 1);
+    return 0;
+}
+
 fn emit_header(path) {
+    var c = _term_cols();
+    if (c <= 0) { c = 80; }
+    g_term_cols = c;
+
+    _emit_rule("┬");
+
+    # Header line: blank gutter (no lineno), divider, then "File: …".
+    var div_col = _gutter_divider_col();
+    if (g_want_color == 1) { ansi_fg(theme_lineno_color(g_active_theme)); }
+    var pad = 0;
+    while (pad < div_col) {
+        syscall(1, 1, " ", 1);
+        pad = pad + 1;
+    }
+    syscall(1, 1, "│ ", 4);
+    if (g_want_color == 1) { ansi_reset(); }
+
     if (g_want_color == 1) { ansi_fg(theme_header_color(g_active_theme)); }
-    syscall(1, 1, "─── File: ", 16);
+    syscall(1, 1, "File: ", 6);
     syscall(1, 1, path, strlen(path));
-    # Show detected language when non-plain — makes detection visible
-    # without requiring a debug flag. Full highlighting arrives in M3b.
     if (streq(g_active_lang, "plain") == 0) {
         syscall(1, 1, " (", 2);
         syscall(1, 1, g_active_lang, strlen(g_active_lang));
         syscall(1, 1, ")", 1);
     }
-    syscall(1, 1, " ", 1);
-    var i = 0;
-    while (i < 40) {
-        syscall(1, 1, "─", 3);
-        i = i + 1;
-    }
     if (g_want_color == 1) { ansi_reset(); }
     syscall(1, 1, "\n", 1);
+
+    _emit_rule("┼");
+
+    g_header_open = 1;
+    return 0;
+}
+
+# Pair for emit_header. Called from main() after each per-file render
+# returns so every code path that opened a header (hex, binary auto,
+# highlighted, plain stream) gets a matching bottom rule. No-op when
+# the header never opened (plain mode, piped without -n, etc.).
+fn emit_footer() {
+    if (g_header_open == 0) { return 0; }
+    _emit_rule("┴");
+    g_header_open = 0;
     return 0;
 }
 
@@ -1755,6 +1833,7 @@ fn main() {
             if (any_positional == 0) { resolve_mode(); if (should_page() == 1) { start_pager(); } }
             any_positional = 1;
             var stdin_rc = render_fd(STDIN, "<stdin>");
+            emit_footer();
             if (stdin_rc < 0) { fail = fail + 1; } else { ok = ok + 1; }
             i = i + 1;
             continue;
@@ -1768,6 +1847,7 @@ fn main() {
         if (any_positional == 0) { resolve_mode(); if (should_page() == 1) { start_pager(); } }
         any_positional = 1;
         var file_rc = render_path(a);
+        emit_footer();
         if (file_rc < 0) { fail = fail + 1; } else { ok = ok + 1; }
         i = i + 1;
     }
@@ -1777,6 +1857,7 @@ fn main() {
         resolve_mode();
         if (should_page() == 1) { start_pager(); }
         var bare_rc = render_fd(STDIN, "<stdin>");
+        emit_footer();
         stop_pager();
         if (bare_rc < 0) { return EXIT_ALL_FAIL; }
         return EXIT_OK;

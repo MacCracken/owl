@@ -154,7 +154,7 @@ out_long=$("$BIN" --number "$TMPDIR/a.txt")
 
 # -n also emits a file header with the path.
 case "$out" in
-    *"── File: $TMPDIR/a.txt"*) ;;
+    *"│ File: $TMPDIR/a.txt"*) ;;
     *) fail "-n did not emit file header" ;;
 esac
 
@@ -171,7 +171,7 @@ diff <("$BIN" -p -n "$TMPDIR/a.txt") "$TMPDIR/a.txt" > /dev/null \
 
 # Multi-file with -n shows one header per file.
 out=$("$BIN" -n "$TMPDIR/a.txt" "$TMPDIR/b.txt")
-hdr_count=$(printf '%s\n' "$out" | grep -c "── File: ")
+hdr_count=$(printf '%s\n' "$out" | grep -c "│ File: ")
 [ "$hdr_count" = "2" ] || fail "expected 2 file headers with -n, got $hdr_count"
 
 # --color=<value> parses. auto/always/never all accepted, bogus rejected.

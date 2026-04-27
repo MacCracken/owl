@@ -6,6 +6,19 @@
 
 ## Version
 
+**1.1.7** — shipped 2026-04-27. Header aesthetic refresh. The single
+`─── File: <path> ─` ribbon is replaced with a bat-style three-rule
+frame (top `┬`, header line `│ File: <path> (<lang>)`, middle `┼`,
+file body, bottom `┴`). Rules span the actual terminal width via
+`TIOCGWINSZ` on stdout (80-col fallback) and the junction column
+tracks the gutter divider position (7 without VCS markers, 9 with).
+Rules render in `lineno_color`; the "File:" label keeps
+`header_color`. New `emit_footer()` pairs with `emit_header()` via
+a `g_header_open` flag so every render path (plain, highlighted,
+hex, binary auto-fallback) emits a matching bottom rule. Plain mode
+(`-p`) stays byte-identical to `cat` — the frame is decorated-mode
+only.
+
 **1.1.6** — shipped 2026-04-26. Documentation polish + toolchain
 bump. `--line-range` help line now carries an inline
 `head -n N idiom: --line-range=:N` hint (cyrius-bb dogfood feedback —
@@ -68,16 +81,17 @@ complete; full owl attack surface audited and hardened.
 
 ## Binary
 
-- ~207 KB (211,872 bytes; DCE and non-DCE identical, `build/owl`)
-- +72 bytes vs 1.1.5 — single new help-string line for the
-  `--line-range` head idiom hint
+- ~208 KB (213,032 bytes; DCE and non-DCE identical, `build/owl`)
+- +1,160 bytes vs 1.1.6 — rule helpers (`_emit_dashes`, `_emit_rule`,
+  `_gutter_divider_col`), `emit_footer`, two new globals, expanded
+  `emit_header`
 - Startup targets: `owl --version` 1–2 ms, tiny-file highlight 2 ms
   (25× under the 50 ms no-op target in `docs/design-spec.md`)
 
 ## Source
 
-- ~3,370 lines across 6 modules:
-  - `src/main.cyr` (~1,795) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff
+- ~3,445 lines across 6 modules:
+  - `src/main.cyr` (~1,875) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff, bat-style header frame (1.1.7)
   - `src/theme.cyr` (~431) — bundled themes, 10-kind palette, ANSI emission, user-theme loader (1.1.3)
   - `src/lang.cyr` (~371) — extension/shebang/content detection + ext-override table
   - `src/vcs.cyr` (~328) — git VCS markers (M6) + --diff bypass for piped output
