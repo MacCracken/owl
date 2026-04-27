@@ -644,6 +644,34 @@ nl_count=$(printf '%s' "$out" | tr -cd '\n' | wc -c)
 diff <(printf '%s\n' "$long_line") <("$BIN" -p --wrap=character <<<"$long_line") > /dev/null \
     || fail "--wrap=character broke -p cat parity"
 
+# 1.1.8 — --wrap=auto (default) wraps content when the decorated
+# frame is rendering. A 200-char line piped through -n should wrap
+# inside the frame and emit at least one continuation gutter glyph
+# under the divider.
+out=$("$BIN" -n --paging=never <<<"$long_line")
+nl_count=$(printf '%s' "$out" | tr -cd '\n' | wc -c)
+# Header rule + file line + middle rule + content (1 file-origin nl
+# + at least 1 wrap nl) + bottom rule = >= 6 newlines.
+[ "$nl_count" -ge 6 ] || fail "--wrap=auto did not wrap under -n: $nl_count newlines"
+# Wrap continuation lines start with whitespace + '│ ' (the divider
+# in lineno color). Existence proves continuation gutter aligned.
+case "$out" in
+    *"         │ a"*) ;;
+    *) fail "--wrap=auto missing divider continuation gutter under -n" ;;
+esac
+
+# 1.1.8 — --wrap=never lets long lines overflow even when decorated.
+# The body row containing the 'a's must remain a single physical line
+# (only the file-origin newline at the end).
+out=$("$BIN" --wrap=never -n --paging=never <<<"$long_line")
+body_line=$(printf '%s\n' "$out" | grep 'aaaaaaa')
+body_count=$(printf '%s\n' "$out" | grep -c 'aaaaaaa')
+[ "$body_count" = "1" ] || fail "--wrap=never split content under -n: $body_count rows"
+# Plain mode + --wrap=auto still cat-parity (auto is a no-op without
+# the frame).
+diff <(printf '%s\n' "$long_line") <("$BIN" -p --wrap=auto <<<"$long_line") > /dev/null \
+    || fail "--wrap=auto broke -p cat parity"
+
 # 1.1.1 — ext.<extension> = <language> override. Map an arbitrary
 # extension to a known language; verify the file header gains the
 # language label that the built-in table wouldn't have produced.

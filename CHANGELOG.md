@@ -6,6 +6,43 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.1.8] — 2026-04-27
+
+Frame containment. The 1.1.7 bat-style header rendered correctly but
+long content overflowed past the right edge of the rule, breaking the
+visual frame.
+
+### Changed
+
+- **`--wrap=auto` (default) now wraps content when the decorated
+  frame is active.** Wrapped lines stay inside the bottom rule, and
+  wrap-injected line breaks emit a continuation gutter (blank lineno
+  + `│ ` in `lineno_color`) so wrapped text aligns under the divider.
+  Highlighting survives wrap: `_emit_wrap_break` saves the active
+  token color before drawing the gutter and restores it after, so a
+  multi-row wrapped span keeps its syntax color throughout. Plain
+  mode (`-p`) and piped output without `-n` still bypass wrap
+  entirely (cat parity preserved). `--wrap=never` is the explicit
+  overflow escape hatch (was effectively the pre-1.1.8 default).
+  `--wrap=character` is unchanged — always-on regardless of
+  decoration, still useful for scripted fixed-width capture
+  (`src/main.cyr`, `_emit` / new `_emit_wrap_break` /
+  `g_render_active_color`, `resolve_mode` wrap resolution,
+  `render_chunk` path-1 fast-path gate, `render_highlighted_buf`
+  color-state plumbing).
+
+  Smoke gates added: `--wrap=auto` wraps a 200-char line under `-n`
+  and emits the continuation gutter; `--wrap=never` leaves the same
+  line on a single physical row even when decorated;
+  `-p --wrap=auto` is byte-identical to `cat`.
+
+### Notes
+
+- DCE binary: 213,776 bytes (~209 KB; was ~208 KB at 1.1.7 — +744
+  bytes for `_emit_wrap_break`, the wrap-resolution refactor, and
+  `g_render_active_color` plumbing).
+- `src/main.cyr`: ~1,875 → ~1,920 lines.
+
 ## [1.1.7] — 2026-04-27
 
 Header aesthetic refresh + toolchain bump.

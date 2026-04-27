@@ -6,6 +6,16 @@
 
 ## Version
 
+**1.1.8** — shipped 2026-04-27. Frame containment. `--wrap=auto`
+(default) now wraps content when the decorated frame is active so
+long lines stay inside the bottom rule; wrap-injected breaks emit a
+continuation gutter (blank lineno + `│ ` in `lineno_color`) so
+wrapped text aligns under the divider. Highlighting survives wrap
+via `g_render_active_color` save/restore around the gutter. `--wrap=
+never` is the explicit overflow escape hatch (was effectively the
+pre-1.1.8 default); `--wrap=character` is unchanged. Plain mode
+(`-p`) and piped non-`-n` output still byte-identical to `cat`.
+
 **1.1.7** — shipped 2026-04-27. Header aesthetic refresh + toolchain
 bump to cyrius 5.7.12. The single `─── File: <path> ─` ribbon is
 replaced with a bat-style three-rule frame (top `┬`, header line `│ File: <path> (<lang>)`, middle `┼`,
@@ -81,17 +91,17 @@ complete; full owl attack surface audited and hardened.
 
 ## Binary
 
-- ~208 KB (213,032 bytes; DCE and non-DCE identical, `build/owl`)
-- +1,160 bytes vs 1.1.6 — rule helpers (`_emit_dashes`, `_emit_rule`,
-  `_gutter_divider_col`), `emit_footer`, two new globals, expanded
-  `emit_header`
+- ~209 KB (213,776 bytes; DCE and non-DCE identical, `build/owl`)
+- +744 bytes vs 1.1.7 — `_emit_wrap_break` continuation-gutter
+  helper, wrap-resolution refactor in `resolve_mode`, and
+  `g_render_active_color` plumbing through `render_highlighted_buf`
 - Startup targets: `owl --version` 1–2 ms, tiny-file highlight 2 ms
   (25× under the 50 ms no-op target in `docs/design-spec.md`)
 
 ## Source
 
-- ~3,445 lines across 6 modules:
-  - `src/main.cyr` (~1,875) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff, bat-style header frame (1.1.7)
+- ~3,490 lines across 6 modules:
+  - `src/main.cyr` (~1,920) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff, bat-style header frame (1.1.7), wrap-continuation gutter (1.1.8)
   - `src/theme.cyr` (~431) — bundled themes, 10-kind palette, ANSI emission, user-theme loader (1.1.3)
   - `src/lang.cyr` (~371) — extension/shebang/content detection + ext-override table
   - `src/vcs.cyr` (~328) — git VCS markers (M6) + --diff bypass for piped output
