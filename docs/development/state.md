@@ -6,9 +6,9 @@
 
 ## Version
 
-**1.1.7** — shipped 2026-04-27. Header aesthetic refresh. The single
-`─── File: <path> ─` ribbon is replaced with a bat-style three-rule
-frame (top `┬`, header line `│ File: <path> (<lang>)`, middle `┼`,
+**1.1.7** — shipped 2026-04-27. Header aesthetic refresh + toolchain
+bump to cyrius 5.7.12. The single `─── File: <path> ─` ribbon is
+replaced with a bat-style three-rule frame (top `┬`, header line `│ File: <path> (<lang>)`, middle `┼`,
 file body, bottom `┴`). Rules span the actual terminal width via
 `TIOCGWINSZ` on stdout (80-col fallback) and the junction column
 tracks the gutter divider position (7 without VCS markers, 9 with).
@@ -77,7 +77,7 @@ complete; full owl attack surface audited and hardened.
 
 ## Toolchain
 
-- **Cyrius pin**: `5.7.7` (in `cyrius.cyml [package].cyrius`)
+- **Cyrius pin**: `5.7.12` (in `cyrius.cyml [package].cyrius`)
 
 ## Binary
 

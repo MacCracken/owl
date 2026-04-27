@@ -8,9 +8,13 @@ _No unreleased changes._
 
 ## [1.1.7] — 2026-04-27
 
-Header aesthetic refresh. Single-issue cosmetic update.
+Header aesthetic refresh + toolchain bump.
 
 ### Changed
+
+- **Toolchain pin bumped to cyrius 5.7.12.** `cyrius.cyml`,
+  `--verbose` banner, `CONTRIBUTING.md`, and `README.md` install
+  step all updated. No source changes required for the bump.
 
 - **File header is now a bat-style three-rule frame.** The single
   `─── File: <path> ─` ribbon is replaced with a top rule

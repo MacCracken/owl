@@ -1523,10 +1523,10 @@ fn print_version() {
     if (g_flag_verbose == 1) {
         # Kept in sync with cyrius.cyml [deps.vyakarana].tag and
         # [package].cyrius. Useful for bug reports — "owl 1.1.1
-        # vyakarana 1.0.2 cyrius 5.7.7 linux-x86_64" pins the exact
+        # vyakarana 1.0.2 cyrius 5.7.12 linux-x86_64" pins the exact
         # toolchain + dep versions a user is running against.
         println("vyakarana 1.0.2");
-        println("cyrius 5.7.7");
+        println("cyrius 5.7.12");
         println("target linux-x86_64");
     }
     return EXIT_OK;

@@ -20,7 +20,7 @@ Pipe `owl` into another command and it quietly steps aside — no decorations, n
 # AGNOS / Cyrius native package manager
 pkg install owl
 
-# From source — Cyrius toolchain 5.7.7+ on $PATH
+# From source — Cyrius toolchain 5.7.12+ on $PATH
 git clone https://github.com/MacCracken/owl
 cd owl
 cyrius deps                            # populate lib/ from cyrius.cyml

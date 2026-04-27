@@ -5,7 +5,7 @@ description = "Observant Watcher of Lines — a file viewer for AGNOS / Cyrius"
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/owl"
 language = "cyrius"
-cyrius = "5.7.7"
+cyrius = "5.7.12"
 
 [build]
 entry = "src/main.cyr"
