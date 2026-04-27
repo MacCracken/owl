@@ -155,8 +155,15 @@ No FFI. No third-party deps beyond vyakarana.
 
 ## Next
 
-Post-v1 work: M7 may add a formal CYML parser from stdlib when `cyml` lands,
-and M9+ will broaden grammar coverage via vyakarana's CYML loader (M2).
-1.x backlog (per `roadmap.md` in this directory): hex-dump fallback for
-binary files, user-installable grammars/themes, content-based language
-detection, `--diff` mode.
+The 1.x line is in polish mode — see [`roadmap.md`](roadmap.md) for
+the live list. As of 1.1.9 the only parked 1.x item is exact-gutter
+wrap math (cosmetic; wrapped content stops 2 cols short of the
+right rule when VCS markers are off). Major forward work is 2.x,
+gated on external dependencies: SIT VCS swap, vyakarana streaming
+tokenizer (lifts the `HIGHLIGHT_MAX` cap), `--follow`, URL
+fetching, NDJSON output, AGNOS theming integration.
+
+Stdlib follow-ups: M7's `key = value` parser will swap to a formal
+CYML parser when `cyml` lands in stdlib; vyakarana's CYML grammar
+loader (their M2) lets owl broaden bundled-grammar coverage past
+the current 11.
