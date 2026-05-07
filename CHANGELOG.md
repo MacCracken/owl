@@ -4,7 +4,32 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-_No unreleased changes._
+### Changed
+
+- **Toolchain pin bumped to cyrius 5.9.32** (was 5.7.12). `cyrius.cyml
+  [package].cyrius` and the `--version --verbose` banner string in
+  `src/main.cyr print_version` updated in lockstep. No owl source
+  changes required for the bump itself — the 5.7.12 → 5.9.32 window
+  shipped no breaking changes to the stdlib surface owl imports
+  (`syscalls`, `alloc`, `fmt`, `io`, `fs`, `str`, `string`, `vec`,
+  `args`, `hashmap`, `process`, `tagged`, `assert`). vyakarana stays
+  pinned at `1.0.2`.
+
+  Cyrius's `lib/args.cyr` now lazily heap-allocates a 2 MB argv buffer
+  (was a 4 KB stack buffer) per cyrius v5.9.4; owl's CLI parsing is
+  unaffected at runtime but the binary inherits the bigger init path.
+
+  `cyrius test`, `sh scripts/smoke.sh`, `cyrius lint`, and
+  `CYRIUS_DCE=1 cyrius build` all green from a clean checkout.
+
+### Notes
+
+- DCE binary: 223,992 bytes (~219 KB; +10,208 bytes vs 1.1.9 — pure
+  toolchain delta from the bigger stdlib in 5.9.x). DCE and non-DCE
+  builds are the same size but **no longer byte-identical**: the
+  5.9.x DCE NOPs out dead-code spans (~64 KB of `0x90` padding) where
+  5.7.x's DCE was a no-op for owl's call graph. Section layout and
+  total size are stable.
 
 ## [1.1.9] — 2026-04-27
 

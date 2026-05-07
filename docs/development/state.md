@@ -94,14 +94,21 @@ complete; full owl attack surface audited and hardened.
 
 ## Toolchain
 
-- **Cyrius pin**: `5.7.12` (in `cyrius.cyml [package].cyrius`)
+- **Cyrius pin**: `5.9.32` (in `cyrius.cyml [package].cyrius`)
+  — bumped from `5.7.12` on 2026-05-07 (Unreleased). No source changes
+  required; the 5.7.12 → 5.9.32 window shipped no breaking changes
+  to the stdlib surface owl imports.
 
 ## Binary
 
-- ~209 KB (213,784 bytes; DCE and non-DCE identical, `build/owl`)
-- +8 bytes vs 1.1.8 — wrap-continuation glyph swap (`│` → `↪`);
-  arrow's UTF-8 bytes match the divider width, so the diff is just
-  the string-pool slot
+- ~219 KB (223,992 bytes, `build/owl`). DCE and non-DCE builds are
+  the same size but **no longer byte-identical** under cyrius 5.9.x:
+  DCE now NOPs out dead-code spans (~64 KB of `0x90` padding) where
+  the 5.7.x DCE was a no-op for owl's call graph. Section layout and
+  total size are stable.
+- +10,208 bytes vs 1.1.9 — pure toolchain delta from the bigger
+  stdlib in cyrius 5.9.x (notably `lib/args.cyr`'s 2 MB heap argv
+  buffer per v5.9.4); no owl source changes
 - Startup targets: `owl --version` 1–2 ms, tiny-file highlight 2 ms
   (25× under the 50 ms no-op target in `docs/design-spec.md`)
 
