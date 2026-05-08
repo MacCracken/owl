@@ -211,9 +211,10 @@ tlist=$("$BIN" --list-themes)
 echo "$tlist" | grep -q "^dark$"  || fail "--list-themes missing 'dark'"
 echo "$tlist" | grep -q "^light$" || fail "--list-themes missing 'light'"
 
-# --list-languages must include the starter set.
+# --list-languages must include the starter set. 1.1.12 added go +
+# zig (vyakarana 1.2.0).
 llist=$("$BIN" --list-languages)
-for lang in plain shell python javascript typescript rust cyrius c toml json yaml; do
+for lang in plain shell python javascript typescript rust cyrius c toml json yaml go zig; do
     echo "$llist" | grep -q "^$lang\$" || fail "--list-languages missing '$lang'"
 done
 
@@ -238,6 +239,35 @@ out=$("$BIN" -n "$TMPDIR/t.rs")
 case "$out" in
     *"(rust)"*) ;;
     *) fail "extension detection: .rs should show (rust) in header" ;;
+esac
+
+# 1.1.12 — extension detection for the vyakarana 1.2.0 grammars
+# (go, zig). Symmetric with the .rs gate above; also proves
+# bootstrap_grammars is wiring go.cyml + zig.cyml into the registry.
+printf 'package main\nfunc main() {}\n' > "$TMPDIR/t.go"
+out=$("$BIN" -n "$TMPDIR/t.go")
+case "$out" in
+    *"(go)"*) ;;
+    *) fail "extension detection: .go should show (go) in header" ;;
+esac
+printf 'pub fn main() void {}\n' > "$TMPDIR/t.zig"
+out=$("$BIN" -n "$TMPDIR/t.zig")
+case "$out" in
+    *"(zig)"*) ;;
+    *) fail "extension detection: .zig should show (zig) in header" ;;
+esac
+# --color=always against a Go file emits ANSI for tokens (proves the
+# bundled go.cyml is loaded and the keyword pass colors `package`).
+out=$(printf 'package main\nfunc main() {}\n' | "$BIN" --color=always --paging=never --language=go)
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "stdin + --color=always + --language=go did not emit ANSI" ;;
+esac
+# Same probe for Zig — `const` / `pub fn` keywords drive the ANSI output.
+out=$(printf 'pub fn main() void {}\nconst x = 1;\n' | "$BIN" --color=always --paging=never --language=zig)
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "stdin + --color=always + --language=zig did not emit ANSI" ;;
 esac
 
 # Shebang detection: python shebang.

@@ -6,6 +6,67 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.1.12] — 2026-05-08
+
+vyakarana 1.2.0 picks up Go and Zig — owl wires both into language
+detection, the grammar registry, and `--list-languages`.
+
+### Added
+
+- **Go highlighting.** `.go` extension detection, `--language=go`
+  validation, and ANSI tokenization via vyakarana 1.2.0's
+  `grammars/go.cyml` (predeclared identifiers like `len` / `nil` /
+  `iota` tokenize as `ident`, not `keyword`, per vyakarana ADR 0004).
+  `grammars/go.cyml` synced from the upstream drop.
+- **Zig highlighting.** `.zig` extension detection,
+  `--language=zig` validation, and ANSI tokenization via vyakarana
+  1.2.0's `grammars/zig.cyml` (`@`-prefixed builtins like `@import`
+  / `@TypeOf` tokenize as a single `ident` per vyakarana ADR 0007).
+  `grammars/zig.cyml` synced from upstream.
+
+### Changed
+
+- **Toolchain dep bump: vyakarana 1.1.0 → 1.2.0.**
+  `cyrius.cyml [deps.vyakarana].tag` and the `--version --verbose`
+  banner string updated in lockstep. Public tokenizer API unchanged
+  across the bump — token kinds, `tokenize_source(src, lang)`,
+  tokenbuf accessors, and the `Grammar` record layout are all
+  compatible. Cyrius pin stays at `5.9.36`.
+
+- **`LANG_COUNT` 11 → 13.** `src/lang.cyr` gains `lang_name(11) = "go"`
+  / `lang_exts(11) = ".go"` and `lang_name(12) = "zig"` /
+  `lang_exts(12) = ".zig"`. `bootstrap_grammars` in `src/main.cyr`
+  loads `go.cyml` and `zig.cyml` from both the user-overlay path
+  (`$XDG_CONFIG_HOME/owl/grammars/`) and the bundled exe-relative
+  path. Existing 11-language behavior is unchanged.
+
+- **`--list-languages`** now reports 13 entries (`plain`, the prior
+  10, plus `go` and `zig`).
+
+### Verified
+
+- `cyrius build` + `CYRIUS_DCE=1 cyrius build` clean.
+- `cyrius test` — 7/7 unit gates green.
+- `sh scripts/smoke.sh` — all M0–M8 gates green; new gates lock
+  `(go)` / `(zig)` headers via extension detection and confirm
+  `--color=always --language=go` / `--language=zig` from stdin emits
+  ANSI tokens.
+- `cyrius lint src/*.cyr` — 0 warnings.
+- `owl --version --verbose` reports `vyakarana 1.2.0` / `cyrius
+  5.9.36`.
+
+### Notes
+
+- DCE binary: 225,672 bytes (~220 KB; +520 bytes vs 1.1.11). Most
+  of the delta is the two new compiled-in grammar tables; owl-side
+  source growth is small (~4 lines in `main.cyr` for the bootstrap
+  calls, ~3 in `lang.cyr` for the table entries).
+- `grammars/go.cyml` and `grammars/zig.cyml` are runtime data
+  shipped alongside the binary — installed-binary packaging needs
+  to copy these alongside the existing 11.
+- vyakarana streaming tokenizer is **not** in the 1.2.x line, so
+  the 2.x `HIGHLIGHT_MAX`-lift item stays parked.
+
 ## [1.1.11] — 2026-05-08
 
 Last 1.x polish item closed: exact-gutter wrap math.

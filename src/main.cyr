@@ -10,7 +10,7 @@ include "src/config.cyr"
 
 # Keep OWL_VERSION in sync with the VERSION file.
 # A M8 CI check will enforce equality; for now, manual.
-var OWL_VERSION = "owl 1.1.11";
+var OWL_VERSION = "owl 1.1.12";
 
 var BUFSIZE = 65536;
 
@@ -641,6 +641,8 @@ fn _owl_bootstrap_grammars() {
         _owl_load_grammar(udir, path, "typescript.cyml");
         _owl_load_grammar(udir, path, "javascript.cyml");
         _owl_load_grammar(udir, path, "python.cyml");
+        _owl_load_grammar(udir, path, "go.cyml");
+        _owl_load_grammar(udir, path, "zig.cyml");
     }
 
     # Bundled.
@@ -655,6 +657,8 @@ fn _owl_bootstrap_grammars() {
     _owl_load_grammar(dir, path, "typescript.cyml");
     _owl_load_grammar(dir, path, "javascript.cyml");
     _owl_load_grammar(dir, path, "python.cyml");
+    _owl_load_grammar(dir, path, "go.cyml");
+    _owl_load_grammar(dir, path, "zig.cyml");
 
     _grammars_bootstrapped = 1;
     return 0;
@@ -1603,9 +1607,9 @@ fn print_version() {
     if (g_flag_verbose == 1) {
         # Kept in sync with cyrius.cyml [deps.vyakarana].tag and
         # [package].cyrius. Useful for bug reports — "owl 1.1.1
-        # vyakarana 1.1.0 cyrius 5.9.36 linux-x86_64" pins the exact
+        # vyakarana 1.2.0 cyrius 5.9.36 linux-x86_64" pins the exact
         # toolchain + dep versions a user is running against.
-        println("vyakarana 1.1.0");
+        println("vyakarana 1.2.0");
         println("cyrius 5.9.36");
         println("target linux-x86_64");
     }

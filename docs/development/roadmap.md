@@ -2,7 +2,7 @@
 
 Forward-looking planning surface. Latest release and prior history
 live in `CHANGELOG.md`; this file tracks what's *next*. Current
-release is **1.1.11**; the 1.x line has nothing left to ship and
+release is **1.1.12**; the 1.x line has nothing left to ship and
 the major forward work is 2.x, gated on external dependencies.
 
 ---
@@ -14,6 +14,7 @@ forward-looking. Full prose in `CHANGELOG.md`.
 
 | Release | Date       | Headline                                                |
 |---------|------------|---------------------------------------------------------|
+| 1.1.12  | 2026-05-08 | vyakarana 1.2.0 — Go + Zig grammars                     |
 | 1.1.11  | 2026-05-08 | exact-gutter wrap math (last 1.x polish item)           |
 | 1.1.10  | 2026-05-08 | cyrius 5.9.36 + vyakarana 1.1.0 toolchain refresh       |
 | 1.1.9   | 2026-04-27 | `↪` wrap-arrow continuation glyph                       |
@@ -58,15 +59,17 @@ _Empty — last item closed in 1.1.11 (exact-gutter wrap math)._
   `vcs_enabled`, `vcs_reset`, `set_style`). Tracked in memory.
 - **Streaming tokenizer.** Raise `HIGHLIGHT_MAX` past 128 KB
   when either (a) the bump allocator gets a `free()` or (b)
-  vyakarana ships a streaming tokenizer. Not on vyakarana's 1.2.x
-  list (1.2.x is broadening bundled-grammar coverage, no streaming),
-  so this item stays parked until at least vyakarana 2.x.
+  vyakarana ships a streaming tokenizer. Not on vyakarana's
+  near-term list, so this item stays parked until at least
+  vyakarana 2.x.
 
-- **Bundled-grammar broadening.** vyakarana 1.2.x adds languages
-  beyond the current 11 (shell, python, js, ts, rust, c, cyrius,
-  toml, json, yaml, markdown). Pick up via a `[deps.vyakarana].tag`
-  bump once 1.2.0 lands — no owl source changes needed; the
-  language-name table is already keyed off vyakarana's registry.
+- **Further bundled-grammar broadening.** vyakarana 1.2.0 added
+  Go + Zig (picked up at owl 1.1.12). Future grammar drops (1.3.x,
+  2.x candidates: java, kotlin, swift, ruby, lua, …) need the same
+  two-line wiring per language: an entry in `src/lang.cyr`'s
+  `lang_name`/`lang_exts` plus a matching `_owl_load_grammar` call
+  in `bootstrap_grammars`. Smoke-gate template lives in
+  `scripts/smoke.sh` next to the existing go/zig gates.
 - **`--follow` / `-f` (tail-style live highlighting).** Needs
   inotify and a re-tokenize strategy. Deferred explicitly.
 - **URL / remote-file support.** `owl https://…` fetching a

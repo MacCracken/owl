@@ -6,6 +6,17 @@
 
 ## Version
 
+**1.1.12** — shipped 2026-05-08. vyakarana 1.2.0 dependency bump
+adds Go and Zig highlighting. `LANG_COUNT` 11 → 13 (`lang_name(11)
+= "go"` / `.go`, `lang_name(12) = "zig"` / `.zig`); `bootstrap_grammars`
+in `src/main.cyr` loads `go.cyml` and `zig.cyml` from both the user
+overlay path and the exe-relative bundle. `grammars/go.cyml` and
+`grammars/zig.cyml` synced from vyakarana 1.2.0. `--list-languages`
+now reports 13 entries. Smoke gates lock `.go` → `(go)` /
+`.zig` → `(zig)` extension detection and ANSI emission for both
+under `--color=always --language=…` from stdin. Cyrius pin
+unchanged at 5.9.36.
+
 **1.1.11** — shipped 2026-05-08. Last 1.x polish item closed:
 exact-gutter wrap math. Pre-1.1.11 owl always subtracted the VCS-on
 (11-col) gutter when computing the wrap budget, even when
@@ -121,29 +132,31 @@ complete; full owl attack surface audited and hardened.
   — bumped from `5.7.12` at 1.1.10 (2026-05-08). No source changes
   required; the 5.7.12 → 5.9.36 window shipped no breaking changes
   to the stdlib surface owl imports.
-- **vyakarana pin**: `1.1.0` (in `cyrius.cyml [deps.vyakarana].tag`)
-  — bumped from `1.0.2` at 1.1.10. Public API unchanged; grammar
-  polish for C, Markdown, Rust, and TOML lands automatically.
+- **vyakarana pin**: `1.2.0` (in `cyrius.cyml [deps.vyakarana].tag`)
+  — bumped from `1.1.0` at 1.1.12. Public API unchanged across the
+  bump; new bundled grammars (Go, Zig) wired into owl's language
+  table and bootstrap.
 
 ## Binary
 
-- ~220 KB (225,152 bytes, `build/owl`). DCE and non-DCE builds are
+- ~220 KB (225,672 bytes, `build/owl`). DCE and non-DCE builds are
   the same size but **not byte-identical** under cyrius 5.9.x: DCE
   NOPs out dead-code spans (~64 KB of `0x90` padding) where the
   5.7.x DCE was a no-op for owl's call graph. Section layout and
   total size are stable.
-- +256 bytes vs 1.1.10 — the new `_recompute_wrap_cols` helper, the
-  `g_wrap_term_cols` cache, and the per-file recompute callsite at
-  `vcs_compute_markers`.
+- +520 bytes vs 1.1.11 — most of it the Go + Zig grammar tables
+  compiled into vyakarana 1.2.0's `dist/vyakarana.cyr`; owl-side
+  growth is ~4 lines in `main.cyr` (bootstrap calls) and ~3 lines
+  in `lang.cyr` (table entries).
 - Startup targets: `owl --version` 1–2 ms, tiny-file highlight 2 ms
   (25× under the 50 ms no-op target in `docs/design-spec.md`)
 
 ## Source
 
-- ~3,532 lines across 6 modules:
-  - `src/main.cyr` (~1,957) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff, bat-style header frame (1.1.7), wrap-continuation gutter (1.1.8), `↪` wrap-arrow glyph (1.1.9), version-banner pin sync (1.1.10), VCS-aware wrap budget (1.1.11)
+- ~3,539 lines across 6 modules:
+  - `src/main.cyr` (~1,961) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff, bat-style header frame (1.1.7), wrap-continuation gutter (1.1.8), `↪` wrap-arrow glyph (1.1.9), version-banner pin sync (1.1.10), VCS-aware wrap budget (1.1.11), go/zig grammar bootstrap (1.1.12)
   - `src/theme.cyr` (~431) — bundled themes, 10-kind palette, ANSI emission, user-theme loader (1.1.3)
-  - `src/lang.cyr` (~371) — extension/shebang/content detection + ext-override table
+  - `src/lang.cyr` (~375) — extension/shebang/content detection + ext-override table; LANG_COUNT 13 (1.1.12 added go/zig)
   - `src/vcs.cyr` (~328) — git VCS markers (M6) + --diff bypass for piped output
   - `src/config.cyr` (~298) — `key = value` config parser (M7) + `ext.*` keys (1.1.1)
   - `src/pager.cyr` (~147) — pager spawn + SIGPIPE handling + env forward (1.1.5)
@@ -158,7 +171,7 @@ complete; full owl attack surface audited and hardened.
 ## Dependencies
 
 - **Cyrius stdlib** — `syscalls`, `alloc`, `fmt`, `io`, `fs`, `str`, `string`, `vec`, `args`, `hashmap`, `process`, `tagged`, `assert`
-- **vyakarana** 1.1.0 — tokenizer + 11 bundled grammars (git-tag pinned in `[deps.vyakarana]`); 1.1.0 lands `unicode_ident` for C/Markdown, `$`-prefixed Rust idents, and triple-quoted TOML strings
+- **vyakarana** 1.2.0 — tokenizer + 13 bundled grammars (git-tag pinned in `[deps.vyakarana]`); 1.2.0 adds Go + Zig on top of 1.1.0's `unicode_ident` for C/Markdown, `$`-prefixed Rust idents, and triple-quoted TOML strings
 
 No FFI. No third-party deps beyond vyakarana.
 
@@ -195,12 +208,13 @@ gated on external dependencies: SIT VCS swap, vyakarana streaming
 tokenizer (lifts the `HIGHLIGHT_MAX` cap), `--follow`, URL fetching,
 NDJSON output, AGNOS theming integration.
 
-vyakarana 1.2.x (in flight upstream) is broadening bundled-grammar
-coverage; streaming tokenizer is **not** on the 1.2.x list, so the
-`HIGHLIGHT_MAX`-lift item stays parked. When 1.2.x ships, owl picks
-up the new languages automatically via the `[deps.vyakarana].tag`
-bump — no source changes needed past the pin.
+vyakarana 1.2.0 landed Go + Zig (picked up at owl 1.1.12). Streaming
+tokenizer is still **not** on vyakarana's near-term list, so the
+`HIGHLIGHT_MAX`-lift item stays parked until at least vyakarana 2.x.
+Future vyakarana grammar drops (1.3.x, 2.x) will need the same
+two-line wiring owl applied here: a `lang_name` / `lang_exts`
+entry in `src/lang.cyr` plus matching `_owl_load_grammar` calls
+in `bootstrap_grammars`.
 
 Stdlib follow-ups: M7's `key = value` parser will swap to a formal
-CYML parser when `cyml` lands in stdlib; vyakarana's CYML grammar
-loader lets owl broaden bundled-grammar coverage past the current 11.
+CYML parser when `cyml` lands in stdlib.
