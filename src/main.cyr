@@ -10,7 +10,7 @@ include "src/config.cyr"
 
 # Keep OWL_VERSION in sync with the VERSION file.
 # A M8 CI check will enforce equality; for now, manual.
-var OWL_VERSION = "owl 1.1.12";
+var OWL_VERSION = "owl 1.2.6";
 
 var BUFSIZE = 65536;
 
@@ -643,6 +643,29 @@ fn _owl_bootstrap_grammars() {
         _owl_load_grammar(udir, path, "python.cyml");
         _owl_load_grammar(udir, path, "go.cyml");
         _owl_load_grammar(udir, path, "zig.cyml");
+        _owl_load_grammar(udir, path, "asm_x86_64.cyml");
+        _owl_load_grammar(udir, path, "asm_aarch64.cyml");
+        _owl_load_grammar(udir, path, "java.cyml");
+        _owl_load_grammar(udir, path, "kotlin.cyml");
+        _owl_load_grammar(udir, path, "cpp.cyml");
+        _owl_load_grammar(udir, path, "csharp.cyml");
+        _owl_load_grammar(udir, path, "php.cyml");
+        _owl_load_grammar(udir, path, "ruby.cyml");
+        _owl_load_grammar(udir, path, "lua.cyml");
+        _owl_load_grammar(udir, path, "swift.cyml");
+        _owl_load_grammar(udir, path, "elixir.cyml");
+        _owl_load_grammar(udir, path, "ocaml.cyml");
+        _owl_load_grammar(udir, path, "haskell.cyml");
+        _owl_load_grammar(udir, path, "sql.cyml");
+        _owl_load_grammar(udir, path, "graphql.cyml");
+        _owl_load_grammar(udir, path, "protobuf.cyml");
+        _owl_load_grammar(udir, path, "html.cyml");
+        _owl_load_grammar(udir, path, "xml.cyml");
+        _owl_load_grammar(udir, path, "css.cyml");
+        _owl_load_grammar(udir, path, "scss.cyml");
+        _owl_load_grammar(udir, path, "dockerfile.cyml");
+        _owl_load_grammar(udir, path, "makefile.cyml");
+        _owl_load_grammar(udir, path, "ini.cyml");
     }
 
     # Bundled.
@@ -659,6 +682,29 @@ fn _owl_bootstrap_grammars() {
     _owl_load_grammar(dir, path, "python.cyml");
     _owl_load_grammar(dir, path, "go.cyml");
     _owl_load_grammar(dir, path, "zig.cyml");
+    _owl_load_grammar(dir, path, "asm_x86_64.cyml");
+    _owl_load_grammar(dir, path, "asm_aarch64.cyml");
+    _owl_load_grammar(dir, path, "java.cyml");
+    _owl_load_grammar(dir, path, "kotlin.cyml");
+    _owl_load_grammar(dir, path, "cpp.cyml");
+    _owl_load_grammar(dir, path, "csharp.cyml");
+    _owl_load_grammar(dir, path, "php.cyml");
+    _owl_load_grammar(dir, path, "ruby.cyml");
+    _owl_load_grammar(dir, path, "lua.cyml");
+    _owl_load_grammar(dir, path, "swift.cyml");
+    _owl_load_grammar(dir, path, "elixir.cyml");
+    _owl_load_grammar(dir, path, "ocaml.cyml");
+    _owl_load_grammar(dir, path, "haskell.cyml");
+    _owl_load_grammar(dir, path, "sql.cyml");
+    _owl_load_grammar(dir, path, "graphql.cyml");
+    _owl_load_grammar(dir, path, "protobuf.cyml");
+    _owl_load_grammar(dir, path, "html.cyml");
+    _owl_load_grammar(dir, path, "xml.cyml");
+    _owl_load_grammar(dir, path, "css.cyml");
+    _owl_load_grammar(dir, path, "scss.cyml");
+    _owl_load_grammar(dir, path, "dockerfile.cyml");
+    _owl_load_grammar(dir, path, "makefile.cyml");
+    _owl_load_grammar(dir, path, "ini.cyml");
 
     _grammars_bootstrapped = 1;
     return 0;
@@ -1606,11 +1652,11 @@ fn print_version() {
     println(OWL_VERSION);
     if (g_flag_verbose == 1) {
         # Kept in sync with cyrius.cyml [deps.vyakarana].tag and
-        # [package].cyrius. Useful for bug reports — "owl 1.1.1
-        # vyakarana 1.2.0 cyrius 5.9.36 linux-x86_64" pins the exact
+        # [package].cyrius. Useful for bug reports — "owl 1.2.6
+        # vyakarana 1.8.0 cyrius 5.9.41 linux-x86_64" pins the exact
         # toolchain + dep versions a user is running against.
-        println("vyakarana 1.2.0");
-        println("cyrius 5.9.36");
+        println("vyakarana 1.8.0");
+        println("cyrius 5.9.41");
         println("target linux-x86_64");
     }
     return EXIT_OK;

@@ -6,6 +6,303 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.2.6] — 2026-05-08
+
+vyakarana 1.7.0 → 1.8.0 — DevOps + infrastructure batch
+(Dockerfile, Makefile, INI). Closes the "Further bundled-grammar
+broadening" 2.x backlog item; the bundled palette now stands at
+36 grammars / 35 named languages.
+
+### Added
+
+- **Dockerfile highlighting.** Filename-shape detection (no
+  extension): exact basename `Dockerfile` / `Containerfile`, or
+  any `name.Dockerfile` / `name.Containerfile` suffix per
+  vyakarana 1.8.0 wiring. ANSI tokenization via `grammars/
+  dockerfile.cyml`. Case-insensitive instruction heads (`FROM`
+  / `from` / `From`) work via vyakarana ADR 0011 — owl gets the
+  fold for free.
+- **Makefile highlighting.** Filename-shape detection: exact
+  basename match for `Makefile`, `makefile`, `GNUmakefile`. ANSI
+  tokenization via `grammars/makefile.cyml`. All four GNU Make
+  assignment forms (`=` / `:=` / `?=` / `+=`) and the conditional /
+  include / define / export keyword set route through the same
+  default scanner.
+- **INI highlighting.** `.ini`/`.conf`/`.cfg`/`.properties`
+  extension dispatch and ANSI tokenization via `grammars/ini.cyml`.
+  Dotted-key sections (`[auth.providers.github]`) tokenize as a
+  single ident (`.` in `ident_cont` per vyakarana grammar).
+
+### Changed
+
+- **Filename-shape detection added to `src/lang.cyr`.** New
+  helpers `_path_ends_with` (case-sensitive end-match) and
+  `_path_filename_match` (exact basename, `/<name>` basename, or
+  `.<name>` suffix) feed the new dispatch block in
+  `detect_language_from_path` that runs before the extension
+  table. Required because Dockerfile/Makefile carry no
+  conventional extension.
+- **`LANG_COUNT` 33 → 36** with `lang_name(33)` =
+  `"dockerfile"`, `lang_name(34)` = `"makefile"`, `lang_name(35)`
+  = `"ini"`.
+- **Toolchain dep bump: vyakarana 1.7.0 → 1.8.0.**
+
+### Verified
+
+- `cyrius build` + `CYRIUS_DCE=1 cyrius build` clean.
+- `cyrius test` — unit gates green.
+- `sh scripts/smoke.sh` — all M0–M8 gates green; new gates lock
+  filename-shape detection for Dockerfile (basename + `.Dockerfile`
+  suffix + Containerfile alias), Makefile (uppercase, lowercase,
+  `GNUmakefile`), and `.ini` extension dispatch.
+- `owl --version --verbose` reports `vyakarana 1.8.0` /
+  `cyrius 5.9.41`.
+
+## [1.2.5] — 2026-05-08
+
+vyakarana 1.6.0 → 1.7.0 — markup + styling batch (HTML, XML,
+CSS, SCSS).
+
+### Added
+
+- **HTML highlighting.** `.html`/`.htm` extension dispatch +
+  ANSI tokenization via `grammars/html.cyml`. `<!-- … -->` block
+  comments via vyakarana's pair-rule shape.
+- **XML highlighting.** `.xml`/`.xsl`/`.xsd`/`.svg` extension
+  dispatch + `grammars/xml.cyml`. `<![CDATA[ … ]]>` data
+  sections tokenize as a single string per vyakarana grammar.
+- **CSS highlighting.** `.css` extension dispatch +
+  `grammars/css.cyml`. `@media` / `#hero` / `--color-bg` (CSS
+  custom properties) all tokenize cleanly.
+- **SCSS highlighting.** `.scss`/`.sass` extension dispatch +
+  `grammars/scss.cyml`. `$variable` syntax + `//` line comments
+  + the SCSS at-rule keyword set.
+
+### Changed
+
+- **`LANG_COUNT` 29 → 33** with the four new entries.
+- **Toolchain dep bump: vyakarana 1.6.0 → 1.7.0.**
+
+### Verified
+
+- `sh scripts/smoke.sh` locks `.html` → `(html)`, `.xml` →
+  `(xml)`, `.css` → `(css)`, `.scss` → `(scss)` extension
+  detection.
+
+## [1.2.4] — 2026-05-08
+
+vyakarana 1.5.0 → 1.6.0 — data / query / IDL batch (SQL,
+GraphQL, Protobuf). Picks up the new
+`case_insensitive_keywords` default from vyakarana ADR 0011 by
+proxy: enabled in `grammars/sql.cyml`, so `SELECT` / `select` /
+`Select` all keyword-color through owl's existing tokenize +
+ANSI emission path with no source changes on the owl side.
+
+### Added
+
+- **SQL highlighting.** `.sql` extension dispatch + ANSI
+  tokenization via `grammars/sql.cyml`. ANSI SQL:1992 baseline;
+  dialect extensions (PostgreSQL / MySQL / SQLite / T-SQL)
+  documented in the grammar header as fork candidates.
+- **GraphQL highlighting.** `.graphql`/`.gql` extension dispatch
+  + `grammars/graphql.cyml`. `$variable` and `@directive` syntax
+  tokenize as one ident.
+- **Protobuf highlighting.** `.proto` extension dispatch +
+  `grammars/protobuf.cyml`. proto2 + proto3 surface covered.
+
+### Changed
+
+- **`LANG_COUNT` 26 → 29** with the three new entries.
+- **Toolchain dep bump: vyakarana 1.5.0 → 1.6.0.**
+
+### Verified
+
+- `sh scripts/smoke.sh` locks `.sql` → `(sql)` and the
+  case-insensitive ANSI gate (`select * from users;` lower-case
+  still emits ANSI keyword spans through vyakarana ADR 0011).
+
+## [1.2.3] — 2026-05-08
+
+vyakarana 1.4.0 → 1.5.0 — functional tier batch (Elixir, OCaml,
+Haskell). No new vyakarana scanner extensions; all three grammars
+sit on top of the 1.2.1 `char_literal` pipeline (OCaml's `'a` type
+variables fall through the same yield path Rust lifetimes use).
+
+### Added
+
+- **Elixir highlighting.** `.ex`/`.exs` extension dispatch +
+  ANSI tokenization via `grammars/elixir.cyml`. Module attribute
+  (`@`) syntax and the `|>` / `<-` / `->` / `=>` / `::` operator
+  set covered.
+- **OCaml highlighting.** `.ml`/`.mli` extension dispatch +
+  `grammars/ocaml.cyml`. `(* … *)` block comments via vyakarana
+  pair rule.
+- **Haskell highlighting.** `.hs`/`.lhs` extension dispatch +
+  `grammars/haskell.cyml`. Prime-suffixed identifiers (`rest'`,
+  `f''`) tokenize as a single ident; the monadic / applicative
+  operator surface (`>>=`, `>>`, `<$>`, `<*>`, `<|>`) keyword-
+  colors through the standard pipeline.
+- **Shebang hints.** Added `elixir` and `ocaml` / `ocamlrun` to
+  `lang_shebangs` so `#!/usr/bin/env elixir` style scripts
+  detect.
+
+### Changed
+
+- **`LANG_COUNT` 23 → 26** with the three new entries.
+- **Toolchain dep bump: vyakarana 1.4.0 → 1.5.0.**
+
+### Verified
+
+- `sh scripts/smoke.sh` locks `.ex` / `.ml` / `.hs` extension
+  detection.
+
+## [1.2.2] — 2026-05-08
+
+vyakarana 1.3.0 → 1.4.0 — scripting + mobile batch (PHP, Ruby,
+Lua, Swift). Covers two of the languages explicitly named in the
+2.x roadmap "Further bundled-grammar broadening" candidate list
+(ruby, lua, swift, plus php from the same release).
+
+### Added
+
+- **PHP highlighting.** `.php`/`.phtml` extension dispatch +
+  ANSI tokenization via `grammars/php.cyml`. PHP 8 surface:
+  `enum`, `readonly`, `match`, `fn`, `mixed`, `never`. `$variable`
+  syntax tokenizes as one ident.
+- **Ruby highlighting.** `.rb` extension dispatch +
+  `grammars/ruby.cyml`. `@instance` and `$global` variables, the
+  `<=>` / `===` / `=~` operator set.
+- **Lua highlighting.** `.lua` extension dispatch +
+  `grammars/lua.cyml`. Both `--[[ ]]` long-comment and `-- …\n`
+  line-comment forms (vyakarana grammar uses pair-rule ordering
+  per its architecture note 003 to ensure the longer prefix
+  wins).
+- **Swift highlighting.** `.swift` extension dispatch +
+  `grammars/swift.cyml`. `"""…"""` multi-line strings; `..<` /
+  `...` ranges; `??` / `?.` nil-handling operators.
+- **Shebang hints.** Added `php`, `ruby`, `lua`, `swift` to
+  `lang_shebangs` so script files with the matching shebang
+  detect even without an extension.
+
+### Changed
+
+- **`LANG_COUNT` 19 → 23** with the four new entries.
+- **Toolchain dep bump: vyakarana 1.3.0 → 1.4.0.**
+
+### Verified
+
+- `sh scripts/smoke.sh` locks `.php` / `.rb` / `.lua` / `.swift`
+  extension detection plus the ruby shebang gate
+  (`#!/usr/bin/env ruby` → `(ruby)`).
+
+## [1.2.1] — 2026-05-08
+
+vyakarana 1.2.4 → 1.3.0 — JVM + C-family batch (Java, Kotlin,
+C++, C#).
+
+### Added
+
+- **Java highlighting.** `.java` extension dispatch + ANSI
+  tokenization via `grammars/java.cyml`. Java 21 surface:
+  `record`, `sealed`, `permits`, `non-sealed`, `yield`, `var`.
+  `@` and `$` in `ident_start` so `@Override` and
+  compiler-generated names tokenize as a single ident.
+- **Kotlin highlighting.** `.kt`/`.kts` extension dispatch +
+  `grammars/kotlin.cyml`. Elvis (`?:`), safe-call (`?.`),
+  not-null assert (`!!`), data/sealed-class keyword set.
+- **C++ highlighting.** `.cpp`/`.cc`/`.cxx`/`.hpp`/`.hxx`
+  extension dispatch + `grammars/cpp.cyml`. C++20-era surface
+  (concepts, modules, coroutines, three-way `<=>`). **`.h`
+  stays C** — header-extension disambiguation between C and
+  C++ is impossible without content inspection, and C is the
+  more common owl input.
+- **C# highlighting.** `.cs`/`.csx` extension dispatch +
+  `grammars/csharp.cyml`. C# 12-era surface including `record`,
+  `init`, `with`, LINQ contextual keywords.
+
+### Changed
+
+- **`LANG_COUNT` 15 → 19** with the four new entries.
+- **Toolchain dep bump: vyakarana 1.2.4 → 1.3.0.**
+
+### Verified
+
+- `sh scripts/smoke.sh` locks `.java` / `.kt` / `.cpp` / `.cs`
+  extension detection plus a `--language=java` ANSI emission
+  gate.
+
+## [1.2.0] — 2026-05-08
+
+Toolchain refresh + vyakarana 1.2.x closeout (1.2.0 → 1.2.4).
+Cyrius pin moves 5.9.36 → 5.9.41 (five `5.9.x` minor slots'
+worth of compiler-internal fixes; nothing owl exercises broke).
+vyakarana picks up `char_literal` (1.2.1 — already enabled in
+the c/rust/go/zig grammars owl ships, so 4 known-failing vidya
+samples drop to zero token errors with no owl change), and the
+two assembler grammars (`asm_x86_64` at 1.2.2, `asm_aarch64` at
+1.2.3). 1.2.4 was a vyakarana-side closeout — no behavioural
+changes for owl. This is the first patch in the 1.2.x lockstep
+series tracking vyakarana 1.2.x → 1.8.x.
+
+### Added
+
+- **x86_64 assembly highlighting.** `.s`/`.asm` extension
+  dispatch defaults to `asm_x86_64` (Intel-syntax GAS) per
+  vyakarana 1.2.2 wiring. ANSI tokenization via
+  `grammars/asm_x86_64.cyml`. `.section` / `.text` / `.global` /
+  `.byte` / `.cfi_*` etc. promote to keyword via the words rule;
+  opcodes (`mov`, `call`, `jne`, `xor`, `syscall`) and registers
+  (`rax`, `rdi`, `eax`) stay `TK_IDENT` per vyakarana ADR 0004.
+  AT&T-syntax samples (`mov $1, %rax`) are not yet supported —
+  documented in the grammar header as a future ADR candidate.
+- **aarch64 assembly highlighting.** No default extension
+  (`.s`/`.S` belongs to x86_64); ARM users pass
+  `--language=asm_aarch64` explicitly. ANSI tokenization via
+  `grammars/asm_aarch64.cyml`. `b.eq`/`b.ne`/`b.lt`/`b.hi`
+  conditional branches tokenize as a single ident (vyakarana
+  puts `.` in both `ident_start` and `ident_cont`); `!`
+  write-back addressing operator covered.
+
+### Changed
+
+- **`LANG_COUNT` 13 → 15.** `src/lang.cyr` gains
+  `lang_name(13)` = `"asm_x86_64"` / `lang_exts(13)` =
+  `".s .asm"` and `lang_name(14)` = `"asm_aarch64"` /
+  `lang_exts(14)` = `""` (filename dispatch via explicit
+  `--language=`).
+- **Toolchain pin bump: cyrius 5.9.36 → 5.9.41.** No source
+  changes required — the 5.9.36 → 5.9.41 window shipped no
+  breaking changes to the stdlib surface owl imports.
+- **Toolchain dep bump: vyakarana 1.2.0 → 1.2.4.** Public
+  tokenizer API unchanged across the bump (token kinds,
+  `tokenize_source(src, lang)`, tokenbuf accessors stay
+  compatible). vyakarana's `Grammar` record grew at 1.2.1
+  (`char_literal` flag, GRAMMAR_SIZE 144 → 152) but owl reads
+  via the public accessors so this stays transparent.
+- **Minor version bump.** First minor bump since 1.1.0 — opens
+  the 1.2.x patch series for the vyakarana 1.3.0 → 1.8.0
+  lockstep cascade landing in 1.2.1 through 1.2.6.
+
+### Verified
+
+- `cyrius build` + `CYRIUS_DCE=1 cyrius build` clean.
+- `cyrius test` — unit gates green.
+- `sh scripts/smoke.sh` — all M0–M8 gates green; new gates lock
+  `.s` → `(asm_x86_64)` extension detection plus
+  `--language=asm_x86_64` and `--language=asm_aarch64` ANSI
+  emission probes.
+- `owl --version --verbose` reports `vyakarana 1.8.0` /
+  `cyrius 5.9.41` (the minor slot ships the final pin set;
+  intermediate patches inherit it as the cascade lands in one
+  drop on 2026-05-08).
+
+### Notes
+
+- The 1.2.x patch line is shipped as one drop on 2026-05-08;
+  each entry above documents one vyakarana minor's worth of
+  language wiring. End state at 1.2.6: `LANG_COUNT` = 36, 36
+  bundled grammars, vyakarana 1.8.0, cyrius 5.9.41.
+
 ## [1.1.12] — 2026-05-08
 
 vyakarana 1.2.0 picks up Go and Zig — owl wires both into language

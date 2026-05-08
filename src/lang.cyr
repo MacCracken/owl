@@ -22,7 +22,7 @@
 # Extensions and shebang hints are space-separated lowercase tokens.
 # Order matters: "cyrius" precedes "c" so *.cyr doesn't match *.c.
 
-var LANG_COUNT = 13;
+var LANG_COUNT = 36;
 
 # Indexed 0..LANG_COUNT-1
 fn lang_name(i) {
@@ -39,10 +39,36 @@ fn lang_name(i) {
     if (i == 10) { return "yaml"; }
     if (i == 11) { return "go"; }
     if (i == 12) { return "zig"; }
+    if (i == 13) { return "asm_x86_64"; }
+    if (i == 14) { return "asm_aarch64"; }
+    if (i == 15) { return "java"; }
+    if (i == 16) { return "kotlin"; }
+    if (i == 17) { return "cpp"; }
+    if (i == 18) { return "csharp"; }
+    if (i == 19) { return "php"; }
+    if (i == 20) { return "ruby"; }
+    if (i == 21) { return "lua"; }
+    if (i == 22) { return "swift"; }
+    if (i == 23) { return "elixir"; }
+    if (i == 24) { return "ocaml"; }
+    if (i == 25) { return "haskell"; }
+    if (i == 26) { return "sql"; }
+    if (i == 27) { return "graphql"; }
+    if (i == 28) { return "protobuf"; }
+    if (i == 29) { return "html"; }
+    if (i == 30) { return "xml"; }
+    if (i == 31) { return "css"; }
+    if (i == 32) { return "scss"; }
+    if (i == 33) { return "dockerfile"; }
+    if (i == 34) { return "makefile"; }
+    if (i == 35) { return "ini"; }
     return "plain";
 }
 
 # Extensions for language i (space-separated, lowercase, leading dot).
+# Empty string = language has no extension dispatch (asm_aarch64 needs
+# --language=, dockerfile + makefile dispatch via _path_filename_match
+# below).
 fn lang_exts(i) {
     if (i == 0)  { return ""; }
     if (i == 1)  { return ".sh .bash .zsh"; }
@@ -57,6 +83,29 @@ fn lang_exts(i) {
     if (i == 10) { return ".yaml .yml"; }
     if (i == 11) { return ".go"; }
     if (i == 12) { return ".zig"; }
+    if (i == 13) { return ".s .asm"; }
+    if (i == 14) { return ""; }
+    if (i == 15) { return ".java"; }
+    if (i == 16) { return ".kt .kts"; }
+    if (i == 17) { return ".cpp .cc .cxx .hpp .hxx"; }
+    if (i == 18) { return ".cs .csx"; }
+    if (i == 19) { return ".php .phtml"; }
+    if (i == 20) { return ".rb"; }
+    if (i == 21) { return ".lua"; }
+    if (i == 22) { return ".swift"; }
+    if (i == 23) { return ".ex .exs"; }
+    if (i == 24) { return ".ml .mli"; }
+    if (i == 25) { return ".hs .lhs"; }
+    if (i == 26) { return ".sql"; }
+    if (i == 27) { return ".graphql .gql"; }
+    if (i == 28) { return ".proto"; }
+    if (i == 29) { return ".html .htm"; }
+    if (i == 30) { return ".xml .xsl .xsd .svg"; }
+    if (i == 31) { return ".css"; }
+    if (i == 32) { return ".scss .sass"; }
+    if (i == 33) { return ""; }
+    if (i == 34) { return ""; }
+    if (i == 35) { return ".ini .conf .cfg .properties"; }
     return "";
 }
 
@@ -64,14 +113,51 @@ fn lang_exts(i) {
 # that may appear in the shebang line, e.g. "python" matches
 # "#!/usr/bin/env python3").
 fn lang_shebangs(i) {
-    if (i == 1) { return "sh bash zsh"; }
-    if (i == 2) { return "python python3 python2"; }
-    if (i == 3) { return "node deno"; }
-    if (i == 5) { return "rust-script"; }
+    if (i == 1)  { return "sh bash zsh"; }
+    if (i == 2)  { return "python python3 python2"; }
+    if (i == 3)  { return "node deno"; }
+    if (i == 5)  { return "rust-script"; }
+    if (i == 19) { return "php"; }
+    if (i == 20) { return "ruby"; }
+    if (i == 21) { return "lua"; }
+    if (i == 22) { return "swift"; }
+    if (i == 23) { return "elixir"; }
+    if (i == 24) { return "ocaml ocamlrun"; }
     return "";
 }
 
 # ── Helpers ────────────────────────────────────────────────────────────
+
+# Case-sensitive end-match: does `path` end exactly with `tail`?
+# Used by filename-suffix detection (Dockerfile / Containerfile —
+# vyakarana 1.8.0 ADR semantics: filename-shape match, not extension).
+fn _path_ends_with(path, tail) {
+    var plen = strlen(path);
+    var tlen = strlen(tail);
+    if (tlen > plen) { return 0; }
+    var pi = plen - tlen;
+    var ti = 0;
+    while (ti < tlen) {
+        if (load8(path + pi + ti) != load8(tail + ti)) { return 0; }
+        ti = ti + 1;
+    }
+    return 1;
+}
+
+# Filename-shape match: returns 1 if `path` is exactly `name`, ends with
+# `/<name>`, or ends with `.<name>` (Dockerfile-style suffix per
+# vyakarana 1.8.0 — covers ./Dockerfile, /path/to/Dockerfile, and
+# name.Dockerfile uniformly).
+fn _path_filename_match(path, name) {
+    if (_path_ends_with(path, name) == 0) { return 0; }
+    var plen = strlen(path);
+    var nlen = strlen(name);
+    if (plen == nlen) { return 1; }              # exact basename
+    var prev = load8(path + plen - nlen - 1);
+    if (prev == 47) { return 1; }                # '/' — basename match
+    if (prev == 46) { return 1; }                # '.' — name.Dockerfile
+    return 0;
+}
 
 # Case-folded suffix check: does `path` end with `ext` (lowercase)?
 # Path chars are compared lowercase via add-32-if-A-to-Z trick.
@@ -205,6 +291,18 @@ fn detect_language_from_path(path) {
         }
         ui = ui + 1;
     }
+
+    # Filename-shape detection (1.2.6) — Dockerfile and Makefile have
+    # no extension. Case-sensitive per vyakarana ADRs: "Makefile",
+    # "makefile", "GNUmakefile" all match makefile; "Dockerfile" and
+    # "Containerfile" plus the .Dockerfile / .Containerfile suffix
+    # forms match dockerfile.
+    if (_path_filename_match(path, "Dockerfile") == 1)    { return "dockerfile"; }
+    if (_path_filename_match(path, "Containerfile") == 1) { return "dockerfile"; }
+    if (_path_filename_match(path, "Makefile") == 1)      { return "makefile"; }
+    if (_path_filename_match(path, "makefile") == 1)      { return "makefile"; }
+    if (_path_filename_match(path, "GNUmakefile") == 1)   { return "makefile"; }
+
     var i = 1;  # skip "plain"
     while (i < LANG_COUNT) {
         if (_path_has_any_ext(path, lang_exts(i)) == 1) {

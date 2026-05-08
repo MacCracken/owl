@@ -6,6 +6,26 @@
 
 ## Version
 
+**1.2.6** — shipped 2026-05-08. End of the 1.2.x lockstep
+cascade with vyakarana 1.2.x → 1.8.x. `LANG_COUNT` 13 → 36;
+36 bundled grammars now resolve via both the user-overlay
+(`$XDG_CONFIG_HOME/owl/grammars/`) and exe-relative paths.
+Closes the "Further bundled-grammar broadening" 2.x backlog
+item. Toolchain pins moved together: cyrius 5.9.36 → 5.9.41,
+vyakarana 1.2.0 → 1.8.0. New filename-shape detection
+(`_path_filename_match` in `src/lang.cyr`) handles Dockerfile
+and Makefile, which carry no conventional extension. The 1.2.x
+patch series is shipped as one drop:
+
+- 1.2.0 — cyrius 5.9.41 + vyakarana 1.2.0 → 1.2.4 closeout
+  (asm_x86_64, asm_aarch64).
+- 1.2.1 — vyakarana 1.3.0 (java, kotlin, cpp, csharp).
+- 1.2.2 — vyakarana 1.4.0 (php, ruby, lua, swift).
+- 1.2.3 — vyakarana 1.5.0 (elixir, ocaml, haskell).
+- 1.2.4 — vyakarana 1.6.0 (sql, graphql, protobuf).
+- 1.2.5 — vyakarana 1.7.0 (html, xml, css, scss).
+- 1.2.6 — vyakarana 1.8.0 (dockerfile, makefile, ini).
+
 **1.1.12** — shipped 2026-05-08. vyakarana 1.2.0 dependency bump
 adds Go and Zig highlighting. `LANG_COUNT` 11 → 13 (`lang_name(11)
 = "go"` / `.go`, `lang_name(12) = "zig"` / `.zig`); `bootstrap_grammars`
@@ -128,35 +148,46 @@ complete; full owl attack surface audited and hardened.
 
 ## Toolchain
 
-- **Cyrius pin**: `5.9.36` (in `cyrius.cyml [package].cyrius`)
-  — bumped from `5.7.12` at 1.1.10 (2026-05-08). No source changes
-  required; the 5.7.12 → 5.9.36 window shipped no breaking changes
+- **Cyrius pin**: `5.9.41` (in `cyrius.cyml [package].cyrius`)
+  — bumped from `5.9.36` at 1.2.0 (2026-05-08). No source changes
+  required; the 5.9.36 → 5.9.41 window shipped no breaking changes
   to the stdlib surface owl imports.
-- **vyakarana pin**: `1.2.0` (in `cyrius.cyml [deps.vyakarana].tag`)
-  — bumped from `1.1.0` at 1.1.12. Public API unchanged across the
-  bump; new bundled grammars (Go, Zig) wired into owl's language
+- **vyakarana pin**: `1.8.0` (in `cyrius.cyml [deps.vyakarana].tag`)
+  — bumped from `1.2.0` at 1.2.0 in lockstep with each 1.2.x patch
+  per the cascade above. Public tokenizer API unchanged across the
+  full 1.2.0 → 1.8.0 window (token kinds, `tokenize_source(src,
+  lang)`, tokenbuf accessors); the `Grammar` record grew at 1.2.1
+  (`char_literal`, GRAMMAR_SIZE 144 → 152) and 1.6.0
+  (`case_insensitive_keywords`, GRAMMAR_SIZE 152 → 160) but owl
+  reads only via the public accessors so both layout shifts are
+  transparent. 23 new bundled grammars wired into owl's language
   table and bootstrap.
 
 ## Binary
 
-- ~220 KB (225,672 bytes, `build/owl`). DCE and non-DCE builds are
-  the same size but **not byte-identical** under cyrius 5.9.x: DCE
-  NOPs out dead-code spans (~64 KB of `0x90` padding) where the
-  5.7.x DCE was a no-op for owl's call graph. Section layout and
-  total size are stable.
-- +520 bytes vs 1.1.11 — most of it the Go + Zig grammar tables
-  compiled into vyakarana 1.2.0's `dist/vyakarana.cyr`; owl-side
-  growth is ~4 lines in `main.cyr` (bootstrap calls) and ~3 lines
-  in `lang.cyr` (table entries).
+- ~230 KB (235,280 bytes, `build/owl`, DCE). +9,608 bytes vs
+  1.1.12's 225,672 — almost all of it the 23 new grammar tables
+  compiled into vyakarana 1.8.0's `dist/vyakarana.cyr`; owl-side
+  growth is ~46 lines in `src/main.cyr` (bootstrap calls in
+  user-overlay + bundled paths) and ~55 lines in `src/lang.cyr`
+  (table entries + filename-shape helpers).
+- DCE and non-DCE builds are the same size but **not
+  byte-identical** under cyrius 5.9.x: DCE NOPs out dead-code
+  spans where the 5.7.x DCE was a no-op for owl's call graph.
+  Section layout and total size are stable.
 - Startup targets: `owl --version` 1–2 ms, tiny-file highlight 2 ms
-  (25× under the 50 ms no-op target in `docs/design-spec.md`)
+  (25× under the 50 ms no-op target in `docs/design-spec.md`).
+  Bootstrap of 36 grammars at first-token-color path costs
+  marginally more than 13; first-byte plain-mode path is
+  unaffected (grammars are loaded lazily on first highlight).
 
 ## Source
 
-- ~3,539 lines across 6 modules:
-  - `src/main.cyr` (~1,961) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff, bat-style header frame (1.1.7), wrap-continuation gutter (1.1.8), `↪` wrap-arrow glyph (1.1.9), version-banner pin sync (1.1.10), VCS-aware wrap budget (1.1.11), go/zig grammar bootstrap (1.1.12)
+- ~3,615 lines across 6 modules (1.2.6 cut, mostly table growth
+  in lang.cyr + bootstrap_grammars in main.cyr):
+  - `src/main.cyr` (~2,007) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff, bat-style header frame (1.1.7), wrap-continuation gutter (1.1.8), `↪` wrap-arrow glyph (1.1.9), version-banner pin sync (1.1.10), VCS-aware wrap budget (1.1.11), go/zig grammar bootstrap (1.1.12), 23-grammar bootstrap cascade (1.2.0–1.2.6)
   - `src/theme.cyr` (~431) — bundled themes, 10-kind palette, ANSI emission, user-theme loader (1.1.3)
-  - `src/lang.cyr` (~375) — extension/shebang/content detection + ext-override table; LANG_COUNT 13 (1.1.12 added go/zig)
+  - `src/lang.cyr` (~430) — extension/shebang/content detection + ext-override table + filename-shape detection (1.2.6); LANG_COUNT 36 (1.2.0–1.2.6 added 23 languages from vyakarana 1.2.4–1.8.0)
   - `src/vcs.cyr` (~328) — git VCS markers (M6) + --diff bypass for piped output
   - `src/config.cyr` (~298) — `key = value` config parser (M7) + `ext.*` keys (1.1.1)
   - `src/pager.cyr` (~147) — pager spawn + SIGPIPE handling + env forward (1.1.5)
@@ -171,7 +202,7 @@ complete; full owl attack surface audited and hardened.
 ## Dependencies
 
 - **Cyrius stdlib** — `syscalls`, `alloc`, `fmt`, `io`, `fs`, `str`, `string`, `vec`, `args`, `hashmap`, `process`, `tagged`, `assert`
-- **vyakarana** 1.2.0 — tokenizer + 13 bundled grammars (git-tag pinned in `[deps.vyakarana]`); 1.2.0 adds Go + Zig on top of 1.1.0's `unicode_ident` for C/Markdown, `$`-prefixed Rust idents, and triple-quoted TOML strings
+- **vyakarana** 1.8.0 — tokenizer + 36 bundled grammars (git-tag pinned in `[deps.vyakarana]`). 1.2.0 → 1.8.0 cascade picked up 23 grammars across six minor bumps: asm_x86_64 + asm_aarch64 (1.2.x), java/kotlin/cpp/csharp (1.3.0), php/ruby/lua/swift (1.4.0), elixir/ocaml/haskell (1.5.0), sql/graphql/protobuf (1.6.0), html/xml/css/scss (1.7.0), dockerfile/makefile/ini (1.8.0). Two new scanner defaults during the window are transparent to owl: `char_literal` (1.2.1, enabled in c/rust/go/zig) and `case_insensitive_keywords` (1.6.0, enabled in sql/dockerfile).
 
 No FFI. No third-party deps beyond vyakarana.
 
@@ -202,19 +233,29 @@ No FFI. No third-party deps beyond vyakarana.
 ## Next
 
 The 1.x line has nothing left to ship — 1.1.11 closed the last
-parked polish item (exact-gutter wrap math). See
-[`roadmap.md`](roadmap.md) for the forward list. Major work is 2.x,
-gated on external dependencies: SIT VCS swap, vyakarana streaming
-tokenizer (lifts the `HIGHLIGHT_MAX` cap), `--follow`, URL fetching,
-NDJSON output, AGNOS theming integration.
+parked polish item (exact-gutter wrap math), and 1.2.0 → 1.2.6
+closed the "Further bundled-grammar broadening" 2.x backlog
+item that was the only language-side parked work. See
+[`roadmap.md`](roadmap.md) for the forward list. Major work is
+2.x, gated on external dependencies: SIT VCS swap, vyakarana
+streaming tokenizer (lifts the `HIGHLIGHT_MAX` cap), `--follow`,
+URL fetching, NDJSON output, AGNOS theming integration.
 
-vyakarana 1.2.0 landed Go + Zig (picked up at owl 1.1.12). Streaming
+vyakarana 1.8.0 closes the "broaden the bundled grammar set" line
+of work — the palette now covers JVM (java/kotlin), C-family
+(cpp/csharp), scripting (php/ruby/lua), mobile (swift),
+functional (elixir/ocaml/haskell), data/IDL (sql/graphql/
+protobuf), markup/styling (html/xml/css/scss), DevOps
+(dockerfile/makefile/ini), and assembly (asm_x86_64/
+asm_aarch64) on top of the original starter set. Streaming
 tokenizer is still **not** on vyakarana's near-term list, so the
-`HIGHLIGHT_MAX`-lift item stays parked until at least vyakarana 2.x.
-Future vyakarana grammar drops (1.3.x, 2.x) will need the same
+`HIGHLIGHT_MAX`-lift item stays parked until at least vyakarana
+2.x. Future vyakarana grammar drops will need the same
 two-line wiring owl applied here: a `lang_name` / `lang_exts`
 entry in `src/lang.cyr` plus matching `_owl_load_grammar` calls
-in `bootstrap_grammars`.
+in `bootstrap_grammars`. Filename-shape grammars (no extension)
+additionally need a line in `detect_language_from_path` per the
+1.2.6 dockerfile/makefile pattern.
 
 Stdlib follow-ups: M7's `key = value` parser will swap to a formal
 CYML parser when `cyml` lands in stdlib.

@@ -212,9 +212,13 @@ echo "$tlist" | grep -q "^dark$"  || fail "--list-themes missing 'dark'"
 echo "$tlist" | grep -q "^light$" || fail "--list-themes missing 'light'"
 
 # --list-languages must include the starter set. 1.1.12 added go +
-# zig (vyakarana 1.2.0).
+# zig (vyakarana 1.2.0); 1.2.0–1.2.6 added 23 more in lockstep with
+# vyakarana 1.2.4 → 1.8.0.
 llist=$("$BIN" --list-languages)
-for lang in plain shell python javascript typescript rust cyrius c toml json yaml go zig; do
+for lang in plain shell python javascript typescript rust cyrius c toml json yaml go zig \
+            asm_x86_64 asm_aarch64 java kotlin cpp csharp php ruby lua swift \
+            elixir ocaml haskell sql graphql protobuf html xml css scss \
+            dockerfile makefile ini; do
     echo "$llist" | grep -q "^$lang\$" || fail "--list-languages missing '$lang'"
 done
 
@@ -268,6 +272,221 @@ out=$(printf 'pub fn main() void {}\nconst x = 1;\n' | "$BIN" --color=always --p
 case "$out" in
     *$(printf '\033')*) ;;
     *) fail "stdin + --color=always + --language=zig did not emit ANSI" ;;
+esac
+
+# 1.2.0 — asm_x86_64 (vyakarana 1.2.2). `.s` extension defaults to
+# asm_x86_64; asm_aarch64 needs explicit --language= per ADR. ANSI
+# probe drives `.section` + `.global` GAS directives as keywords.
+printf '.global _start\n.section .text\n_start:\n  mov rax, 60\n  syscall\n' > "$TMPDIR/t.s"
+out=$("$BIN" -n "$TMPDIR/t.s")
+case "$out" in
+    *"(asm_x86_64)"*) ;;
+    *) fail "extension detection: .s should show (asm_x86_64) in header" ;;
+esac
+out=$(printf '.global _start\n.section .text\n' | "$BIN" --color=always --paging=never --language=asm_x86_64)
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "stdin + --color=always + --language=asm_x86_64 did not emit ANSI" ;;
+esac
+out=$(printf 'b.eq label\nstp x29, x30, [sp, #-16]!\n' | "$BIN" --color=always --paging=never --language=asm_aarch64)
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "stdin + --color=always + --language=asm_aarch64 did not emit ANSI" ;;
+esac
+
+# 1.2.1 — JVM + C-family (vyakarana 1.3.0). Java covers the
+# `@`-in-ident_start + Java 21 keyword set. C++ collisions with C: .h
+# stays C, .hpp / .cpp / .cc / .cxx / .hxx route to cpp.
+printf 'public class T { public static void main(String[] a) {} }\n' > "$TMPDIR/t.java"
+out=$("$BIN" -n "$TMPDIR/t.java")
+case "$out" in
+    *"(java)"*) ;;
+    *) fail "extension detection: .java should show (java) in header" ;;
+esac
+printf 'fun main() { println(\"hi\") }\n' > "$TMPDIR/t.kt"
+out=$("$BIN" -n "$TMPDIR/t.kt")
+case "$out" in
+    *"(kotlin)"*) ;;
+    *) fail "extension detection: .kt should show (kotlin) in header" ;;
+esac
+printf '#include <iostream>\nint main() { return 0; }\n' > "$TMPDIR/t.cpp"
+out=$("$BIN" -n "$TMPDIR/t.cpp")
+case "$out" in
+    *"(cpp)"*) ;;
+    *) fail "extension detection: .cpp should show (cpp) in header" ;;
+esac
+printf 'using System;\nclass T { static void Main() {} }\n' > "$TMPDIR/t.cs"
+out=$("$BIN" -n "$TMPDIR/t.cs")
+case "$out" in
+    *"(csharp)"*) ;;
+    *) fail "extension detection: .cs should show (csharp) in header" ;;
+esac
+out=$(printf 'public class T {}\n' | "$BIN" --color=always --paging=never --language=java)
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "stdin + --color=always + --language=java did not emit ANSI" ;;
+esac
+
+# 1.2.2 — Scripting + mobile (vyakarana 1.4.0). PHP / Ruby / Lua /
+# Swift. Ruby and Lua also pick up shebang detection.
+printf '<?php echo \"hi\";\n' > "$TMPDIR/t.php"
+out=$("$BIN" -n "$TMPDIR/t.php")
+case "$out" in
+    *"(php)"*) ;;
+    *) fail "extension detection: .php should show (php) in header" ;;
+esac
+printf 'puts \"hi\"\n' > "$TMPDIR/t.rb"
+out=$("$BIN" -n "$TMPDIR/t.rb")
+case "$out" in
+    *"(ruby)"*) ;;
+    *) fail "extension detection: .rb should show (ruby) in header" ;;
+esac
+printf 'print(\"hi\")\n' > "$TMPDIR/t.lua"
+out=$("$BIN" -n "$TMPDIR/t.lua")
+case "$out" in
+    *"(lua)"*) ;;
+    *) fail "extension detection: .lua should show (lua) in header" ;;
+esac
+printf 'import Foundation\nprint(\"hi\")\n' > "$TMPDIR/t.swift"
+out=$("$BIN" -n "$TMPDIR/t.swift")
+case "$out" in
+    *"(swift)"*) ;;
+    *) fail "extension detection: .swift should show (swift) in header" ;;
+esac
+# Shebang: ruby.
+printf '#!/usr/bin/env ruby\nputs "hi"\n' > "$TMPDIR/rb_script"
+out=$("$BIN" -n "$TMPDIR/rb_script")
+case "$out" in
+    *"(ruby)"*) ;;
+    *) fail "shebang detection: ruby not detected in '$out'" ;;
+esac
+out=$(printf 'puts \"hi\"\n' | "$BIN" --color=always --paging=never --language=ruby)
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "stdin + --color=always + --language=ruby did not emit ANSI" ;;
+esac
+
+# 1.2.3 — Functional tier (vyakarana 1.5.0). Elixir / OCaml / Haskell.
+printf 'defmodule T do\n  def hi, do: :ok\nend\n' > "$TMPDIR/t.ex"
+out=$("$BIN" -n "$TMPDIR/t.ex")
+case "$out" in
+    *"(elixir)"*) ;;
+    *) fail "extension detection: .ex should show (elixir) in header" ;;
+esac
+printf 'let x = 1\n' > "$TMPDIR/t.ml"
+out=$("$BIN" -n "$TMPDIR/t.ml")
+case "$out" in
+    *"(ocaml)"*) ;;
+    *) fail "extension detection: .ml should show (ocaml) in header" ;;
+esac
+printf 'main :: IO ()\nmain = putStrLn \"hi\"\n' > "$TMPDIR/t.hs"
+out=$("$BIN" -n "$TMPDIR/t.hs")
+case "$out" in
+    *"(haskell)"*) ;;
+    *) fail "extension detection: .hs should show (haskell) in header" ;;
+esac
+
+# 1.2.4 — Data / query / IDL (vyakarana 1.6.0). SQL exercises the
+# case-insensitive keyword default (ADR 0011).
+printf 'SELECT * FROM users;\n' > "$TMPDIR/t.sql"
+out=$("$BIN" -n "$TMPDIR/t.sql")
+case "$out" in
+    *"(sql)"*) ;;
+    *) fail "extension detection: .sql should show (sql) in header" ;;
+esac
+printf 'type Query { hello: String }\n' > "$TMPDIR/t.graphql"
+out=$("$BIN" -n "$TMPDIR/t.graphql")
+case "$out" in
+    *"(graphql)"*) ;;
+    *) fail "extension detection: .graphql should show (graphql) in header" ;;
+esac
+printf 'syntax = \"proto3\";\nmessage M { string s = 1; }\n' > "$TMPDIR/t.proto"
+out=$("$BIN" -n "$TMPDIR/t.proto")
+case "$out" in
+    *"(protobuf)"*) ;;
+    *) fail "extension detection: .proto should show (protobuf) in header" ;;
+esac
+out=$(printf 'select * from users;\n' | "$BIN" --color=always --paging=never --language=sql)
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "stdin + --color=always + --language=sql did not emit ANSI on lower-case keywords" ;;
+esac
+
+# 1.2.5 — Markup + styling (vyakarana 1.7.0). HTML / XML / CSS / SCSS.
+printf '<html><body>hi</body></html>\n' > "$TMPDIR/t.html"
+out=$("$BIN" -n "$TMPDIR/t.html")
+case "$out" in
+    *"(html)"*) ;;
+    *) fail "extension detection: .html should show (html) in header" ;;
+esac
+printf '<?xml version=\"1.0\"?>\n<root/>\n' > "$TMPDIR/t.xml"
+out=$("$BIN" -n "$TMPDIR/t.xml")
+case "$out" in
+    *"(xml)"*) ;;
+    *) fail "extension detection: .xml should show (xml) in header" ;;
+esac
+printf 'body { color: red; }\n' > "$TMPDIR/t.css"
+out=$("$BIN" -n "$TMPDIR/t.css")
+case "$out" in
+    *"(css)"*) ;;
+    *) fail "extension detection: .css should show (css) in header" ;;
+esac
+printf '$primary: red;\nbody { color: $primary; }\n' > "$TMPDIR/t.scss"
+out=$("$BIN" -n "$TMPDIR/t.scss")
+case "$out" in
+    *"(scss)"*) ;;
+    *) fail "extension detection: .scss should show (scss) in header" ;;
+esac
+
+# 1.2.6 — DevOps + infrastructure (vyakarana 1.8.0). Dockerfile and
+# Makefile have no extension — they dispatch via _path_filename_match.
+# INI dispatches via .ini extension.
+printf 'FROM alpine\nRUN echo hi\n' > "$TMPDIR/Dockerfile"
+out=$("$BIN" -n "$TMPDIR/Dockerfile")
+case "$out" in
+    *"(dockerfile)"*) ;;
+    *) fail "filename detection: Dockerfile should show (dockerfile) in header" ;;
+esac
+printf 'FROM alpine\n' > "$TMPDIR/myapp.Dockerfile"
+out=$("$BIN" -n "$TMPDIR/myapp.Dockerfile")
+case "$out" in
+    *"(dockerfile)"*) ;;
+    *) fail "filename detection: name.Dockerfile should show (dockerfile) in header" ;;
+esac
+printf 'FROM alpine\n' > "$TMPDIR/Containerfile"
+out=$("$BIN" -n "$TMPDIR/Containerfile")
+case "$out" in
+    *"(dockerfile)"*) ;;
+    *) fail "filename detection: Containerfile should show (dockerfile) in header" ;;
+esac
+printf 'all:\n\techo hi\n' > "$TMPDIR/Makefile"
+out=$("$BIN" -n "$TMPDIR/Makefile")
+case "$out" in
+    *"(makefile)"*) ;;
+    *) fail "filename detection: Makefile should show (makefile) in header" ;;
+esac
+printf 'all:\n\techo hi\n' > "$TMPDIR/makefile"
+out=$("$BIN" -n "$TMPDIR/makefile")
+case "$out" in
+    *"(makefile)"*) ;;
+    *) fail "filename detection: lowercase makefile should show (makefile) in header" ;;
+esac
+printf 'all:\n\techo hi\n' > "$TMPDIR/GNUmakefile"
+out=$("$BIN" -n "$TMPDIR/GNUmakefile")
+case "$out" in
+    *"(makefile)"*) ;;
+    *) fail "filename detection: GNUmakefile should show (makefile) in header" ;;
+esac
+printf '[section]\nkey = value\n' > "$TMPDIR/t.ini"
+out=$("$BIN" -n "$TMPDIR/t.ini")
+case "$out" in
+    *"(ini)"*) ;;
+    *) fail "extension detection: .ini should show (ini) in header" ;;
+esac
+out=$(printf 'FROM alpine\nRUN echo hi\n' | "$BIN" --color=always --paging=never --language=dockerfile)
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "stdin + --color=always + --language=dockerfile did not emit ANSI" ;;
 esac
 
 # Shebang detection: python shebang.

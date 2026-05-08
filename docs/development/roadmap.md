@@ -2,7 +2,7 @@
 
 Forward-looking planning surface. Latest release and prior history
 live in `CHANGELOG.md`; this file tracks what's *next*. Current
-release is **1.1.12**; the 1.x line has nothing left to ship and
+release is **1.2.6**; the 1.x line has nothing left to ship and
 the major forward work is 2.x, gated on external dependencies.
 
 ---
@@ -14,6 +14,13 @@ forward-looking. Full prose in `CHANGELOG.md`.
 
 | Release | Date       | Headline                                                |
 |---------|------------|---------------------------------------------------------|
+| 1.2.6   | 2026-05-08 | vyakarana 1.8.0 — Dockerfile + Makefile + INI           |
+| 1.2.5   | 2026-05-08 | vyakarana 1.7.0 — HTML + XML + CSS + SCSS               |
+| 1.2.4   | 2026-05-08 | vyakarana 1.6.0 — SQL + GraphQL + Protobuf              |
+| 1.2.3   | 2026-05-08 | vyakarana 1.5.0 — Elixir + OCaml + Haskell              |
+| 1.2.2   | 2026-05-08 | vyakarana 1.4.0 — PHP + Ruby + Lua + Swift              |
+| 1.2.1   | 2026-05-08 | vyakarana 1.3.0 — Java + Kotlin + C++ + C#              |
+| 1.2.0   | 2026-05-08 | cyrius 5.9.41 + vyakarana 1.2.4 (asm_x86_64 + aarch64)  |
 | 1.1.12  | 2026-05-08 | vyakarana 1.2.0 — Go + Zig grammars                     |
 | 1.1.11  | 2026-05-08 | exact-gutter wrap math (last 1.x polish item)           |
 | 1.1.10  | 2026-05-08 | cyrius 5.9.36 + vyakarana 1.1.0 toolchain refresh       |
@@ -60,16 +67,10 @@ _Empty — last item closed in 1.1.11 (exact-gutter wrap math)._
 - **Streaming tokenizer.** Raise `HIGHLIGHT_MAX` past 128 KB
   when either (a) the bump allocator gets a `free()` or (b)
   vyakarana ships a streaming tokenizer. Not on vyakarana's
-  near-term list, so this item stays parked until at least
-  vyakarana 2.x.
+  near-term list (1.2.0 → 1.8.0 was all grammar broadening, no
+  scanner-architecture work), so this item stays parked until at
+  least vyakarana 2.x.
 
-- **Further bundled-grammar broadening.** vyakarana 1.2.0 added
-  Go + Zig (picked up at owl 1.1.12). Future grammar drops (1.3.x,
-  2.x candidates: java, kotlin, swift, ruby, lua, …) need the same
-  two-line wiring per language: an entry in `src/lang.cyr`'s
-  `lang_name`/`lang_exts` plus a matching `_owl_load_grammar` call
-  in `bootstrap_grammars`. Smoke-gate template lives in
-  `scripts/smoke.sh` next to the existing go/zig gates.
 - **`--follow` / `-f` (tail-style live highlighting).** Needs
   inotify and a re-tokenize strategy. Deferred explicitly.
 - **URL / remote-file support.** `owl https://…` fetching a
@@ -78,6 +79,20 @@ _Empty — last item closed in 1.1.11 (exact-gutter wrap math)._
   tool interop. Builds directly on vyakarana's NDJSON shape.
 - **Native AGNOS theming integration.** Wait until the AGNOS
   theming system ships.
+
+### Closed in 1.2.x
+
+- ~~**Further bundled-grammar broadening.**~~ Closed by the 1.2.0
+  → 1.2.6 lockstep cascade tracking vyakarana 1.2.x → 1.8.0. The
+  bundled palette went 13 → 36 grammars, picking up everything
+  vyakarana 1.8.0 ships (assembly, JVM, C-family, scripting,
+  mobile, functional, data/IDL, markup/styling, DevOps). The
+  per-language wiring template (entry in `lang_name`/`lang_exts`
+  + `_owl_load_grammar` call in bootstrap + smoke gate) is what
+  any future vyakarana grammar drop needs. Filename-shape grammars
+  (no extension) additionally need a line in
+  `detect_language_from_path` per the 1.2.6 dockerfile/makefile
+  pattern.
 
 ---
 
