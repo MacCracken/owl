@@ -673,6 +673,35 @@ body_count=$(printf '%s\n' "$out" | grep -c 'aaaaaaa')
 diff <(printf '%s\n' "$long_line") <("$BIN" -p --wrap=auto <<<"$long_line") > /dev/null \
     || fail "--wrap=auto broke -p cat parity"
 
+# 1.1.11 — exact-gutter wrap math. Pre-1.1.11 owl always subtracted
+# the VCS-on (11-col) gutter when computing the wrap budget, even
+# when --style=no-changes left the marker cell off and the gutter was
+# only 9 cols wide; wrapped content stopped 2 cols short of the right
+# rule. With the per-file _recompute_wrap_cols path, --style=no-changes
+# at 80-col fallback width should fit exactly 71 chars of content per
+# row (80 − 9), and a 71-char line must NOT wrap.
+seventy_one=$(printf 'a%.0s' $(seq 1 71))
+out=$("$BIN" --style=no-changes -n --paging=never <<<"$seventy_one")
+case "$out" in
+    *"↪"*) fail "--style=no-changes wrapped 71-char line that fits 9-col gutter at 80 cols" ;;
+esac
+# And the boundary holds: a 72-char line MUST wrap, proving the
+# budget is exactly 71 (not silently widened past the right rule).
+seventy_two=$(printf 'a%.0s' $(seq 1 72))
+out=$("$BIN" --style=no-changes -n --paging=never <<<"$seventy_two")
+case "$out" in
+    *"↪"*) ;;
+    *) fail "--style=no-changes did not wrap 72-char line at 80-col fallback" ;;
+esac
+# Default style (marker cell present, gutter 11 cols) keeps the
+# pre-1.1.11 budget — a 70-char line wraps because 80 − 11 = 69.
+seventy=$(printf 'a%.0s' $(seq 1 70))
+out=$("$BIN" -n --paging=never <<<"$seventy")
+case "$out" in
+    *"↪"*) ;;
+    *) fail "default-style wrap budget regressed: 70-char line should wrap (80 − 11 = 69)" ;;
+esac
+
 # 1.1.1 — ext.<extension> = <language> override. Map an arbitrary
 # extension to a known language; verify the file header gains the
 # language label that the built-in table wouldn't have produced.

@@ -6,6 +6,54 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.1.11] — 2026-05-08
+
+Last 1.x polish item closed: exact-gutter wrap math.
+
+### Fixed
+
+- **Wrap budget now tracks the actual gutter width per file.** Pre-1.1.11
+  `resolve_mode` always subtracted the VCS-on (11-col) gutter when
+  computing `g_wrap_cols`, regardless of whether the change-marker
+  cell was actually rendering. Under `--style=no-changes` the marker
+  cell stays off and the gutter is only 9 cols wide, so wrapped
+  content stopped 2 cols short of the right rule — a cosmetic gap
+  the v1.1.x roadmap had carried since 1.1.8.
+
+  Two changes drive the fix (`src/main.cyr`):
+  - New `g_wrap_term_cols` global caches the resolved terminal width
+    once at `resolve_mode` time.
+  - New `_recompute_wrap_cols()` helper picks the gutter width from
+    `vcs_enabled()` (9 cols when 0, 11 cols when 1) and recomputes
+    `g_wrap_cols`. It runs from `resolve_mode` (initial) and again
+    after every `vcs_compute_markers(path)` so per-file VCS state can
+    re-widen or re-narrow the budget.
+
+  Default-style behavior is unchanged — the marker cell is always in
+  play in decorated mode (its slot renders as a space outside a repo),
+  so `g_wrap_cols` still resolves to `terminal − 11`. Plain mode
+  (`-p`) and `--wrap=never` paths are untouched.
+
+### Added
+
+- **Smoke gates locking the gutter math** (`scripts/smoke.sh`):
+  - `--style=no-changes -n` at 80-col fallback fits exactly 71 chars
+    of content (a 71-char line does not wrap, a 72-char line does).
+  - Default style (marker cell in play) preserves the 69-char budget
+    — a 70-char line still wraps. Catches regressions in either
+    direction.
+
+### Notes
+
+- DCE binary: 225,152 bytes (~220 KB; +256 bytes vs 1.1.10 — the
+  new helper, the cache global, and the recompute callsite). DCE and
+  non-DCE remain the same size, not byte-identical.
+- `src/main.cyr`: ~1,922 → ~1,957 lines.
+- vyakarana stays pinned at 1.1.0; cyrius stays at 5.9.36. The 1.2.x
+  vyakarana line is on track to broaden bundled-grammar coverage —
+  streaming tokenizer (the gate for raising owl's `HIGHLIGHT_MAX`)
+  is *not* on the 1.2.x list, so the 2.x backlog item stays parked.
+
 ## [1.1.10] — 2026-05-08
 
 Toolchain + tokenizer-dep refresh. No behavior change for end users;

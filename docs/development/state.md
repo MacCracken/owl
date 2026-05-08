@@ -6,6 +6,18 @@
 
 ## Version
 
+**1.1.11** — shipped 2026-05-08. Last 1.x polish item closed:
+exact-gutter wrap math. Pre-1.1.11 owl always subtracted the VCS-on
+(11-col) gutter when computing the wrap budget, even when
+`--style=no-changes` left the marker cell off and the gutter was
+only 9 cols wide; wrapped content stopped 2 cols short of the right
+rule. New `g_wrap_term_cols` cache + `_recompute_wrap_cols()` helper
+pick the gutter width from `vcs_enabled()` (9 when 0, 11 when 1) and
+re-resolve the budget after every `vcs_compute_markers(path)`.
+Default-style behavior unchanged (the marker cell is always in play
+in decorated mode). Smoke gates lock both the new exact-fit budget
+and the unchanged default-style boundary.
+
 **1.1.10** — shipped 2026-05-08. Toolchain + tokenizer-dep refresh.
 Cyrius pin moves from 5.7.12 → 5.9.36 (four `5.9.x` minor slots'
 worth of compiler-internal fixes; nothing owl exercises broke).
@@ -115,23 +127,21 @@ complete; full owl attack surface audited and hardened.
 
 ## Binary
 
-- ~220 KB (224,896 bytes, `build/owl`). DCE and non-DCE builds are
+- ~220 KB (225,152 bytes, `build/owl`). DCE and non-DCE builds are
   the same size but **not byte-identical** under cyrius 5.9.x: DCE
   NOPs out dead-code spans (~64 KB of `0x90` padding) where the
   5.7.x DCE was a no-op for owl's call graph. Section layout and
   total size are stable.
-- +11,112 bytes vs 1.1.9 — pure toolchain + dep delta. ~+900 B from
-  vyakarana 1.1.0's added grammar rules in `dist/vyakarana.cyr`; the
-  rest from cyrius stdlib growth across 5.7.x → 5.9.36 (notably
-  `lib/args.cyr`'s 2 MB heap argv buffer per v5.9.4). No owl source
-  changes beyond the version-banner triple.
+- +256 bytes vs 1.1.10 — the new `_recompute_wrap_cols` helper, the
+  `g_wrap_term_cols` cache, and the per-file recompute callsite at
+  `vcs_compute_markers`.
 - Startup targets: `owl --version` 1–2 ms, tiny-file highlight 2 ms
   (25× under the 50 ms no-op target in `docs/design-spec.md`)
 
 ## Source
 
-- ~3,497 lines across 6 modules:
-  - `src/main.cyr` (~1,922) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff, bat-style header frame (1.1.7), wrap-continuation gutter (1.1.8), `↪` wrap-arrow glyph (1.1.9), version-banner pin sync (1.1.10)
+- ~3,532 lines across 6 modules:
+  - `src/main.cyr` (~1,957) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff, bat-style header frame (1.1.7), wrap-continuation gutter (1.1.8), `↪` wrap-arrow glyph (1.1.9), version-banner pin sync (1.1.10), VCS-aware wrap budget (1.1.11)
   - `src/theme.cyr` (~431) — bundled themes, 10-kind palette, ANSI emission, user-theme loader (1.1.3)
   - `src/lang.cyr` (~371) — extension/shebang/content detection + ext-override table
   - `src/vcs.cyr` (~328) — git VCS markers (M6) + --diff bypass for piped output
@@ -178,15 +188,19 @@ No FFI. No third-party deps beyond vyakarana.
 
 ## Next
 
-The 1.x line is in polish mode — see [`roadmap.md`](roadmap.md) for
-the live list. As of 1.1.10 the only parked 1.x item is exact-gutter
-wrap math (cosmetic; wrapped content stops 2 cols short of the
-right rule when VCS markers are off). Major forward work is 2.x,
+The 1.x line has nothing left to ship — 1.1.11 closed the last
+parked polish item (exact-gutter wrap math). See
+[`roadmap.md`](roadmap.md) for the forward list. Major work is 2.x,
 gated on external dependencies: SIT VCS swap, vyakarana streaming
-tokenizer (lifts the `HIGHLIGHT_MAX` cap), `--follow`, URL
-fetching, NDJSON output, AGNOS theming integration.
+tokenizer (lifts the `HIGHLIGHT_MAX` cap), `--follow`, URL fetching,
+NDJSON output, AGNOS theming integration.
+
+vyakarana 1.2.x (in flight upstream) is broadening bundled-grammar
+coverage; streaming tokenizer is **not** on the 1.2.x list, so the
+`HIGHLIGHT_MAX`-lift item stays parked. When 1.2.x ships, owl picks
+up the new languages automatically via the `[deps.vyakarana].tag`
+bump — no source changes needed past the pin.
 
 Stdlib follow-ups: M7's `key = value` parser will swap to a formal
 CYML parser when `cyml` lands in stdlib; vyakarana's CYML grammar
-loader (their M2) lets owl broaden bundled-grammar coverage past
-the current 11.
+loader lets owl broaden bundled-grammar coverage past the current 11.

@@ -2,8 +2,8 @@
 
 Forward-looking planning surface. Latest release and prior history
 live in `CHANGELOG.md`; this file tracks what's *next*. Current
-release is **1.1.10**; the 1.x line is in polish mode and the major
-forward work is 2.x, gated on external dependencies.
+release is **1.1.11**; the 1.x line has nothing left to ship and
+the major forward work is 2.x, gated on external dependencies.
 
 ---
 
@@ -14,6 +14,7 @@ forward-looking. Full prose in `CHANGELOG.md`.
 
 | Release | Date       | Headline                                                |
 |---------|------------|---------------------------------------------------------|
+| 1.1.11  | 2026-05-08 | exact-gutter wrap math (last 1.x polish item)           |
 | 1.1.10  | 2026-05-08 | cyrius 5.9.36 + vyakarana 1.1.0 toolchain refresh       |
 | 1.1.9   | 2026-04-27 | `↪` wrap-arrow continuation glyph                       |
 | 1.1.8   | 2026-04-27 | Frame containment — `--wrap=auto` defaults wrap-on      |
@@ -44,14 +45,7 @@ forward-looking. Full prose in `CHANGELOG.md`.
 
 ## 1.x polish (small, opportunistic)
 
-- **Exact-gutter wrap math.** `resolve_mode` currently subtracts
-  `c - 11` (VCS-on gutter width) when computing `g_wrap_cols`,
-  regardless of whether VCS is active for the current file. With VCS
-  off the gutter is only 9 cols, so wrapped content stops 2 cols
-  short of the right rule. Cosmetic; tightening means deferring the
-  wrap-cols computation until after `vcs_compute_markers` runs (or
-  recomputing per-file). Park until either someone notices the
-  visual gap or another wrap-region change motivates the touch.
+_Empty — last item closed in 1.1.11 (exact-gutter wrap math)._
 
 ---
 
@@ -64,7 +58,15 @@ forward-looking. Full prose in `CHANGELOG.md`.
   `vcs_enabled`, `vcs_reset`, `set_style`). Tracked in memory.
 - **Streaming tokenizer.** Raise `HIGHLIGHT_MAX` past 128 KB
   when either (a) the bump allocator gets a `free()` or (b)
-  vyakarana's streaming tokenizer (their 2.x ROADMAP) ships.
+  vyakarana ships a streaming tokenizer. Not on vyakarana's 1.2.x
+  list (1.2.x is broadening bundled-grammar coverage, no streaming),
+  so this item stays parked until at least vyakarana 2.x.
+
+- **Bundled-grammar broadening.** vyakarana 1.2.x adds languages
+  beyond the current 11 (shell, python, js, ts, rust, c, cyrius,
+  toml, json, yaml, markdown). Pick up via a `[deps.vyakarana].tag`
+  bump once 1.2.0 lands — no owl source changes needed; the
+  language-name table is already keyed off vyakarana's registry.
 - **`--follow` / `-f` (tail-style live highlighting).** Needs
   inotify and a re-tokenize strategy. Deferred explicitly.
 - **URL / remote-file support.** `owl https://…` fetching a

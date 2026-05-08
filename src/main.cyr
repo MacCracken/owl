@@ -10,7 +10,7 @@ include "src/config.cyr"
 
 # Keep OWL_VERSION in sync with the VERSION file.
 # A M8 CI check will enforce equality; for now, manual.
-var OWL_VERSION = "owl 1.1.10";
+var OWL_VERSION = "owl 1.1.11";
 
 var BUFSIZE = 65536;
 
@@ -73,8 +73,18 @@ var g_render_done      = 0;
 # means "unset / wrap disabled"; resolved in resolve_mode after the
 # TTY check. col tracks bytes emitted on the current visible row and
 # resets at every emitted '\n' (file-origin or wrap-inserted).
-var g_wrap_cols = 0;
-var g_wrap_col  = 0;
+# 1.1.11 — g_wrap_term_cols caches the resolved terminal width once at
+# resolve_mode time; g_wrap_cols (the actual column budget after gutter
+# subtraction) is recomputed per file via _recompute_wrap_cols once
+# vcs_compute_markers has settled vcs_enabled() for that file. Pre-1.1.11
+# always subtracted 11 cols (the VCS-on gutter width) regardless of
+# whether the marker cell was rendering, so wrapped content under
+# --style=no-changes stopped 2 cols short of the right rule. Now the
+# subtraction tracks the actual gutter: 9 cols when vcs_enabled() == 0
+# (--style=no-changes), 11 cols when the marker cell is in play.
+var g_wrap_cols      = 0;
+var g_wrap_term_cols = 0;
+var g_wrap_col       = 0;
 
 # 1.1.7 — bat-style header frame. _term_cols result cached per file so
 # top/middle/bottom rules render at a consistent width even if the
@@ -172,23 +182,42 @@ fn resolve_mode() {
     # useful for scripted fixed-width capture). never is the explicit
     # overflow escape hatch. Plain mode (-p) and piped output without
     # decorations still bypass wrap entirely (cat parity).
-    g_wrap_cols = 0;
+    # 1.1.11: terminal width is cached here; the per-file wrap budget
+    # (gutter subtraction) is computed by _recompute_wrap_cols, which
+    # the render loop calls after vcs_compute_markers settles the
+    # gutter width for the current file.
+    g_wrap_cols      = 0;
+    g_wrap_term_cols = 0;
     var wrap_on = 0;
     if (g_flag_wrap == 2)                          { wrap_on = 1; }
     if (g_flag_wrap == 0) { if (g_decorated == 1) { wrap_on = 1; } }
     if (wrap_on == 1) {
         var c = _term_cols();
         if (c == 0) { c = 80; }
-        # Reserve gutter prefix (lineno + space + optional VCS cell +
-        # divider + space). Conservative — uses VCS-on width even when
-        # VCS will turn out off, so wrapped content may stop 2 cols
-        # before the right rule when VCS is inactive. Acceptable.
-        if (resolved_show_numbers() == 1) {
-            if (c > 13) { c = c - 11; }
-        }
-        g_wrap_cols = c;
+        g_wrap_term_cols = c;
+        _recompute_wrap_cols();
     }
 
+    return 0;
+}
+
+# 1.1.11 — VCS-aware wrap-budget recompute. Called from resolve_mode
+# (initial set) and after every vcs_compute_markers(path) so the wrap
+# column budget tracks the actual gutter width: 9 cols when vcs_enabled()
+# is 0 (--style=no-changes — lineno + " │ "), 11 cols otherwise (the
+# extra 2 cols hold the change-marker cell, which still emits as a
+# space outside a repo). No-op when wrap is off (g_wrap_term_cols ==
+# 0). When -n is off the gutter subtraction is skipped entirely — wrap
+# uses the full terminal width.
+fn _recompute_wrap_cols() {
+    if (g_wrap_term_cols == 0) { g_wrap_cols = 0; return 0; }
+    var c = g_wrap_term_cols;
+    if (resolved_show_numbers() == 1) {
+        var gutter = 9;
+        if (vcs_enabled() == 1) { gutter = 11; }
+        if (c > gutter + 2) { c = c - gutter; }
+    }
+    g_wrap_cols = c;
     return 0;
 }
 
@@ -1459,6 +1488,12 @@ fn render_path(path) {
     # highlighted-byte loop (M3b) both read through vcs_mark_for_line.
     # Silent no-op when not in a repo, not decorated, or --no-changes.
     vcs_compute_markers(path);
+
+    # 1.1.11 — recompute wrap budget now that vcs_enabled() reflects
+    # the current file. Without this the budget would be stuck on
+    # whatever resolve_mode picked at startup (VCS-off-conservative),
+    # and a VCS-active file would overflow the right rule by 2 cols.
+    _recompute_wrap_cols();
 
     # Highlighting eligibility. Gated on color (not on decorated) —
     # piped output with --color=always should still color tokens even
