@@ -22,7 +22,7 @@
 # Extensions and shebang hints are space-separated lowercase tokens.
 # Order matters: "cyrius" precedes "c" so *.cyr doesn't match *.c.
 
-var LANG_COUNT = 36;
+var LANG_COUNT = 38;
 
 # Indexed 0..LANG_COUNT-1
 fn lang_name(i) {
@@ -62,6 +62,8 @@ fn lang_name(i) {
     if (i == 33) { return "dockerfile"; }
     if (i == 34) { return "makefile"; }
     if (i == 35) { return "ini"; }
+    if (i == 36) { return "cyml"; }
+    if (i == 37) { return "llvm_ir"; }
     return "plain";
 }
 
@@ -78,7 +80,7 @@ fn lang_exts(i) {
     if (i == 5)  { return ".rs"; }
     if (i == 6)  { return ".cyr .tcyr .bcyr .fcyr"; }
     if (i == 7)  { return ".c .h"; }
-    if (i == 8)  { return ".toml .cyml"; }
+    if (i == 8)  { return ".toml"; }
     if (i == 9)  { return ".json"; }
     if (i == 10) { return ".yaml .yml"; }
     if (i == 11) { return ".go"; }
@@ -106,6 +108,8 @@ fn lang_exts(i) {
     if (i == 33) { return ""; }
     if (i == 34) { return ""; }
     if (i == 35) { return ".ini .conf .cfg .properties"; }
+    if (i == 36) { return ".cyml"; }
+    if (i == 37) { return ".ll"; }
     return "";
 }
 

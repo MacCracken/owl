@@ -2,7 +2,7 @@
 
 Forward-looking planning surface. Latest release and prior history
 live in `CHANGELOG.md`; this file tracks what's *next*. Current
-release is **1.2.6**; the 1.x line has nothing left to ship and
+release is **1.3.0**; the 1.x line has nothing left to ship and
 the major forward work is 2.x, gated on external dependencies.
 
 ---
@@ -14,6 +14,7 @@ forward-looking. Full prose in `CHANGELOG.md`.
 
 | Release | Date       | Headline                                                |
 |---------|------------|---------------------------------------------------------|
+| 1.3.0   | 2026-05-08 | cyrius 5.9.43 + vyakarana 1.11.0 — cyml + llvm_ir + ADR-004 conformance |
 | 1.2.6   | 2026-05-08 | vyakarana 1.8.0 — Dockerfile + Makefile + INI           |
 | 1.2.5   | 2026-05-08 | vyakarana 1.7.0 — HTML + XML + CSS + SCSS               |
 | 1.2.4   | 2026-05-08 | vyakarana 1.6.0 — SQL + GraphQL + Protobuf              |

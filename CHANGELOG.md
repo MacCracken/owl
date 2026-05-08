@@ -6,6 +6,106 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.3.0] — 2026-05-08
+
+Toolchain refresh + vyakarana 1.8.0 → 1.11.0 cascade in one cut.
+Cyrius pin moves 5.9.41 → 5.9.43 (two patch slots, compiler-internal
+fixes). vyakarana spans three minors but only one carries owl-side
+work — 1.9.0 brings two new grammars (`cyml`, `llvm_ir`) and
+redirects `.cyml` from `toml` to the new `cyml` grammar. 1.10.0
+formalises a theme-palette contract (architecture note 004) that
+owl now honours by dispatching `theme_token_color` via
+`kind_name(k)` strings. 1.11.0 adds an LSP semantic-tokens bridge
+(`src/lsp.cyr`) — useful to editor consumers like cyim, not to
+owl's viewer surface; consumed for free as part of the dep bundle.
+
+### Added
+
+- **CYML highlighting.** `.cyml` extension dispatch + ANSI
+  tokenization via `grammars/cyml.cyml` (vyakarana 1.9.0).
+  Self-hosting payoff for the AGNOS toolchain — owl now renders
+  cyrius dependency manifests, yukti config, vidya content
+  samples, and its own `cyrius.cyml` through one bundled grammar.
+  `---` 3-byte operator (CYML's TOML-header / markdown-body
+  delimiter) tokenizes correctly; backtick spans render as
+  string.
+- **LLVM-IR highlighting.** `.ll` extension dispatch + ANSI
+  tokenization via `grammars/llvm_ir.cyml`. `@global`,
+  `%struct.Token`, `!llvm.module.flags` all tokenize as a single
+  ident (vyakarana 1.9.0 puts `@`/`%`/`!` in `ident_start`).
+  Comprehensive keyword set covers type literals, instruction
+  set, function attributes, calling conventions, and comparison
+  predicates.
+
+### Changed
+
+- **`.cyml` redirected from `toml` → `cyml`.** At 1.2.6,
+  `lang_exts(8)` included both `.toml` and `.cyml` so cyrius
+  manifests labeled as `(toml)`. vyakarana 1.9.0 ships a
+  dedicated `cyml` grammar that handles the format's `---`
+  delimiter and backtick-string shape; owl's `lang_exts(8)`
+  drops `.cyml` and a new `lang_name(36) = "cyml"` /
+  `lang_exts(36) = ".cyml"` entry takes over. Header label
+  changes from `(toml)` to `(cyml)` for any `.cyml` file.
+  Regression-locked in `scripts/smoke.sh`.
+- **`LANG_COUNT` 36 → 38** with `lang_name(36)` = `"cyml"`,
+  `lang_name(37)` = `"llvm_ir"`.
+- **`theme_token_color` now dispatches via `kind_name(k)`
+  strings** per vyakarana 1.10.0 architecture note 004
+  (theme-palette contract: kind_name strings are the stable
+  identifier across the 1.x line; the integer enum is an
+  implementation detail). Switches `if (kind == 1) { … }` to
+  `if (streq(kind_name(kind), "keyword") == 1) { … }`. Same
+  10-color palette per bundled theme; same return values; the
+  diff is conformance, not behaviour. If a future vyakarana cut
+  renames any of the 10 canonical strings, owl breaks loudly at
+  the streq site instead of silently mis-coloring on a
+  re-ordered enum. The user-theme path was already string-keyed
+  at the loader (CYML `token.<name>` keys); user-theme storage
+  stays integer-indexed but the lookup now uses
+  `kind_is_valid(kind)` rather than the open-coded
+  `kind < 0 || kind > 9` bounds check.
+- **Toolchain pin bump: cyrius 5.9.41 → 5.9.43.** No source
+  changes required.
+- **Toolchain dep bump: vyakarana 1.8.0 → 1.11.0.** Public
+  tokenizer API unchanged across the window. 1.9.0's grammar
+  additions are wired here. 1.10.0's `vyk --theme=` CLI flag is
+  not consumed (CLI-only, not in `[lib] modules`); the
+  consumer-integration guide and architecture note 004 are
+  documentation owl now conforms to. 1.11.0's
+  `lsp_kind_from_token_type` / `lsp_kind_from_standard_index`
+  bridge is editor-consumer surface (cyim et al.), not used by
+  owl's viewer path; ships in the dep bundle but DCE-strips
+  cleanly.
+- **Minor version bump.** First minor since 1.2.0 — closes the
+  vyakarana 1.9.0 grammar batch and the 1.10.0 contract
+  conformance in one cut. The 1.10.0 / 1.11.0 dep bumps that
+  carry no owl source changes ride along rather than each
+  consuming their own patch slot (no point shipping a CHANGELOG
+  entry that says "no source changes").
+
+### Verified
+
+- `cyrius build` + `CYRIUS_DCE=1 cyrius build` clean.
+- `cyrius test` — unit gates green.
+- `sh scripts/smoke.sh` — all M0–M8 gates green; new gates lock
+  `.cyml` → `(cyml)` (with explicit regression check against the
+  prior `(toml)` label), `.ll` → `(llvm_ir)`, and ANSI emission
+  for both under `--color=always --language=…` from stdin.
+- `owl --version --verbose` reports `vyakarana 1.11.0` /
+  `cyrius 5.9.43`.
+
+### Notes
+
+- SIT VCS swap stays parked. Sit is at 0.7.6 (no `[lib]` clause,
+  no `dist/sit.cyr`); the v0.7.7 library-export slot owl filed
+  on sit's roadmap hasn't shipped yet.
+- vyakarana 1.10.0's pre-2.0 prep wave is now visible — the
+  consumer-integration guide and architecture note 004 are
+  signposts that the 2.x break (streaming tokenizer; lifts
+  owl's `HIGHLIGHT_MAX` cap) is coming. Streaming tokenizer
+  itself is still parked on vyakarana 2.x.
+
 ## [1.2.6] — 2026-05-08
 
 vyakarana 1.7.0 → 1.8.0 — DevOps + infrastructure batch

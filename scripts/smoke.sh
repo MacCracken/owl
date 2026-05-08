@@ -213,12 +213,13 @@ echo "$tlist" | grep -q "^light$" || fail "--list-themes missing 'light'"
 
 # --list-languages must include the starter set. 1.1.12 added go +
 # zig (vyakarana 1.2.0); 1.2.0–1.2.6 added 23 more in lockstep with
-# vyakarana 1.2.4 → 1.8.0.
+# vyakarana 1.2.4 → 1.8.0; 1.3.0 added cyml + llvm_ir (vyakarana
+# 1.9.0).
 llist=$("$BIN" --list-languages)
 for lang in plain shell python javascript typescript rust cyrius c toml json yaml go zig \
             asm_x86_64 asm_aarch64 java kotlin cpp csharp php ruby lua swift \
             elixir ocaml haskell sql graphql protobuf html xml css scss \
-            dockerfile makefile ini; do
+            dockerfile makefile ini cyml llvm_ir; do
     echo "$llist" | grep -q "^$lang\$" || fail "--list-languages missing '$lang'"
 done
 
@@ -487,6 +488,33 @@ out=$(printf 'FROM alpine\nRUN echo hi\n' | "$BIN" --color=always --paging=never
 case "$out" in
     *$(printf '\033')*) ;;
     *) fail "stdin + --color=always + --language=dockerfile did not emit ANSI" ;;
+esac
+
+# 1.3.0 — AGNOS-native batch (vyakarana 1.9.0). cyml + llvm_ir.
+# .cyml redirects from toml → cyml at this cut (vyakarana 1.9.0
+# routing change); regression gate locks the new label.
+printf '[package]\nname = "x"\n---\nbody\n' > "$TMPDIR/t.cyml"
+out=$("$BIN" -n "$TMPDIR/t.cyml")
+case "$out" in
+    *"(cyml)"*) ;;
+    *"(toml)"*) fail "regression: .cyml still labeled (toml) — vyakarana 1.9.0 redirect not applied" ;;
+    *)         fail "extension detection: .cyml should show (cyml) in header — got '$out'" ;;
+esac
+printf 'define i32 @main() {\n  ret i32 0\n}\n' > "$TMPDIR/t.ll"
+out=$("$BIN" -n "$TMPDIR/t.ll")
+case "$out" in
+    *"(llvm_ir)"*) ;;
+    *) fail "extension detection: .ll should show (llvm_ir) in header" ;;
+esac
+out=$(printf '[package]\nname = "x"\n' | "$BIN" --color=always --paging=never --language=cyml)
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "stdin + --color=always + --language=cyml did not emit ANSI" ;;
+esac
+out=$(printf 'define i32 @main() { ret i32 0 }\n' | "$BIN" --color=always --paging=never --language=llvm_ir)
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "stdin + --color=always + --language=llvm_ir did not emit ANSI" ;;
 esac
 
 # Shebang detection: python shebang.

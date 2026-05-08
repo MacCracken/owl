@@ -6,6 +6,23 @@
 
 ## Version
 
+**1.3.0** — shipped 2026-05-08. Toolchain refresh + vyakarana
+1.8.0 → 1.11.0 cascade in one cut. Cyrius pin moves 5.9.41 →
+5.9.43. vyakarana 1.9.0 brings two new grammars (`cyml`,
+`llvm_ir`) and redirects `.cyml` from `toml` to the new `cyml`
+grammar — `LANG_COUNT` 36 → 38, `lang_exts(8)` drops `.cyml`,
+header label moves from `(toml)` to `(cyml)` for cyrius
+dependency manifests (regression-locked in smoke). vyakarana
+1.10.0's "architecture note 004" theme-palette contract
+(kind_name strings = stable identifier) is honoured by
+refactoring `theme_token_color` to dispatch via
+`kind_name(k)` string lookup. vyakarana 1.11.0's LSP
+semantic-tokens bridge is editor-consumer surface; ships in the
+dep bundle but unused by owl's viewer path (DCE-strips cleanly).
+Single minor bump — the 1.10.0 / 1.11.0 dep bumps that carry no
+owl source changes ride along rather than burning their own
+patch slots.
+
 **1.2.6** — shipped 2026-05-08. End of the 1.2.x lockstep
 cascade with vyakarana 1.2.x → 1.8.x. `LANG_COUNT` 13 → 36;
 36 bundled grammars now resolve via both the user-overlay
@@ -148,29 +165,33 @@ complete; full owl attack surface audited and hardened.
 
 ## Toolchain
 
-- **Cyrius pin**: `5.9.41` (in `cyrius.cyml [package].cyrius`)
-  — bumped from `5.9.36` at 1.2.0 (2026-05-08). No source changes
-  required; the 5.9.36 → 5.9.41 window shipped no breaking changes
-  to the stdlib surface owl imports.
-- **vyakarana pin**: `1.8.0` (in `cyrius.cyml [deps.vyakarana].tag`)
-  — bumped from `1.2.0` at 1.2.0 in lockstep with each 1.2.x patch
-  per the cascade above. Public tokenizer API unchanged across the
-  full 1.2.0 → 1.8.0 window (token kinds, `tokenize_source(src,
-  lang)`, tokenbuf accessors); the `Grammar` record grew at 1.2.1
-  (`char_literal`, GRAMMAR_SIZE 144 → 152) and 1.6.0
-  (`case_insensitive_keywords`, GRAMMAR_SIZE 152 → 160) but owl
-  reads only via the public accessors so both layout shifts are
-  transparent. 23 new bundled grammars wired into owl's language
-  table and bootstrap.
+- **Cyrius pin**: `5.9.43` (in `cyrius.cyml [package].cyrius`)
+  — bumped from `5.9.41` at 1.3.0 (2026-05-08). No source changes
+  required.
+- **vyakarana pin**: `1.11.0` (in `cyrius.cyml [deps.vyakarana].tag`)
+  — bumped from `1.8.0` at 1.3.0. Public tokenizer API unchanged
+  across the full 1.8.0 → 1.11.0 window. 1.9.0 wires two new
+  grammars (`cyml`, `llvm_ir`) into owl's language table and
+  bootstrap; `.cyml` redirects from `toml` to the new `cyml`
+  grammar. 1.10.0 documents the kind_name → palette contract
+  (architecture note 004) which owl now conforms to in
+  `theme.cyr`. 1.11.0 adds a `src/lsp.cyr` semantic-tokens
+  bridge; useful for editor consumers (cyim), unused by owl's
+  viewer path.
 
 ## Binary
 
-- ~230 KB (235,280 bytes, `build/owl`, DCE). +9,608 bytes vs
-  1.1.12's 225,672 — almost all of it the 23 new grammar tables
-  compiled into vyakarana 1.8.0's `dist/vyakarana.cyr`; owl-side
-  growth is ~46 lines in `src/main.cyr` (bootstrap calls in
-  user-overlay + bundled paths) and ~55 lines in `src/lang.cyr`
-  (table entries + filename-shape helpers).
+- ~233 KB (238,944 bytes, `build/owl`, DCE). +3,664 bytes vs
+  1.2.6's 235,280 — almost all of it the 2 new grammar tables
+  (cyml, llvm_ir) compiled into vyakarana 1.11.0's
+  `dist/vyakarana.cyr`. vyakarana 1.11.0's LSP bridge module
+  (`lsp_kind_from_token_type`, `lsp_kind_from_standard_index`)
+  ships in `[lib] modules` but DCE-strips cleanly on owl since
+  unused — confirmed in build output. owl-side growth: +4 lines
+  in `src/main.cyr` (bootstrap calls in user-overlay + bundled
+  paths) and +4 lines in `src/lang.cyr` (lang_name + lang_exts
+  entries for cyml + llvm_ir). The `theme.cyr` kind_name
+  refactor is size-neutral.
 - DCE and non-DCE builds are the same size but **not
   byte-identical** under cyrius 5.9.x: DCE NOPs out dead-code
   spans where the 5.7.x DCE was a no-op for owl's call graph.
@@ -183,11 +204,10 @@ complete; full owl attack surface audited and hardened.
 
 ## Source
 
-- ~3,615 lines across 6 modules (1.2.6 cut, mostly table growth
-  in lang.cyr + bootstrap_grammars in main.cyr):
-  - `src/main.cyr` (~2,007) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff, bat-style header frame (1.1.7), wrap-continuation gutter (1.1.8), `↪` wrap-arrow glyph (1.1.9), version-banner pin sync (1.1.10), VCS-aware wrap budget (1.1.11), go/zig grammar bootstrap (1.1.12), 23-grammar bootstrap cascade (1.2.0–1.2.6)
-  - `src/theme.cyr` (~431) — bundled themes, 10-kind palette, ANSI emission, user-theme loader (1.1.3)
-  - `src/lang.cyr` (~430) — extension/shebang/content detection + ext-override table + filename-shape detection (1.2.6); LANG_COUNT 36 (1.2.0–1.2.6 added 23 languages from vyakarana 1.2.4–1.8.0)
+- ~3,625 lines across 6 modules (1.3.0 cut):
+  - `src/main.cyr` (~2,011) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff, bat-style header frame (1.1.7), wrap-continuation gutter (1.1.8), `↪` wrap-arrow glyph (1.1.9), version-banner pin sync (1.1.10), VCS-aware wrap budget (1.1.11), go/zig grammar bootstrap (1.1.12), 23-grammar bootstrap cascade (1.2.0–1.2.6), cyml/llvm_ir bootstrap (1.3.0)
+  - `src/theme.cyr` (~437) — bundled themes, 10-kind palette, ANSI emission, user-theme loader (1.1.3); kind_name-keyed `theme_token_color` per vyakarana 1.10.0 architecture note 004 (1.3.0)
+  - `src/lang.cyr` (~432) — extension/shebang/content detection + ext-override table + filename-shape detection (1.2.6); LANG_COUNT 38 (1.3.0 added cyml/llvm_ir + redirected `.cyml` from toml → cyml per vyakarana 1.9.0)
   - `src/vcs.cyr` (~328) — git VCS markers (M6) + --diff bypass for piped output
   - `src/config.cyr` (~298) — `key = value` config parser (M7) + `ext.*` keys (1.1.1)
   - `src/pager.cyr` (~147) — pager spawn + SIGPIPE handling + env forward (1.1.5)
@@ -202,7 +222,7 @@ complete; full owl attack surface audited and hardened.
 ## Dependencies
 
 - **Cyrius stdlib** — `syscalls`, `alloc`, `fmt`, `io`, `fs`, `str`, `string`, `vec`, `args`, `hashmap`, `process`, `tagged`, `assert`
-- **vyakarana** 1.8.0 — tokenizer + 36 bundled grammars (git-tag pinned in `[deps.vyakarana]`). 1.2.0 → 1.8.0 cascade picked up 23 grammars across six minor bumps: asm_x86_64 + asm_aarch64 (1.2.x), java/kotlin/cpp/csharp (1.3.0), php/ruby/lua/swift (1.4.0), elixir/ocaml/haskell (1.5.0), sql/graphql/protobuf (1.6.0), html/xml/css/scss (1.7.0), dockerfile/makefile/ini (1.8.0). Two new scanner defaults during the window are transparent to owl: `char_literal` (1.2.1, enabled in c/rust/go/zig) and `case_insensitive_keywords` (1.6.0, enabled in sql/dockerfile).
+- **vyakarana** 1.11.0 — tokenizer + 38 bundled grammars (git-tag pinned in `[deps.vyakarana]`). 1.2.0 → 1.8.0 cascade picked up 23 grammars across six minor bumps (see 1.2.6 entry above for the breakdown). 1.9.0 added cyml + llvm_ir (the AGNOS-native batch — owl now self-hosts on its own `cyrius.cyml` rendering). 1.10.0 added a `vyk --theme=` CLI flag (CLI-only, not in `[lib]` modules — owl's CLI is unaffected) plus architecture note 004 (theme-palette contract owl now honours via `kind_name(k)`-string dispatch). 1.11.0 added a `src/lsp.cyr` semantic-tokens bridge for editor consumers (cyim et al.) — ships in `[lib] modules`, DCE-strips on owl since unused.
 
 No FFI. No third-party deps beyond vyakarana.
 

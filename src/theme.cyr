@@ -37,10 +37,18 @@ fn theme_lineno_color(i) {
 # ── Token palette (M3b) ────────────────────────────────────────────────
 #
 # Maps (theme, vyakarana token kind) → 256-color ANSI index. Returns -1
-# for "no color" — caller skips ansi_fg. Kind indices match vyakarana's
-# TK_* constants (token.cyr): 0=ident, 1=keyword, 2=string, 3=number,
-# 4=comment, 5=operator, 6=punctuation, 7=whitespace, 8=preprocessor,
-# 9=error.
+# for "no color" — caller skips ansi_fg.
+#
+# Dispatch is by `kind_name(kind)` string per vyakarana 1.10.0
+# architecture note 004 (theme-palette contract): the 10 kind_name
+# strings are the stable identifier across the 1.x line; the integer
+# enum is an implementation detail. owl honours the contract by
+# resolving kind → name once at the head of the lookup, then comparing
+# against the canonical name set ("ident", "keyword", "string",
+# "number", "comment", "operator", "punctuation", "whitespace",
+# "preprocessor", "error"). If a future vyakarana cut renames any of
+# these strings, owl breaks loudly at the streq site instead of
+# silently mis-coloring on a re-ordered enum.
 #
 # Whitespace is always unstyled — the ANSI around empty runs just adds
 # noise. Ident and punctuation fall through to the terminal default so
@@ -48,37 +56,37 @@ fn theme_lineno_color(i) {
 # loud (keyword, string, number, comment, etc.).
 
 fn theme_token_color(theme, kind) {
+    var name = kind_name(kind);
     if (theme == 0) {
         # dark
-        if (kind == 0) { return 0 - 1; }   # ident        — default
-        if (kind == 1) { return 141; }     # keyword      — purple
-        if (kind == 2) { return 113; }     # string       — green
-        if (kind == 3) { return 215; }     # number       — orange
-        if (kind == 4) { return 245; }     # comment      — grey
-        if (kind == 5) { return 110; }     # operator     — steel blue
-        if (kind == 6) { return 0 - 1; }   # punctuation  — default
-        if (kind == 7) { return 0 - 1; }   # whitespace   — default
-        if (kind == 8) { return 221; }     # preprocessor — yellow
-        if (kind == 9) { return 196; }     # error        — bright red
-        return 0 - 1;
+        if (streq(name, "keyword") == 1)      { return 141; }   # purple
+        if (streq(name, "string") == 1)       { return 113; }   # green
+        if (streq(name, "number") == 1)       { return 215; }   # orange
+        if (streq(name, "comment") == 1)      { return 245; }   # grey
+        if (streq(name, "operator") == 1)     { return 110; }   # steel blue
+        if (streq(name, "preprocessor") == 1) { return 221; }   # yellow
+        if (streq(name, "error") == 1)        { return 196; }   # bright red
+        return 0 - 1;   # ident / punctuation / whitespace / <invalid>
     }
     if (theme == 1) {
         # light
-        if (kind == 0) { return 0 - 1; }   # ident
-        if (kind == 1) { return 126; }     # keyword      — deep magenta
-        if (kind == 2) { return 28;  }     # string       — deep green
-        if (kind == 3) { return 166; }     # number       — deep orange
-        if (kind == 4) { return 244; }     # comment      — mid grey
-        if (kind == 5) { return 26;  }     # operator     — blue
-        if (kind == 6) { return 0 - 1; }   # punctuation
-        if (kind == 7) { return 0 - 1; }   # whitespace
-        if (kind == 8) { return 130; }     # preprocessor — ochre
-        if (kind == 9) { return 124; }     # error        — deep red
+        if (streq(name, "keyword") == 1)      { return 126; }   # deep magenta
+        if (streq(name, "string") == 1)       { return 28;  }   # deep green
+        if (streq(name, "number") == 1)       { return 166; }   # deep orange
+        if (streq(name, "comment") == 1)      { return 244; }   # mid grey
+        if (streq(name, "operator") == 1)     { return 26;  }   # blue
+        if (streq(name, "preprocessor") == 1) { return 130; }   # ochre
+        if (streq(name, "error") == 1)        { return 124; }   # deep red
         return 0 - 1;
     }
     if (theme == 2) {
-        if (kind < 0) { return 0 - 1; }
-        if (kind > 9) { return 0 - 1; }
+        # User theme — the loader at _user_theme_apply_kv keys CYML
+        # entries by `token.<name>` strings (already conformant to
+        # ADR-004) onto an integer-indexed table for O(1) lookup. As
+        # long as the loader and `kind_name` agree on the integer
+        # mapping, this stays correct; `kind_is_valid` is the same
+        # bounds check vyakarana exports for the public contract.
+        if (kind_is_valid(kind) == 0) { return 0 - 1; }
         if (g_user_theme_tokens == 0) { return 0 - 1; }
         return load64(g_user_theme_tokens + kind * 8);
     }

@@ -5,7 +5,7 @@ description = "Observant Watcher of Lines — a file viewer for AGNOS / Cyrius"
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/owl"
 language = "cyrius"
-cyrius = "5.9.41"
+cyrius = "5.9.43"
 
 [build]
 entry = "src/main.cyr"
@@ -21,13 +21,13 @@ output = "owl"
 #   assert                — tests/owl.tcyr
 # toml/cyml (config, M7) and any syntax-grammar deps come later.
 # vyakarana — tokenizer library for M3b (token-level highlighting).
-# Ships the ten-kind palette + 36 bundled grammars (the eleven
+# Ships the ten-kind palette + 38 bundled grammars (the eleven
 # starter set — shell, python, js, ts, rust, c, cyrius, toml, json,
 # yaml, markdown — plus go/zig at 1.2.0, asm_x86_64 at 1.2.2,
 # asm_aarch64 at 1.2.3, java/kotlin/cpp/csharp at 1.3.0, php/ruby/
 # lua/swift at 1.4.0, elixir/ocaml/haskell at 1.5.0, sql/graphql/
 # protobuf at 1.6.0, html/xml/css/scss at 1.7.0, dockerfile/makefile/
-# ini at 1.8.0).
+# ini at 1.8.0, cyml/llvm_ir at 1.9.0).
 [deps]
 stdlib = [
     "syscalls",
@@ -47,6 +47,6 @@ stdlib = [
 
 [deps.vyakarana]
 git = "https://github.com/MacCracken/vyakarana.git"
-tag = "1.8.0"
+tag = "1.11.0"
 modules = ["dist/vyakarana.cyr"]
 ---
