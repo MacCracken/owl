@@ -2,7 +2,7 @@
 
 Forward-looking planning surface. Latest release and prior history
 live in `CHANGELOG.md`; this file tracks what's *next*. Current
-release is **1.1.9**; the 1.x line is in polish mode and the major
+release is **1.1.10**; the 1.x line is in polish mode and the major
 forward work is 2.x, gated on external dependencies.
 
 ---
@@ -14,6 +14,7 @@ forward-looking. Full prose in `CHANGELOG.md`.
 
 | Release | Date       | Headline                                                |
 |---------|------------|---------------------------------------------------------|
+| 1.1.10  | 2026-05-08 | cyrius 5.9.36 + vyakarana 1.1.0 toolchain refresh       |
 | 1.1.9   | 2026-04-27 | `↪` wrap-arrow continuation glyph                       |
 | 1.1.8   | 2026-04-27 | Frame containment — `--wrap=auto` defaults wrap-on      |
 | 1.1.7   | 2026-04-27 | bat-style three-rule header frame; cyrius 5.7.12        |

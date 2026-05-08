@@ -4,32 +4,76 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+_No unreleased changes._
+
+## [1.1.10] — 2026-05-08
+
+Toolchain + tokenizer-dep refresh. No behavior change for end users;
+under the hood owl now rides the latest cyrius and picks up vyakarana
+1.1.0's grammar polish for C, Rust, TOML, and Markdown.
+
 ### Changed
 
-- **Toolchain pin bumped to cyrius 5.9.32** (was 5.7.12). `cyrius.cyml
-  [package].cyrius` and the `--version --verbose` banner string in
-  `src/main.cyr print_version` updated in lockstep. No owl source
-  changes required for the bump itself — the 5.7.12 → 5.9.32 window
-  shipped no breaking changes to the stdlib surface owl imports
-  (`syscalls`, `alloc`, `fmt`, `io`, `fs`, `str`, `string`, `vec`,
-  `args`, `hashmap`, `process`, `tagged`, `assert`). vyakarana stays
-  pinned at `1.0.2`.
+- **Toolchain pin bumped to cyrius 5.9.36** (was 5.7.12).
+  `cyrius.cyml [package].cyrius`, the `--version --verbose` banner
+  in `src/main.cyr print_version`, and the install-step refs in
+  `README.md` / `CONTRIBUTING.md` updated in lockstep. No owl source
+  changes required — the 5.7.12 → 5.9.36 window shipped no breaking
+  changes to the stdlib surface owl imports (`syscalls`, `alloc`,
+  `fmt`, `io`, `fs`, `str`, `string`, `vec`, `args`, `hashmap`,
+  `process`, `tagged`, `assert`).
 
-  Cyrius's `lib/args.cyr` now lazily heap-allocates a 2 MB argv buffer
-  (was a 4 KB stack buffer) per cyrius v5.9.4; owl's CLI parsing is
-  unaffected at runtime but the binary inherits the bigger init path.
+  Notable upstream items inherited (no owl-side action needed): cyrius
+  v5.9.4 switched `lib/args.cyr` to a lazy 2 MB heap-allocated argv
+  buffer (was a 4 KB stack buffer); v5.9.33–v5.9.36 fixed parser /
+  preprocessor / `#derive(Serialize)` codegen edge cases that owl
+  doesn't currently exercise.
 
-  `cyrius test`, `sh scripts/smoke.sh`, `cyrius lint`, and
-  `CYRIUS_DCE=1 cyrius build` all green from a clean checkout.
+- **vyakarana pin bumped to 1.1.0** (was 1.0.2). Public API stable
+  across the bump — token kinds, `tokenize_source(src, lang)`,
+  tokenbuf accessors, and the 11-grammar bundled set all unchanged.
+  Grammar polish lands automatically:
+  - **C** — `unicode_ident` plus `/* … */` block-comment pair rule;
+    UTF-8 bytes ≥ 0x80 in comments now coalesce instead of producing
+    per-byte error tokens.
+  - **Markdown** — `unicode_ident` enabled; em-dashes, smart quotes,
+    and accented prose tokenize cleanly.
+  - **Rust** — `ident_start` extended to include `$` so macro
+    metavariables (`$expr`, `$tok`) no longer fragment.
+  - **TOML** — triple-quoted (`"""…"""`, `'''…'''`) string forms
+    recognized.
+
+  Internally vyakarana's `Grammar` record grew by 8 bytes (one new
+  `unicode_ident_on` field) but owl never introspects it, so no
+  source change.
+
+- **Streaming tokenizer status**: not yet shipped in vyakarana 1.1.0.
+  owl's `HIGHLIGHT_MAX` cap stays parked behind that upstream
+  delivery — listed in `state.md`'s Next section.
+
+### Verified
+
+- `cyrius deps` + `cyrius build src/main.cyr build/owl` clean
+- `CYRIUS_DCE=1 cyrius build` clean
+- `cyrius test` — 7/7 unit gates green
+- `sh scripts/smoke.sh` — all M0–M8 behavioral gates green; banner
+  reads `owl 1.1.10`
+- `cyrius lint src/*.cyr` — 0 warnings
+- `owl --version --verbose` reports `vyakarana 1.1.0` / `cyrius 5.9.36`
 
 ### Notes
 
-- DCE binary: 223,992 bytes (~219 KB; +10,208 bytes vs 1.1.9 — pure
-  toolchain delta from the bigger stdlib in 5.9.x). DCE and non-DCE
-  builds are the same size but **no longer byte-identical**: the
-  5.9.x DCE NOPs out dead-code spans (~64 KB of `0x90` padding) where
-  5.7.x's DCE was a no-op for owl's call graph. Section layout and
-  total size are stable.
+- DCE binary: 224,896 bytes (~220 KB; +1,112 bytes vs 1.1.9's 223,992
+  with the 5.9.32-only bump, +11,112 bytes vs the original 1.1.9 pin).
+  Delta breakdown: ~+900 B from vyakarana 1.1.0's added grammar rules
+  in `dist/vyakarana.cyr`, the rest from incremental cyrius stdlib
+  growth across 5.9.33–5.9.36. DCE and non-DCE builds remain the
+  same size but are not byte-identical (the 5.9.x DCE NOPs out
+  dead-code spans, where the 5.7.x DCE was a no-op for owl's call
+  graph).
+- No changes under `src/` beyond the version-banner triple
+  (`OWL_VERSION` constant, `print_version` body string, banner
+  comment).
 
 ## [1.1.9] — 2026-04-27
 

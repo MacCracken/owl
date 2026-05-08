@@ -6,6 +6,17 @@
 
 ## Version
 
+**1.1.10** — shipped 2026-05-08. Toolchain + tokenizer-dep refresh.
+Cyrius pin moves from 5.7.12 → 5.9.36 (four `5.9.x` minor slots'
+worth of compiler-internal fixes; nothing owl exercises broke).
+vyakarana pin moves from 1.0.2 → 1.1.0; the public tokenizer API is
+unchanged but bundled grammars gain `unicode_ident` for C and
+Markdown, `$`-prefixed Rust macro metavariables (`$expr`, `$tok`),
+and TOML triple-quoted (`"""`, `'''`) string forms. No source
+changes outside the version-banner triple. `HIGHLIGHT_MAX` cap is
+not yet liftable — vyakarana 1.1.0 ships grammar polish, not the
+streaming tokenizer that gates that work.
+
 **1.1.9** — shipped 2026-04-27. Wrap-arrow polish. Wrap-continuation
 gutter switched from `│` (which matched the line divider and made
 stacked wrapped rows visually ambiguous against new file lines) to
@@ -94,28 +105,33 @@ complete; full owl attack surface audited and hardened.
 
 ## Toolchain
 
-- **Cyrius pin**: `5.9.32` (in `cyrius.cyml [package].cyrius`)
-  — bumped from `5.7.12` on 2026-05-07 (Unreleased). No source changes
-  required; the 5.7.12 → 5.9.32 window shipped no breaking changes
+- **Cyrius pin**: `5.9.36` (in `cyrius.cyml [package].cyrius`)
+  — bumped from `5.7.12` at 1.1.10 (2026-05-08). No source changes
+  required; the 5.7.12 → 5.9.36 window shipped no breaking changes
   to the stdlib surface owl imports.
+- **vyakarana pin**: `1.1.0` (in `cyrius.cyml [deps.vyakarana].tag`)
+  — bumped from `1.0.2` at 1.1.10. Public API unchanged; grammar
+  polish for C, Markdown, Rust, and TOML lands automatically.
 
 ## Binary
 
-- ~219 KB (223,992 bytes, `build/owl`). DCE and non-DCE builds are
-  the same size but **no longer byte-identical** under cyrius 5.9.x:
-  DCE now NOPs out dead-code spans (~64 KB of `0x90` padding) where
-  the 5.7.x DCE was a no-op for owl's call graph. Section layout and
+- ~220 KB (224,896 bytes, `build/owl`). DCE and non-DCE builds are
+  the same size but **not byte-identical** under cyrius 5.9.x: DCE
+  NOPs out dead-code spans (~64 KB of `0x90` padding) where the
+  5.7.x DCE was a no-op for owl's call graph. Section layout and
   total size are stable.
-- +10,208 bytes vs 1.1.9 — pure toolchain delta from the bigger
-  stdlib in cyrius 5.9.x (notably `lib/args.cyr`'s 2 MB heap argv
-  buffer per v5.9.4); no owl source changes
+- +11,112 bytes vs 1.1.9 — pure toolchain + dep delta. ~+900 B from
+  vyakarana 1.1.0's added grammar rules in `dist/vyakarana.cyr`; the
+  rest from cyrius stdlib growth across 5.7.x → 5.9.36 (notably
+  `lib/args.cyr`'s 2 MB heap argv buffer per v5.9.4). No owl source
+  changes beyond the version-banner triple.
 - Startup targets: `owl --version` 1–2 ms, tiny-file highlight 2 ms
   (25× under the 50 ms no-op target in `docs/design-spec.md`)
 
 ## Source
 
-- ~3,490 lines across 6 modules:
-  - `src/main.cyr` (~1,920) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff, bat-style header frame (1.1.7), wrap-continuation gutter (1.1.8), `↪` wrap-arrow glyph (1.1.9)
+- ~3,497 lines across 6 modules:
+  - `src/main.cyr` (~1,922) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff, bat-style header frame (1.1.7), wrap-continuation gutter (1.1.8), `↪` wrap-arrow glyph (1.1.9), version-banner pin sync (1.1.10)
   - `src/theme.cyr` (~431) — bundled themes, 10-kind palette, ANSI emission, user-theme loader (1.1.3)
   - `src/lang.cyr` (~371) — extension/shebang/content detection + ext-override table
   - `src/vcs.cyr` (~328) — git VCS markers (M6) + --diff bypass for piped output
@@ -132,7 +148,7 @@ complete; full owl attack surface audited and hardened.
 ## Dependencies
 
 - **Cyrius stdlib** — `syscalls`, `alloc`, `fmt`, `io`, `fs`, `str`, `string`, `vec`, `args`, `hashmap`, `process`, `tagged`, `assert`
-- **vyakarana** 1.0.2 — tokenizer + 11 bundled grammars (git-tag pinned in `[deps.vyakarana]`)
+- **vyakarana** 1.1.0 — tokenizer + 11 bundled grammars (git-tag pinned in `[deps.vyakarana]`); 1.1.0 lands `unicode_ident` for C/Markdown, `$`-prefixed Rust idents, and triple-quoted TOML strings
 
 No FFI. No third-party deps beyond vyakarana.
 
@@ -163,7 +179,7 @@ No FFI. No third-party deps beyond vyakarana.
 ## Next
 
 The 1.x line is in polish mode — see [`roadmap.md`](roadmap.md) for
-the live list. As of 1.1.9 the only parked 1.x item is exact-gutter
+the live list. As of 1.1.10 the only parked 1.x item is exact-gutter
 wrap math (cosmetic; wrapped content stops 2 cols short of the
 right rule when VCS markers are off). Major forward work is 2.x,
 gated on external dependencies: SIT VCS swap, vyakarana streaming
