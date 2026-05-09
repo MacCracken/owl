@@ -3,11 +3,11 @@
 A reader-friendly index of what won't highlight perfectly in
 each bundled grammar. **Source of truth lives in the grammar
 file headers themselves** (`grammars/*.cyml`) — this doc
-aggregates those notes so you don't have to read 43 files to
+aggregates those notes so you don't have to read 44 files to
 find out whether your Python f-strings or Vue directives will
 render the way you'd expect.
 
-owl bundles **43 grammars** as of the 1.3.3 cut. Each one was
+owl bundles **44 grammars** as of the 1.3.4 cut. Each one was
 designed against a real or stand-in corpus that round-trips
 with zero `TK_ERROR` tokens; the gaps below are places where
 the tokenization is *correct* but cosmetically less rich than
@@ -161,6 +161,10 @@ the rationale:
 | markdown     | Tables don't get a distinguished kind                                        | cosmetic | yes               | —          |
 | markdown     | Prose tokenizes as ident runs (no `prose` kind in 10-kind palette)           | cosmetic | yes               | —          |
 | markdown     | Snake_case prose words fragment (`_` is emphasis here)                       | cosmetic | yes               | —          |
+| nix          | String interpolation `${expr}` stays inside string span                      | cosmetic | no                | ADR 0003   |
+| nix          | Path literals (`./foo`, `~/cfg`, `<nixpkgs>`) split as punct + ident         | cosmetic | no                | —          |
+| nix          | Indented-string escapes (`''$`, `'''`, `''\n`) close pair early              | cosmetic | no                | —          |
+| nix          | URL literals (`https://foo`) split as ident + `:` + `//` + path tail         | cosmetic | no                | —          |
 | ocaml        | Quoted strings `{\|…\|}` and `{tag\|…\|tag}` — variable delimiter            | cosmetic | no                | —          |
 | ocaml        | Polymorphic variants `` `Foo `` (backtick prefix)                            | cosmetic | no                | —          |
 | ocaml        | Numeric underscores (`1_000_000`)                                            | cosmetic | no                | —          |

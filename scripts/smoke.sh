@@ -215,13 +215,14 @@ echo "$tlist" | grep -q "^light$" || fail "--list-themes missing 'light'"
 # zig (vyakarana 1.2.0); 1.2.0–1.2.6 added 23 more in lockstep with
 # vyakarana 1.2.4 → 1.8.0; 1.3.0 added cyml + llvm_ir (vyakarana
 # 1.9.0); 1.3.2 added powershell + crystal + julia (vyakarana 2.1.0);
-# 1.3.3 added vue + svelte (vyakarana 2.1.1).
+# 1.3.3 added vue + svelte (vyakarana 2.1.1); 1.3.4 added nix
+# (vyakarana 2.1.2).
 llist=$("$BIN" --list-languages)
 for lang in plain shell python javascript typescript rust cyrius c toml json yaml go zig \
             asm_x86_64 asm_aarch64 java kotlin cpp csharp php ruby lua swift \
             elixir ocaml haskell sql graphql protobuf html xml css scss \
             dockerfile makefile ini cyml llvm_ir \
-            powershell crystal julia vue svelte; do
+            powershell crystal julia vue svelte nix; do
     echo "$llist" | grep -q "^$lang\$" || fail "--list-languages missing '$lang'"
 done
 
@@ -572,6 +573,22 @@ out=$(printf '<button @click="hi">x</button>\n' | "$BIN" --color=always --paging
 case "$out" in
     *$(printf '\033')*) ;;
     *) fail "stdin + --color=always + --language=vue did not emit ANSI" ;;
+esac
+
+# 1.3.4 — Nix (vyakarana 2.1.2). `.nix` ext dispatch + ANSI probe;
+# `let` keyword + kebab-case ident + `//` set-merge op exercise the
+# Nix-specific quirks (`-` in ident_cont, `//` longest-match before
+# anything else).
+printf 'let pkgs = import <nixpkgs> { }; in pkgs.hello\n' > "$TMPDIR/t.nix"
+out=$("$BIN" -n "$TMPDIR/t.nix")
+case "$out" in
+    *"(nix)"*) ;;
+    *) fail "extension detection: .nix should show (nix) in header" ;;
+esac
+out=$(printf 'let home-manager = a // b; in home-manager\n' | "$BIN" --color=always --paging=never --language=nix)
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "stdin + --color=always + --language=nix did not emit ANSI" ;;
 esac
 
 # Shebang detection: python shebang.

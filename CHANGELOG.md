@@ -6,6 +6,54 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.3.4] — 2026-05-09
+
+Third catchup patch on top of 1.3.1's vyakarana 2.x bump.
+Wires the **vyakarana 2.1.2 grammar** (Nix) into owl's
+language table and bootstrap. No toolchain pin movement —
+still cyrius 5.10.10 + vyakarana 2.2.1; the grammar file has
+been in `dist/vyakarana.cyr` since 1.3.1.
+
+### Added
+
+- **Nix highlighting.** `.nix` extension dispatch + ANSI
+  tokenization via `grammars/nix.cyml`. The functional
+  configuration language behind NixOS, home-manager, and
+  the Nix package ecosystem. Grammar handles Nix-specific
+  quirks: `//` is set merge / update (NOT a line comment;
+  longest-match before anything else); `++` list
+  concatenation; `->` implication; `?` has-attribute test;
+  `@` "as" pattern in function args. Idents accept `'` and
+  `-` so Haskell-prime names (`iter'`, `prev'`) and
+  kebab-case names (`home-manager`, `nixpkgs-unstable`)
+  tokenize as a single ident. `''…''` indented multi-line
+  strings via 2-byte pair rule. `/* … */` block comments +
+  `#` line comments.
+
+### Changed
+
+- **`LANG_COUNT` 43 → 44** with `lang_name(43)` = `"nix"`.
+- **`docs/grammar-coverage.md`** updated with four nix gap
+  rows (string interpolation per ADR 0003, path literals,
+  indented-string escape edge cases, URL literals).
+
+### Verified
+
+- `cyrius build` + `CYRIUS_DCE=1 cyrius build` clean.
+- `cyrius test` — unit gates green.
+- `sh scripts/smoke.sh` — all M0–M8 gates green; new gates
+  lock `.nix` → `(nix)` extension detection and ANSI
+  emission for `--language=nix` (the `let` keyword + `//`
+  set-merge op + kebab-case ident exercise the Nix-specific
+  paths).
+- `owl --version --verbose` reports `vyakarana 2.2.1` /
+  `cyrius 5.10.10`.
+
+### Notes
+
+- Catchup queue advances to 1.3.5 (vyakarana 2.1.3 —
+  Terraform / HCL).
+
 ## [1.3.3] — 2026-05-09
 
 Second catchup patch on top of 1.3.1's vyakarana 2.x bump.

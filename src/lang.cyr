@@ -22,7 +22,7 @@
 # Extensions and shebang hints are space-separated lowercase tokens.
 # Order matters: "cyrius" precedes "c" so *.cyr doesn't match *.c.
 
-var LANG_COUNT = 43;
+var LANG_COUNT = 44;
 
 # Indexed 0..LANG_COUNT-1
 fn lang_name(i) {
@@ -69,6 +69,7 @@ fn lang_name(i) {
     if (i == 40) { return "julia"; }
     if (i == 41) { return "vue"; }
     if (i == 42) { return "svelte"; }
+    if (i == 43) { return "nix"; }
     return "plain";
 }
 
@@ -120,6 +121,7 @@ fn lang_exts(i) {
     if (i == 40) { return ".jl"; }
     if (i == 41) { return ".vue"; }
     if (i == 42) { return ".svelte"; }
+    if (i == 43) { return ".nix"; }
     return "";
 }
 
