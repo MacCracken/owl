@@ -6,26 +6,7 @@
 
 ## Version
 
-**1.3.2** — shipped 2026-05-08. CI hotfix on 1.3.1. Two
-coupled fixes: (a) renamed owl's
-`detect_language_from_content` → `_owl_detect_language_from_content`
-to dodge a name collision with vyakarana 2.x's now-public
-`detect_language_from_content(src, src_len)` that ships in
-`dist/vyakarana.cyr`'s `[lib] modules`; (b) corrected the
-`Install Cyrius toolchain` step in both CI workflows
-(`ci.yml`, `release.yml`) to install into the cyriusly-shape
-versioned-tree layout (`~/.cyrius/versions/<v>/{bin,lib}/` +
-`~/.cyrius/{bin,lib}` symlinks + `~/.cyrius/current`) rather
-than flat `~/.cyrius/{bin,lib}/`. The flat layout silently
-broke for any consumer reaching into arch-peer-only symbols —
-owl's `pager.cyr` references `SYS_DUP` (defined only in
-`lib/syscalls_x86_64_linux.cyr`, the per-arch peer cyrius
-locates via the versioned tree). Local cyriusly builds
-were green; CI was the only path exercising the flat
-install. No toolchain pin movement — still cyrius 5.10.10 +
-vyakarana 2.2.1.
-
-**1.3.1** — shipped 2026-05-08. Vyakarana 2.x toolchain bump.
+**1.3.1** — shipped 2026-05-09. Vyakarana 2.x toolchain bump.
 Cyrius 5.9.43 → 5.10.10; vyakarana 1.11.0 → 2.2.1. The
 load-bearing change is the breaking-API migration from
 `tokenize_source(buf, lang)` to the push-based streaming
@@ -38,7 +19,16 @@ plan, the seven new grammars in vyakarana's 2.1.x window
 (powershell, crystal, julia, vue, svelte, nix, terraform) and
 the `HIGHLIGHT_MAX` lift unblocked by 2.0.1's rolling-buffer
 scanner are deferred to subsequent 1.3.x patches. LANG_COUNT
-unchanged at 38.
+unchanged at 38. The first build attempt surfaced two coupled
+bugs that landed under this same version: (a) renamed
+`detect_language_from_content` → `_owl_detect_language_from_content`
+to dodge a collision with vyakarana 2.x's now-public function
+of the same name; (b) corrected the `Install Cyrius toolchain`
+step in both CI workflows to use the cyriusly-shape
+versioned-tree layout (`~/.cyrius/versions/<v>/{bin,lib}/` +
+symlinks + `current` file) — the prior flat layout silently
+hid `SYS_DUP` and other peer-only symbols from cyrius's
+stdlib search path.
 
 **1.3.0** — shipped 2026-05-08. Toolchain refresh + vyakarana
 1.8.0 → 1.11.0 cascade in one cut. Cyrius pin moves 5.9.41 →
