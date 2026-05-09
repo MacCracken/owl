@@ -130,6 +130,7 @@ Include order in `main.cyr`: `lib/vyakarana.cyr` first, then owl modules. Runtim
 - `docs/development/roadmap.md` — forward-looking milestone plan
 - `docs/adr/` — architecture decision records (immutable, individually citable)
 - `docs/design-spec.md` — behavioral spec: CLI flags, exit codes, mode matrix
+- `docs/grammar-coverage.md` — aggregate of per-grammar gap notes (severity / corpus-driven? / ADR per row); refresh in the same patch as any grammar wiring change
 - `CHANGELOG.md` — what landed, when
 - `docs/development/state.md` — **live state snapshot**
 - `docs/audit/` — security audit reports

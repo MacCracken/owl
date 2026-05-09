@@ -6,6 +6,80 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.3.3] — 2026-05-09
+
+Second catchup patch on top of 1.3.1's vyakarana 2.x bump.
+Wires the **vyakarana 2.1.1 SFC batch** (Vue, Svelte) into
+owl's language table and bootstrap, AND introduces a new
+top-level reference doc — `docs/grammar-coverage.md` — that
+aggregates the per-grammar gap notes scattered across the 43
+bundled `grammars/*.cyml` files into a single discoverable
+table.
+
+### Added
+
+- **Vue SFC highlighting.** `.vue` extension dispatch + ANSI
+  tokenization via `grammars/vue.cyml`. HTML-shaped outer
+  tokenizer with Vue-shorthand prefixes (`@` for `v-on`, `#`
+  for `v-slot`) in operators. `<script>` bodies route through
+  the JavaScript grammar via vyakarana's compose rule;
+  `<style>` bodies route through CSS. `<template>` content
+  stays with the outer Vue tokenizer so `@click` / `:prop`
+  attribute shorthand renders distinctly.
+- **Svelte SFC highlighting.** `.svelte` extension dispatch +
+  ANSI tokenization via `grammars/svelte.cyml`. Same shape as
+  Vue minus the `<template>` block (Svelte's template lives at
+  the file's top level). `$` operator covers reactive
+  declarations (`$:`).
+- **`docs/grammar-coverage.md`** — new top-level reference
+  doc. Aggregates the "Known gaps" / "Documented limitations"
+  / "Known cosmetic gaps" notes that live in every
+  `grammars/*.cyml` header into a single scannable table:
+  one row per gap with columns for **language**, **gap**,
+  **severity** (cosmetic vs. semantic), **in sample corpus?**,
+  and **tracking ADR**. Lead section identifies the eight
+  recurring gap shapes (string interpolation per
+  [vyakarana ADR 0003](https://github.com/MacCracken/vyakarana/blob/main/docs/adr/0003-string-expansion-not-retokenized.md);
+  variable-length delimiters; numeric underscores; float
+  literals split on `.`; C-family char-literal split — closed
+  by [ADR 0010](https://github.com/MacCracken/vyakarana/blob/main/docs/adr/0010-char-literal-default.md)
+  for grammars that opt in; regex literals; compose-rule
+  attribute-bearing-tag fallback per
+  [ADR 0013](https://github.com/MacCracken/vyakarana/blob/main/docs/adr/0013-grammar-composition.md);
+  predeclared idents staying as `TK_IDENT` per
+  [ADR 0004](https://github.com/MacCracken/vyakarana/blob/main/docs/adr/0004-shell-builtins-as-ident.md))
+  so the per-grammar table doesn't have to repeat each
+  rationale. Grammar file headers stay the source of truth;
+  the new doc is a reader-friendly index.
+
+### Changed
+
+- **`LANG_COUNT` 41 → 43** with `lang_name(41)` = `"vue"`,
+  `lang_name(42)` = `"svelte"`.
+- **Documentation reference set extended.** `state.md`
+  references `grammar-coverage.md`; future grammar bumps
+  refresh both files in the same patch.
+
+### Verified
+
+- `cyrius build` + `CYRIUS_DCE=1 cyrius build` clean.
+- `cyrius test` — unit gates green.
+- `sh scripts/smoke.sh` — all M0–M8 gates green; new gates
+  lock `.vue` → `(vue)`, `.svelte` → `(svelte)` extension
+  detection and Vue `@click` shorthand emits ANSI under
+  `--color=always --language=vue`.
+- `owl --version --verbose` reports `vyakarana 2.2.1` /
+  `cyrius 5.10.10`.
+
+### Notes
+
+- Catchup queue advances to 1.3.4 (vyakarana 2.1.2 — Nix).
+- The grammar-coverage doc is a discoverability win, not a
+  scope expansion: every gap was already documented
+  somewhere. Adding new grammars in future patches needs an
+  entry in the table at the same time, alongside the existing
+  per-language wiring template.
+
 ## [1.3.2] — 2026-05-09
 
 First catchup patch on top of 1.3.1's vyakarana 2.x bump.

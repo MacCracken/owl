@@ -214,13 +214,14 @@ echo "$tlist" | grep -q "^light$" || fail "--list-themes missing 'light'"
 # --list-languages must include the starter set. 1.1.12 added go +
 # zig (vyakarana 1.2.0); 1.2.0–1.2.6 added 23 more in lockstep with
 # vyakarana 1.2.4 → 1.8.0; 1.3.0 added cyml + llvm_ir (vyakarana
-# 1.9.0); 1.3.2 added powershell + crystal + julia (vyakarana 2.1.0).
+# 1.9.0); 1.3.2 added powershell + crystal + julia (vyakarana 2.1.0);
+# 1.3.3 added vue + svelte (vyakarana 2.1.1).
 llist=$("$BIN" --list-languages)
 for lang in plain shell python javascript typescript rust cyrius c toml json yaml go zig \
             asm_x86_64 asm_aarch64 java kotlin cpp csharp php ruby lua swift \
             elixir ocaml haskell sql graphql protobuf html xml css scss \
             dockerfile makefile ini cyml llvm_ir \
-            powershell crystal julia; do
+            powershell crystal julia vue svelte; do
     echo "$llist" | grep -q "^$lang\$" || fail "--list-languages missing '$lang'"
 done
 
@@ -549,6 +550,28 @@ out=$(printf 'function hi()\n  @show 1+1\nend\n' | "$BIN" --color=always --pagin
 case "$out" in
     *$(printf '\033')*) ;;
     *) fail "stdin + --color=always + --language=julia did not emit ANSI" ;;
+esac
+
+# 1.3.3 — Vue + Svelte SFC (vyakarana 2.1.1). Both are HTML-shaped
+# outer tokenizers with framework-specific shorthand prefixes; the
+# compose rules route <script> → JS and <style> → CSS bodies.
+printf '<template>\n  <h1>{{ title }}</h1>\n</template>\n<script>\nexport default { data: () => ({ title: "hi" }) }\n</script>\n' > "$TMPDIR/t.vue"
+out=$("$BIN" -n "$TMPDIR/t.vue")
+case "$out" in
+    *"(vue)"*) ;;
+    *) fail "extension detection: .vue should show (vue) in header" ;;
+esac
+printf '<script>\n  let count = 0;\n</script>\n<button on:click={() => count++}>{count}</button>\n' > "$TMPDIR/t.svelte"
+out=$("$BIN" -n "$TMPDIR/t.svelte")
+case "$out" in
+    *"(svelte)"*) ;;
+    *) fail "extension detection: .svelte should show (svelte) in header" ;;
+esac
+# ANSI emission probe — Vue's @click shorthand exercises the `@` operator path.
+out=$(printf '<button @click="hi">x</button>\n' | "$BIN" --color=always --paging=never --language=vue)
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "stdin + --color=always + --language=vue did not emit ANSI" ;;
 esac
 
 # Shebang detection: python shebang.
