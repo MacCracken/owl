@@ -3,11 +3,11 @@
 A reader-friendly index of what won't highlight perfectly in
 each bundled grammar. **Source of truth lives in the grammar
 file headers themselves** (`grammars/*.cyml`) — this doc
-aggregates those notes so you don't have to read 44 files to
+aggregates those notes so you don't have to read 45 files to
 find out whether your Python f-strings or Vue directives will
 render the way you'd expect.
 
-owl bundles **44 grammars** as of the 1.3.4 cut. Each one was
+owl bundles **45 grammars** as of the 1.3.5 cut. Each one was
 designed against a real or stand-in corpus that round-trips
 with zero `TK_ERROR` tokens; the gaps below are places where
 the tokenization is *correct* but cosmetically less rich than
@@ -203,6 +203,9 @@ the rationale:
 | swift        | Raw strings `#"…"#`, `##"…"##` — variable-length delimiter                   | cosmetic | no                | —          |
 | swift        | Nestable block comments `/* */` close at first `*/`                          | cosmetic | no                | —          |
 | swift        | Attribute syntax (`@available`, `@objc`) — `@` in ident_start                | n/a      | yes               | —          |
+| terraform    | Heredocs `<<EOT … EOT` / `<<-EOT … EOT` — variable terminator                | cosmetic | no                | —          |
+| terraform    | String interpolation `${expr}` stays inside string span                      | cosmetic | yes               | ADR 0003   |
+| terraform    | Splat shorthand `aws_instance.web.*.id` — `*` is 1-byte op amid dotted access | cosmetic | yes               | —          |
 | typescript   | Template literal interpolation `${expr}` flat string                         | cosmetic | yes               | ADR 0003   |
 | typescript   | Regex literals `/pat/flags` not distinguished                                | cosmetic | no                | —          |
 | typescript   | JSX / TSX elements (`.tsx`) — separate grammar                               | n/a      | no                | —          |

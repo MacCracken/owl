@@ -216,13 +216,13 @@ echo "$tlist" | grep -q "^light$" || fail "--list-themes missing 'light'"
 # vyakarana 1.2.4 → 1.8.0; 1.3.0 added cyml + llvm_ir (vyakarana
 # 1.9.0); 1.3.2 added powershell + crystal + julia (vyakarana 2.1.0);
 # 1.3.3 added vue + svelte (vyakarana 2.1.1); 1.3.4 added nix
-# (vyakarana 2.1.2).
+# (vyakarana 2.1.2); 1.3.5 added terraform (vyakarana 2.1.3).
 llist=$("$BIN" --list-languages)
 for lang in plain shell python javascript typescript rust cyrius c toml json yaml go zig \
             asm_x86_64 asm_aarch64 java kotlin cpp csharp php ruby lua swift \
             elixir ocaml haskell sql graphql protobuf html xml css scss \
             dockerfile makefile ini cyml llvm_ir \
-            powershell crystal julia vue svelte nix; do
+            powershell crystal julia vue svelte nix terraform; do
     echo "$llist" | grep -q "^$lang\$" || fail "--list-languages missing '$lang'"
 done
 
@@ -589,6 +589,34 @@ out=$(printf 'let home-manager = a // b; in home-manager\n' | "$BIN" --color=alw
 case "$out" in
     *$(printf '\033')*) ;;
     *) fail "stdin + --color=always + --language=nix did not emit ANSI" ;;
+esac
+
+# 1.3.5 — Terraform / HCL (vyakarana 2.1.3). All three exts route
+# to the same upstream-named `terraform` grammar. Probes hit the
+# kebab-case ident path (`-` in ident_cont, `aws_s3_bucket`-style)
+# and the `=>` for-expression op (longest-match before `=`).
+printf 'resource "aws_s3_bucket" "example" {\n  bucket = "my-bucket"\n}\n' > "$TMPDIR/t.tf"
+out=$("$BIN" -n "$TMPDIR/t.tf")
+case "$out" in
+    *"(terraform)"*) ;;
+    *) fail "extension detection: .tf should show (terraform) in header" ;;
+esac
+printf 'region = "us-east-1"\nbucket_count = 3\n' > "$TMPDIR/t.tfvars"
+out=$("$BIN" -n "$TMPDIR/t.tfvars")
+case "$out" in
+    *"(terraform)"*) ;;
+    *) fail "extension detection: .tfvars should show (terraform) in header" ;;
+esac
+printf 'variable "name" {\n  default = "x"\n}\n' > "$TMPDIR/t.hcl"
+out=$("$BIN" -n "$TMPDIR/t.hcl")
+case "$out" in
+    *"(terraform)"*) ;;
+    *) fail "extension detection: .hcl should show (terraform) in header" ;;
+esac
+out=$(printf '{ for k, v in vars : k => upper(v) }\n' | "$BIN" --color=always --paging=never --language=terraform)
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "stdin + --color=always + --language=terraform did not emit ANSI" ;;
 esac
 
 # Shebang detection: python shebang.

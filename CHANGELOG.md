@@ -6,6 +6,65 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.3.5] — 2026-05-09
+
+Fourth catchup patch on top of 1.3.1's vyakarana 2.x bump.
+Wires the **vyakarana 2.1.3 grammar** (Terraform / HCL) into
+owl's language table and bootstrap. Closes the 2.1.x grammar
+batch — 2.1.x added 7 grammars (PowerShell, Crystal, Julia,
+Vue, Svelte, Nix, Terraform); owl 1.3.2–1.3.5 wired all
+seven. No toolchain pin movement.
+
+### Added
+
+- **Terraform / HCL highlighting.** `.tf` / `.tfvars` / `.hcl`
+  extension dispatch + ANSI tokenization via
+  `grammars/terraform.cyml`. The HashiCorp Configuration
+  Language that Terraform / Packer / Vault / Nomad / Consul
+  all consume; the upstream grammar is named `terraform`
+  because that's what most users will search for, but it
+  covers any HCL-shaped input. Grammar handles both `#` and
+  `//` line comments + `/* … */` block comments, the `=>`
+  for-expression operator (longest-match before `=`), the
+  `...` spread operator (3-byte), and kebab-case idents
+  (`-` in `ident_cont`) for `aws_s3_bucket` /
+  `azurerm_role_assignment` / `my-bucket` style names.
+  Block syntax `resource "type" "name" { ... }` tokenizes
+  naturally — no special block-header token kind needed.
+
+### Changed
+
+- **`LANG_COUNT` 44 → 45** with `lang_name(44)` =
+  `"terraform"`.
+- **`docs/grammar-coverage.md`** updated with three terraform
+  gap rows: heredocs (variable terminator); string
+  interpolation `${expr}` per ADR 0003; splat shorthand
+  `aws_instance.web.*.id` where `*` tokenizes as a 1-byte op
+  amid the dotted access.
+
+### Verified
+
+- `cyrius build` + `CYRIUS_DCE=1 cyrius build` clean under
+  pinned cyrius 5.10.10.
+- `cyrius test` — unit gates green.
+- `sh scripts/smoke.sh` — all M0–M8 gates green; new gates
+  lock `.tf` / `.tfvars` / `.hcl` → `(terraform)` extension
+  detection (all three exts route to the same grammar) and
+  ANSI emission for `--language=terraform` (the `=>` for-
+  expression operator + kebab-case idents exercise the
+  Terraform-specific paths).
+- `owl --version --verbose` reports `vyakarana 2.2.1` /
+  `cyrius 5.10.10`.
+
+### Notes
+
+- **2.1.x batch closed for owl.** The seven grammars vyakarana
+  shipped during the 2.1.x window (2.1.0 PowerShell + Crystal
+  + Julia; 2.1.1 Vue + Svelte; 2.1.2 Nix; 2.1.3 Terraform)
+  are all wired. Catchup queue advances to 1.3.6 — the
+  HIGHLIGHT_MAX lift unblocked by vyakarana 2.0.1's rolling-
+  buffer scanner.
+
 ## [1.3.4] — 2026-05-09
 
 Third catchup patch on top of 1.3.1's vyakarana 2.x bump.

@@ -2,10 +2,10 @@
 
 Forward-looking planning surface. Latest release and prior history
 live in `CHANGELOG.md`; this file tracks what's *next*. Current
-release is **1.3.4**; the 1.3.x catchup window is open with one
-2.1.x grammar (Terraform / HCL) + the HIGHLIGHT_MAX lift remaining
-(see "1.3.x catchup patches" below). Major forward work beyond
-that is 2.x, gated on external dependencies.
+release is **1.3.5**; the 1.3.x catchup window has the
+HIGHLIGHT_MAX lift remaining (see "1.3.x catchup patches"
+below) — the 2.1.x grammar batch is fully wired. Major forward
+work beyond that is 2.x, gated on external dependencies.
 
 ---
 
@@ -16,6 +16,7 @@ forward-looking. Full prose in `CHANGELOG.md`.
 
 | Release | Date       | Headline                                                |
 |---------|------------|---------------------------------------------------------|
+| 1.3.5   | 2026-05-09 | vyakarana 2.1.3 — Terraform / HCL (closes 2.1.x batch)  |
 | 1.3.4   | 2026-05-09 | vyakarana 2.1.2 — Nix                                    |
 | 1.3.3   | 2026-05-09 | vyakarana 2.1.1 — Vue + Svelte SFC + grammar-coverage doc |
 | 1.3.2   | 2026-05-09 | vyakarana 2.1.0 — PowerShell + Crystal + Julia          |
@@ -54,7 +55,6 @@ release surfaces during the catchup window.
 
 | Slot   | Vyakarana origin | Scope                                                                                  |
 |--------|------------------|----------------------------------------------------------------------------------------|
-| 1.3.5  | 2.1.3            | Terraform / HCL grammar. `.tf`, `.tfvars`, `.hcl` ext dispatch. The grammar is named `terraform` upstream — same name in owl's table.                            |
 | 1.3.6  | 2.0.1 (lift)     | **HIGHLIGHT_MAX lift.** Rewire the slurp path in `render_path` / `render_stdin_highlighted` to drive `tokenize_stream_feed` per-chunk during the read loop instead of one-shot at the end. Cap moves from 128 KB total input to 16 MB live in-progress span (vyakarana's `VYK_STREAM_CAP`). Long files with normal comment density stream comfortably. |
 
 Catchup-patch principles:
