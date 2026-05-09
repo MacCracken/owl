@@ -22,7 +22,7 @@
 # Extensions and shebang hints are space-separated lowercase tokens.
 # Order matters: "cyrius" precedes "c" so *.cyr doesn't match *.c.
 
-var LANG_COUNT = 38;
+var LANG_COUNT = 41;
 
 # Indexed 0..LANG_COUNT-1
 fn lang_name(i) {
@@ -64,6 +64,9 @@ fn lang_name(i) {
     if (i == 35) { return "ini"; }
     if (i == 36) { return "cyml"; }
     if (i == 37) { return "llvm_ir"; }
+    if (i == 38) { return "powershell"; }
+    if (i == 39) { return "crystal"; }
+    if (i == 40) { return "julia"; }
     return "plain";
 }
 
@@ -110,6 +113,9 @@ fn lang_exts(i) {
     if (i == 35) { return ".ini .conf .cfg .properties"; }
     if (i == 36) { return ".cyml"; }
     if (i == 37) { return ".ll"; }
+    if (i == 38) { return ".ps1 .psm1 .psd1"; }
+    if (i == 39) { return ".cr"; }
+    if (i == 40) { return ".jl"; }
     return "";
 }
 
@@ -127,6 +133,7 @@ fn lang_shebangs(i) {
     if (i == 22) { return "swift"; }
     if (i == 23) { return "elixir"; }
     if (i == 24) { return "ocaml ocamlrun"; }
+    if (i == 38) { return "pwsh powershell"; }
     return "";
 }
 

@@ -6,6 +6,15 @@
 
 ## Version
 
+**1.3.2** — shipped 2026-05-09. First catchup patch on top
+of 1.3.1's vyakarana 2.x bump. Wires the vyakarana 2.1.0
+grammar batch (PowerShell, Crystal, Julia) into owl's
+language table and bootstrap. `LANG_COUNT` 38 → 41. No
+toolchain pin movement — still cyrius 5.10.10 + vyakarana
+2.2.1; grammar files have been in `dist/vyakarana.cyr` since
+1.3.1, this patch lights up the wiring. Catchup queue
+advances to 1.3.3 (vyakarana 2.1.1 — Vue + Svelte SFC).
+
 **1.3.1** — shipped 2026-05-09. Vyakarana 2.x toolchain bump.
 Cyrius 5.9.43 → 5.10.10; vyakarana 1.11.0 → 2.2.1. The
 load-bearing change is the breaking-API migration from
@@ -243,7 +252,7 @@ complete; full owl attack surface audited and hardened.
 - ~3,625 lines across 6 modules (1.3.0 cut):
   - `src/main.cyr` (~2,011) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff, bat-style header frame (1.1.7), wrap-continuation gutter (1.1.8), `↪` wrap-arrow glyph (1.1.9), version-banner pin sync (1.1.10), VCS-aware wrap budget (1.1.11), go/zig grammar bootstrap (1.1.12), 23-grammar bootstrap cascade (1.2.0–1.2.6), cyml/llvm_ir bootstrap (1.3.0)
   - `src/theme.cyr` (~437) — bundled themes, 10-kind palette, ANSI emission, user-theme loader (1.1.3); kind_name-keyed `theme_token_color` per vyakarana 1.10.0 architecture note 004 (1.3.0)
-  - `src/lang.cyr` (~432) — extension/shebang/content detection + ext-override table + filename-shape detection (1.2.6); LANG_COUNT 38 (1.3.0 added cyml/llvm_ir + redirected `.cyml` from toml → cyml per vyakarana 1.9.0)
+  - `src/lang.cyr` (~440) — extension/shebang/content detection + ext-override table + filename-shape detection (1.2.6); LANG_COUNT 41 (1.3.2 added powershell/crystal/julia per vyakarana 2.1.0; 1.3.0 added cyml/llvm_ir + redirected `.cyml` from toml → cyml per vyakarana 1.9.0)
   - `src/vcs.cyr` (~328) — git VCS markers (M6) + --diff bypass for piped output
   - `src/config.cyr` (~298) — `key = value` config parser (M7) + `ext.*` keys (1.1.1)
   - `src/pager.cyr` (~147) — pager spawn + SIGPIPE handling + env forward (1.1.5)

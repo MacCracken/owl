@@ -2,10 +2,10 @@
 
 Forward-looking planning surface. Latest release and prior history
 live in `CHANGELOG.md`; this file tracks what's *next*. Current
-release is **1.3.1**; the 1.3.x catchup window is open with
-seven 2.1.x grammars + the HIGHLIGHT_MAX lift queued behind it
-(see "1.3.x catchup patches" below). Major forward work beyond
-that is 2.x, gated on external dependencies.
+release is **1.3.2**; the 1.3.x catchup window is open with
+four 2.1.x grammars + the HIGHLIGHT_MAX lift remaining (see
+"1.3.x catchup patches" below). Major forward work beyond that
+is 2.x, gated on external dependencies.
 
 ---
 
@@ -16,6 +16,7 @@ forward-looking. Full prose in `CHANGELOG.md`.
 
 | Release | Date       | Headline                                                |
 |---------|------------|---------------------------------------------------------|
+| 1.3.2   | 2026-05-09 | vyakarana 2.1.0 — PowerShell + Crystal + Julia          |
 | 1.3.1   | 2026-05-09 | cyrius 5.10.10 + vyakarana 2.2.1 — streaming-API migration |
 | 1.3.0   | 2026-05-08 | cyrius 5.9.43 + vyakarana 1.11.0 — cyml + llvm_ir + ADR-004 conformance |
 | 1.2.6   | 2026-05-08 | vyakarana 1.8.0 — Dockerfile + Makefile + INI           |
@@ -51,7 +52,6 @@ release surfaces during the catchup window.
 
 | Slot   | Vyakarana origin | Scope                                                                                  |
 |--------|------------------|----------------------------------------------------------------------------------------|
-| 1.3.2  | 2.1.0            | PowerShell + Crystal + Julia grammars. Per-language wiring template (lang.cyr entry + bootstrap call + smoke gate). Shebangs: `pwsh` / `powershell` for PowerShell. |
 | 1.3.3  | 2.1.1            | Vue + Svelte SFC grammars. Both are HTML-shaped outer tokenizers; no special detection beyond ext dispatch (`.vue`, `.svelte`).                                  |
 | 1.3.4  | 2.1.2            | Nix grammar. `.nix` ext dispatch. Note: vyakarana ADR called out indented-string + path-literal gaps that owl inherits — same trade-off, not an owl problem.    |
 | 1.3.5  | 2.1.3            | Terraform / HCL grammar. `.tf`, `.tfvars`, `.hcl` ext dispatch. The grammar is named `terraform` upstream — same name in owl's table.                            |

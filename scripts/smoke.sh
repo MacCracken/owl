@@ -214,12 +214,13 @@ echo "$tlist" | grep -q "^light$" || fail "--list-themes missing 'light'"
 # --list-languages must include the starter set. 1.1.12 added go +
 # zig (vyakarana 1.2.0); 1.2.0–1.2.6 added 23 more in lockstep with
 # vyakarana 1.2.4 → 1.8.0; 1.3.0 added cyml + llvm_ir (vyakarana
-# 1.9.0).
+# 1.9.0); 1.3.2 added powershell + crystal + julia (vyakarana 2.1.0).
 llist=$("$BIN" --list-languages)
 for lang in plain shell python javascript typescript rust cyrius c toml json yaml go zig \
             asm_x86_64 asm_aarch64 java kotlin cpp csharp php ruby lua swift \
             elixir ocaml haskell sql graphql protobuf html xml css scss \
-            dockerfile makefile ini cyml llvm_ir; do
+            dockerfile makefile ini cyml llvm_ir \
+            powershell crystal julia; do
     echo "$llist" | grep -q "^$lang\$" || fail "--list-languages missing '$lang'"
 done
 
@@ -515,6 +516,39 @@ out=$(printf 'define i32 @main() { ret i32 0 }\n' | "$BIN" --color=always --pagi
 case "$out" in
     *$(printf '\033')*) ;;
     *) fail "stdin + --color=always + --language=llvm_ir did not emit ANSI" ;;
+esac
+
+# 1.3.2 — PowerShell + Crystal + Julia (vyakarana 2.1.0).
+printf 'Get-ChildItem -Path C:\\\n' > "$TMPDIR/t.ps1"
+out=$("$BIN" -n "$TMPDIR/t.ps1")
+case "$out" in
+    *"(powershell)"*) ;;
+    *) fail "extension detection: .ps1 should show (powershell) in header" ;;
+esac
+printf 'def hi : String\n  "ok"\nend\n' > "$TMPDIR/t.cr"
+out=$("$BIN" -n "$TMPDIR/t.cr")
+case "$out" in
+    *"(crystal)"*) ;;
+    *) fail "extension detection: .cr should show (crystal) in header" ;;
+esac
+printf 'function hi()\n  println("ok")\nend\n' > "$TMPDIR/t.jl"
+out=$("$BIN" -n "$TMPDIR/t.jl")
+case "$out" in
+    *"(julia)"*) ;;
+    *) fail "extension detection: .jl should show (julia) in header" ;;
+esac
+# PowerShell shebang detection: #!/usr/bin/env pwsh
+printf '#!/usr/bin/env pwsh\nGet-Date\n' > "$TMPDIR/ps_script"
+out=$("$BIN" -n "$TMPDIR/ps_script")
+case "$out" in
+    *"(powershell)"*) ;;
+    *) fail "shebang detection: powershell not detected in '$out'" ;;
+esac
+# ANSI emission probe — Julia macro `@show` exercises the `@`-in-ident_start trick.
+out=$(printf 'function hi()\n  @show 1+1\nend\n' | "$BIN" --color=always --paging=never --language=julia)
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "stdin + --color=always + --language=julia did not emit ANSI" ;;
 esac
 
 # Shebang detection: python shebang.

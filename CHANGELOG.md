@@ -6,6 +6,69 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.3.2] — 2026-05-09
+
+First catchup patch on top of 1.3.1's vyakarana 2.x bump.
+Wires the **vyakarana 2.1.0 grammar batch** (PowerShell,
+Crystal, Julia) into owl's language table and bootstrap. No
+toolchain pin movement — still cyrius 5.10.10 + vyakarana
+2.2.1; the grammar files have been in `dist/vyakarana.cyr`
+since 1.3.1, this patch just lights up owl's wiring.
+
+### Added
+
+- **PowerShell highlighting.** `.ps1` / `.psm1` / `.psd1`
+  extension dispatch + ANSI tokenization via
+  `grammars/powershell.cyml`. Verb-Noun cmdlets
+  (`Get-ChildItem`, `Set-Variable`) tokenize as one ident
+  (`-` in `ident_cont`); alphabetic operators (`-eq`,
+  `-and`, `-match`) longest-match before bare `-`. Variables
+  via `$` in `ident_start` (`$args`, `$_`,
+  `$PSScriptRoot`). Block + line comments. Both string forms
+  (single literal, double interpolated). Case-insensitive
+  keywords. Shebangs: `pwsh`, `powershell`.
+- **Crystal highlighting.** `.cr` extension dispatch + ANSI
+  tokenization via `grammars/crystal.cyml`. Ruby-shaped
+  tokenizer with `?` and `!` in `ident_cont` for predicate-
+  style and mutating-method names (`empty?`, `push!`,
+  `is_a?`). `@` in `ident_start` for instance vars. The
+  `<=>`, `===`, `=~`, range `..`/`...`, splat `**` operator
+  surface.
+- **Julia highlighting.** `.jl` extension dispatch + ANSI
+  tokenization via `grammars/julia.cyml`. `@` in
+  `ident_start` for macros (`@show`, `@time`,
+  `@inbounds`). `!` in `ident_cont` for mutating-method
+  names (`push!`, `sort!`). `::` type annotations. Triple-
+  quoted strings (`"""..."""`) and backtick command
+  literals. Block comments (`#=...=#`) + line comments
+  (`#`).
+
+### Changed
+
+- **`LANG_COUNT` 38 → 41** with `lang_name(38)` =
+  `"powershell"`, `lang_name(39)` = `"crystal"`,
+  `lang_name(40)` = `"julia"`.
+- **Shebang detection** picks up `pwsh` / `powershell` →
+  `powershell` per the standard `lang_shebangs(i)` table.
+
+### Verified
+
+- `cyrius build` + `CYRIUS_DCE=1 cyrius build` clean.
+- `cyrius test` — unit gates green.
+- `sh scripts/smoke.sh` — all M0–M8 gates green; new gates
+  lock `.ps1` → `(powershell)`, `.cr` → `(crystal)`, `.jl` →
+  `(julia)` extension detection, `#!/usr/bin/env pwsh` →
+  `(powershell)` shebang detection, and ANSI emission for
+  `--language=julia` (the `@show` macro exercises the `@`-in-
+  ident_start trick).
+- `owl --version --verbose` reports `vyakarana 2.2.1` /
+  `cyrius 5.10.10`.
+
+### Notes
+
+- Catchup queue advances to 1.3.3 (vyakarana 2.1.1 — Vue +
+  Svelte SFC).
+
 ## [1.3.1] — 2026-05-09
 
 Toolchain bump to vyakarana 2.x. Cyrius pin moves
