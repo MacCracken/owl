@@ -6,6 +6,72 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.3.2] — 2026-05-08
+
+CI hotfix on top of 1.3.1. Two coupled fixes — one in owl
+source, one in the CI workflow — both surfaced when 1.3.1
+landed and the CI pipeline failed against the vyakarana 2.2.1
+bundle.
+
+### Fixed
+
+- **`detect_language_from_content` collision with vyakarana
+  2.x.** vyakarana's
+  [pre-2.0 prep wave](https://github.com/MacCracken/vyakarana/blob/main/CHANGELOG.md)
+  added a public `detect_language_from_content(src, src_len)`
+  that ships in `dist/vyakarana.cyr`'s `[lib] modules`. owl's
+  own `detect_language_from_content(buf, n)` from the M1.4
+  content-detection drop (1.1.4) collided with it; cyrius's
+  "last definition wins" warning became a CI failure once 2.2.1
+  pulled the function into the lib bundle. Renamed owl's to
+  `_owl_detect_language_from_content` per the existing `_owl_*`
+  convention used elsewhere (`_owl_load_grammar`,
+  `_owl_bootstrap_grammars`). Single caller in `src/main.cyr`
+  updated. owl's content-detection semantics unchanged —
+  anchored `{`/`[`/`---`/`#` patterns for json/toml/yaml/markdown
+  routing.
+- **CI workflow installed cyrius into the wrong layout.** The
+  pre-1.3.2 `Install Cyrius toolchain` step in
+  `.github/workflows/ci.yml` and `release.yml` dumped the
+  release tarball flat into `~/.cyrius/{bin,lib}/`. The cyrius
+  binary actually locates per-arch stdlib peers (e.g.
+  `lib/syscalls_x86_64_linux.cyr` — where `SYS_DUP` lives) via
+  `~/.cyrius/versions/<active>/lib/`, the cyriusly-shape
+  versioned layout. Flat-only worked by accident for projects
+  whose source didn't reach an arch-peer-only symbol; owl's
+  pager.cyr touches `SYS_DUP` and broke loudly under the
+  vyakarana 2.x bump (the bigger include surface raised the
+  cost of stdlib-resolution failure). Both workflows now
+  install into `~/.cyrius/versions/<v>/{bin,lib}/`, symlink
+  `~/.cyrius/{bin,lib}` to the active version, and write
+  `~/.cyrius/current` to record it. Reproduced locally by
+  faithfully replaying the workflow's tarball-install steps in
+  a clean `HOME`, then verified the patched layout produces a
+  green build.
+
+### Verified
+
+- `cyrius build` clean under both layouts:
+  - cyriusly-managed local install (already worked at 1.3.1).
+  - The exact CI-replica path (faithful tarball install into
+    a clean `$HOME` with the new versioned-tree layout +
+    symlinks). Pre-fix this path failed with
+    `error:src/pager.cyr:110: undefined variable 'SYS_DUP'`.
+- `cyrius test` 7/7 + 1/1 green.
+- `sh scripts/smoke.sh` — `OK (owl 1.3.2) — M0–M8 gates passing`.
+- `cyrius lint` — duplicate-fn warning gone; no new
+  warnings introduced.
+
+### Notes
+
+- **No toolchain pin movement.** Still cyrius 5.10.10 + vyakarana
+  2.2.1. This is a hotfix on top of 1.3.1's pin set, not a fresh
+  bump.
+- **Catchup queue shifts by one.** The 1.3.x catchup slots
+  (PowerShell+Crystal+Julia, Vue+Svelte, Nix, Terraform/HCL,
+  HIGHLIGHT_MAX lift) now start at 1.3.3 rather than 1.3.2.
+  See `docs/development/roadmap.md` for the updated table.
+
 ## [1.3.1] — 2026-05-08
 
 Toolchain bump to vyakarana 2.x. Cyrius pin moves

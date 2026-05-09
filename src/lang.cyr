@@ -413,7 +413,14 @@ fn _is_alpha_or_underscore(c) {
     return 0;
 }
 
-fn detect_language_from_content(buf, n) {
+# Renamed at 1.3.2 — vyakarana 2.x exports its own
+# `detect_language_from_content(src, src_len)` from
+# dist/vyakarana.cyr and the duplicate triggered a "last definition
+# wins" warning that the CI lint gate caught. owl's content
+# detection (anchored `{`/`[`/`---`/`#` patterns from M1.4) stays
+# under the `_owl_*` convention used elsewhere in owl
+# (`_owl_load_grammar`, `_owl_bootstrap_grammars`).
+fn _owl_detect_language_from_content(buf, n) {
     if (n == 0) { return 0; }
     # Skip leading blank lines + whitespace.
     var i = 0;

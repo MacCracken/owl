@@ -6,6 +6,25 @@
 
 ## Version
 
+**1.3.2** — shipped 2026-05-08. CI hotfix on 1.3.1. Two
+coupled fixes: (a) renamed owl's
+`detect_language_from_content` → `_owl_detect_language_from_content`
+to dodge a name collision with vyakarana 2.x's now-public
+`detect_language_from_content(src, src_len)` that ships in
+`dist/vyakarana.cyr`'s `[lib] modules`; (b) corrected the
+`Install Cyrius toolchain` step in both CI workflows
+(`ci.yml`, `release.yml`) to install into the cyriusly-shape
+versioned-tree layout (`~/.cyrius/versions/<v>/{bin,lib}/` +
+`~/.cyrius/{bin,lib}` symlinks + `~/.cyrius/current`) rather
+than flat `~/.cyrius/{bin,lib}/`. The flat layout silently
+broke for any consumer reaching into arch-peer-only symbols —
+owl's `pager.cyr` references `SYS_DUP` (defined only in
+`lib/syscalls_x86_64_linux.cyr`, the per-arch peer cyrius
+locates via the versioned tree). Local cyriusly builds
+were green; CI was the only path exercising the flat
+install. No toolchain pin movement — still cyrius 5.10.10 +
+vyakarana 2.2.1.
+
 **1.3.1** — shipped 2026-05-08. Vyakarana 2.x toolchain bump.
 Cyrius 5.9.43 → 5.10.10; vyakarana 1.11.0 → 2.2.1. The
 load-bearing change is the breaking-API migration from

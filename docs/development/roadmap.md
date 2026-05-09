@@ -2,7 +2,7 @@
 
 Forward-looking planning surface. Latest release and prior history
 live in `CHANGELOG.md`; this file tracks what's *next*. Current
-release is **1.3.1**; the 1.3.x catchup window is open with
+release is **1.3.2**; the 1.3.x catchup window is open with
 seven 2.1.x grammars + the HIGHLIGHT_MAX lift queued behind it
 (see "1.3.x catchup patches" below). Major forward work beyond
 that is 2.x, gated on external dependencies.
@@ -16,6 +16,7 @@ forward-looking. Full prose in `CHANGELOG.md`.
 
 | Release | Date       | Headline                                                |
 |---------|------------|---------------------------------------------------------|
+| 1.3.2   | 2026-05-08 | CI hotfix — `detect_language_from_content` rename + cyrius install layout |
 | 1.3.1   | 2026-05-08 | cyrius 5.10.10 + vyakarana 2.2.1 — streaming-API migration |
 | 1.3.0   | 2026-05-08 | cyrius 5.9.43 + vyakarana 1.11.0 — cyml + llvm_ir + ADR-004 conformance |
 | 1.2.6   | 2026-05-08 | vyakarana 1.8.0 — Dockerfile + Makefile + INI           |
@@ -45,17 +46,19 @@ forward-looking. Full prose in `CHANGELOG.md`.
 
 Open queue. Per the user's "patches to catchup" plan settled
 when 1.3.1 landed (the surgical vyakarana 2.x migration cut),
-each of these is a focused patch on top of 1.3.1's pin set —
+each of these is a focused patch on top of 1.3.2's pin set —
 no further toolchain bumps needed unless a fresh cyrius / vyakarana
-release surfaces during the catchup window.
+release surfaces during the catchup window. Slots renumbered
+when the 1.3.2 CI hotfix took the originally-planned 1.3.2
+slot.
 
 | Slot   | Vyakarana origin | Scope                                                                                  |
 |--------|------------------|----------------------------------------------------------------------------------------|
-| 1.3.2  | 2.1.0            | PowerShell + Crystal + Julia grammars. Per-language wiring template (lang.cyr entry + bootstrap call + smoke gate). Shebangs: `pwsh` / `powershell` for PowerShell. |
-| 1.3.3  | 2.1.1            | Vue + Svelte SFC grammars. Both are HTML-shaped outer tokenizers; no special detection beyond ext dispatch (`.vue`, `.svelte`).                                  |
-| 1.3.4  | 2.1.2            | Nix grammar. `.nix` ext dispatch. Note: vyakarana ADR called out indented-string + path-literal gaps that owl inherits — same trade-off, not an owl problem.    |
-| 1.3.5  | 2.1.3            | Terraform / HCL grammar. `.tf`, `.tfvars`, `.hcl` ext dispatch. The grammar is named `terraform` upstream — same name in owl's table.                            |
-| 1.3.6  | 2.0.1 (lift)     | **HIGHLIGHT_MAX lift.** Rewire the slurp path in `render_path` / `render_stdin_highlighted` to drive `tokenize_stream_feed` per-chunk during the read loop instead of one-shot at the end. Cap moves from 128 KB total input to 16 MB live in-progress span (vyakarana's `VYK_STREAM_CAP`). Long files with normal comment density stream comfortably. |
+| 1.3.3  | 2.1.0            | PowerShell + Crystal + Julia grammars. Per-language wiring template (lang.cyr entry + bootstrap call + smoke gate). Shebangs: `pwsh` / `powershell` for PowerShell. |
+| 1.3.4  | 2.1.1            | Vue + Svelte SFC grammars. Both are HTML-shaped outer tokenizers; no special detection beyond ext dispatch (`.vue`, `.svelte`).                                  |
+| 1.3.5  | 2.1.2            | Nix grammar. `.nix` ext dispatch. Note: vyakarana ADR called out indented-string + path-literal gaps that owl inherits — same trade-off, not an owl problem.    |
+| 1.3.6  | 2.1.3            | Terraform / HCL grammar. `.tf`, `.tfvars`, `.hcl` ext dispatch. The grammar is named `terraform` upstream — same name in owl's table.                            |
+| 1.3.7  | 2.0.1 (lift)     | **HIGHLIGHT_MAX lift.** Rewire the slurp path in `render_path` / `render_stdin_highlighted` to drive `tokenize_stream_feed` per-chunk during the read loop instead of one-shot at the end. Cap moves from 128 KB total input to 16 MB live in-progress span (vyakarana's `VYK_STREAM_CAP`). Long files with normal comment density stream comfortably. |
 
 Catchup-patch principles:
 
