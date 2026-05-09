@@ -6,6 +6,94 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.3.6] — 2026-05-09
+
+Final catchup patch on top of 1.3.1's vyakarana 2.x bump and
+the single owl-side refactor in the catchup queue. **Lifts
+`HIGHLIGHT_MAX` from 128 KB to 16 MB** by hoisting the
+streaming-tokenizer lifecycle (`new` / `feed*` / `finish` /
+`free`) out of `render_highlighted_buf` and up into the slurp
+callers in `render_fd` (stdin) and `render_path` (file). The
+read loop now feeds each `file_read` chunk to vyakarana
+incrementally, so scanner state stays bounded by the live
+in-progress span (vyakarana 2.0.1's rolling-buffer cap) rather
+than total input. **The 1.3.x catchup window closes here.**
+
+### Changed
+
+- **`HIGHLIGHT_MAX` 131072 → 16777216** (128 KB → 16 MB) to
+  match vyakarana's `VYK_STREAM_CAP`. Files between the old
+  cap and the new cap now highlight cleanly; previously they
+  fell back to plain rendering with a `too large for
+  highlighting (> 128 KB)` stderr notice. Allocation here is
+  bump-allocator virtual address space; physical pages commit
+  lazily on write so small files don't pay the 16 MB cost in
+  practice.
+- **`render_highlighted_buf` replaced by
+  `_render_highlighted_with_tb(buf, n, tb)`.** The byte-by-byte
+  render loop that walks the slurped buffer alongside a
+  populated tokenbuf is now keyed off the tokenbuf the slurp
+  caller produces, not a `(buf, lang)` pair the function
+  tokenizes itself. The old wrapper is removed — both call
+  sites (`render_fd`, `render_path`) drive the streaming
+  tokenizer themselves and forward to the helper, so the
+  one-shot wrapper had no callers and would have been
+  speculative API surface (per CLAUDE.md "no premature
+  abstraction").
+- **Stdin slurp path (`render_fd`)** now opens the stream
+  before the read loop; calls `tokenize_stream_feed(s, big +
+  total, got)` after each successful `file_read`; on overflow
+  frees the stream and falls back to plain streaming with the
+  same shape as before; on success calls
+  `tokenize_stream_finish` + `_render_highlighted_with_tb`. If
+  the stream-ctor fails (grammar dropped between the
+  `has_grammar` probe and the read loop), falls back to
+  `render_fd_loop` cleanly.
+- **File slurp path (`render_path`)** matches the stdin path's
+  shape, with one extra wrinkle: the `first_n` bytes already
+  buffered in `first_buf` (read upstream for binary detection)
+  get fed via `tokenize_stream_feed(s, big, first_n)` before
+  the read loop body so the stream sees the file in order.
+- **Fallback notice tail** changed from `KB)` to `MB)` and the
+  printed-cap math from `HIGHLIGHT_MAX / 1024` to `/ 1048576`
+  — at 16 MB, KB units would print "16384 KB" which is harder
+  to read than "16 MB". Local var rename `kb` → `mb` at both
+  notice sites.
+
+### Verified
+
+- `cyrius build` + `CYRIUS_DCE=1 cyrius build` clean under
+  pinned cyrius 5.10.10.
+- `cyrius test` — unit gates green.
+- `sh scripts/smoke.sh` — all M0–M8 gates green; new gate
+  generates a ~256 KB Python fixture (well past the old
+  128 KB cap, well under the new 16 MB cap), renders it under
+  `--color=always`, and asserts both that ANSI escapes appear
+  AND that the `too large for highlighting` stderr notice
+  does NOT fire. Same gate runs for the stdin path via
+  `--language=python` redirect.
+- `owl --version --verbose` reports `vyakarana 2.2.1` /
+  `cyrius 5.10.10`.
+
+### Notes
+
+- **The 1.3.x catchup window is closed.** All seven 2.1.x
+  grammars wired (1.3.2–1.3.5) and the 2.0.1-unblocked
+  HIGHLIGHT_MAX lift shipped (1.3.6). Forward work moves to
+  whatever upstream releases next — sit's library export
+  remains the only externally-tracked dependency for the SIT
+  VCS swap.
+- **Truly streaming render (no full-file resident) is a
+  larger refactor.** owl still keeps the slurped source
+  resident for the byte-by-byte render walk; the lift here
+  caps owl-side memory at 16 MB max and vyakarana-side at
+  the rolling-buffer span (typically a few KB). A full
+  streaming render would interleave `file_read` →
+  `tokenize_stream_feed` → `tokenize_stream_drain` →
+  per-chunk render-and-discard, with bookkeeping for tokens
+  that span chunk boundaries. Out of scope for this patch;
+  filed for whenever a multi-MB-per-line input shows up.
+
 ## [1.3.5] — 2026-05-09
 
 Fourth catchup patch on top of 1.3.1's vyakarana 2.x bump.

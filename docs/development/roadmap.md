@@ -2,10 +2,10 @@
 
 Forward-looking planning surface. Latest release and prior history
 live in `CHANGELOG.md`; this file tracks what's *next*. Current
-release is **1.3.5**; the 1.3.x catchup window has the
-HIGHLIGHT_MAX lift remaining (see "1.3.x catchup patches"
-below) — the 2.1.x grammar batch is fully wired. Major forward
-work beyond that is 2.x, gated on external dependencies.
+release is **1.3.6**; the 1.3.x catchup window is **closed** —
+all 2.1.x grammars wired and the HIGHLIGHT_MAX lift shipped.
+Major forward work beyond that is 2.x, gated on external
+dependencies (sit library export still parked).
 
 ---
 
@@ -16,6 +16,7 @@ forward-looking. Full prose in `CHANGELOG.md`.
 
 | Release | Date       | Headline                                                |
 |---------|------------|---------------------------------------------------------|
+| 1.3.6   | 2026-05-09 | HIGHLIGHT_MAX 128 KB → 16 MB; per-chunk feed; closes 1.3.x catchup |
 | 1.3.5   | 2026-05-09 | vyakarana 2.1.3 — Terraform / HCL (closes 2.1.x batch)  |
 | 1.3.4   | 2026-05-09 | vyakarana 2.1.2 — Nix                                    |
 | 1.3.3   | 2026-05-09 | vyakarana 2.1.1 — Vue + Svelte SFC + grammar-coverage doc |
@@ -45,32 +46,28 @@ forward-looking. Full prose in `CHANGELOG.md`.
 
 ---
 
-## 1.3.x catchup patches
+## 1.3.x catchup window — closed
 
-Open queue. Per the user's "patches to catchup" plan settled
-when 1.3.1 landed (the surgical vyakarana 2.x migration cut),
-each of these is a focused patch on top of 1.3.1's pin set —
-no further toolchain bumps needed unless a fresh cyrius / vyakarana
-release surfaces during the catchup window.
+Per the user's "patches to catchup" plan settled when 1.3.1
+landed, the 1.3.x window covered the vyakarana 2.x bump
+(1.3.1 — surgical streaming-API migration) plus five focused
+patches:
 
-| Slot   | Vyakarana origin | Scope                                                                                  |
-|--------|------------------|----------------------------------------------------------------------------------------|
-| 1.3.6  | 2.0.1 (lift)     | **HIGHLIGHT_MAX lift.** Rewire the slurp path in `render_path` / `render_stdin_highlighted` to drive `tokenize_stream_feed` per-chunk during the read loop instead of one-shot at the end. Cap moves from 128 KB total input to 16 MB live in-progress span (vyakarana's `VYK_STREAM_CAP`). Long files with normal comment density stream comfortably. |
+- **1.3.2** — vyakarana 2.1.0 grammars (PowerShell + Crystal +
+  Julia)
+- **1.3.3** — vyakarana 2.1.1 SFC grammars (Vue + Svelte) +
+  `docs/grammar-coverage.md`
+- **1.3.4** — vyakarana 2.1.2 grammar (Nix)
+- **1.3.5** — vyakarana 2.1.3 grammar (Terraform / HCL)
+- **1.3.6** — owl-side HIGHLIGHT_MAX lift (vyakarana 2.0.1
+  rolling-buffer scanner unblock)
 
-Catchup-patch principles:
-
-- **One vyakarana minor per patch** for the grammar work — same
-  shape that worked for the 1.2.x cascade. Keeps each diff tight
-  and bisectable.
-- **No bundled toolchain bumps.** If cyrius or vyakarana ship a
-  fresh release during the catchup window, evaluate as its own
-  bump cut (likely 1.3.7 / 1.4.0), don't tack onto a catchup
-  patch.
-- **HIGHLIGHT_MAX lift is the highest-value catchup item** by
-  user impact (lifts the cap from 128 KB to functionally-
-  unlimited for normal-shape files). Could land first instead
-  of last; ordering above mirrors the vyakarana shipping order
-  rather than priority.
+End state: 45 bundled grammars, 16 MB highlight cap, per-chunk
+feed driving vyakarana's streaming primitive end-to-end. Future
+catchup-style windows (when vyakarana ships another batch of
+grammars or owl-relevant scanner work) follow the same shape:
+one focused patch per upstream minor, no bundled toolchain
+bumps mid-window.
 
 ---
 

@@ -10,18 +10,29 @@ include "src/config.cyr"
 
 # Keep OWL_VERSION in sync with the VERSION file.
 # A M8 CI check will enforce equality; for now, manual.
-var OWL_VERSION = "owl 1.3.5";
+var OWL_VERSION = "owl 1.3.6";
 
 var BUFSIZE = 65536;
 
 # M3b — cap on file size for token-highlighted rendering. Larger files
 # fall back to plain streaming (decorations still render; token-level
-# color does not). Sized conservatively against the bump allocator:
-# the highlight path keeps the full file, the tokenbuf, and an
-# ANSI-inflated output buffer resident concurrently, so the working
-# set is ~4× the file size. Raising this needs a freeing allocator
-# or a streaming tokenizer (vyakarana 2.x / M5 per its ROADMAP).
-var HIGHLIGHT_MAX = 131072;
+# color does not).
+#
+# Sized at 16 MB since 1.3.6 to match vyakarana 2.0.1's
+# `VYK_STREAM_CAP` (the rolling-buffer scanner caps the longest
+# in-progress span — block comments, multi-line strings, fenced
+# bodies — at 16 MB rather than total input). owl drives the
+# streaming feed per-chunk during the read loop so vyakarana's
+# scanner state stays bounded by the live span; total input is
+# bounded by HIGHLIGHT_MAX because owl still keeps the slurped
+# source resident for the byte-by-byte render walk.
+#
+# Pre-1.3.6 was 128 KB (131072) against a one-shot feed; the bump
+# matches the upstream cap and lets long files with normal comment
+# density highlight comfortably. Allocation here is bump-allocator
+# virtual address space; physical pages commit lazily on write so
+# small files don't pay the 16 MB cost in practice.
+var HIGHLIGHT_MAX = 16777216;
 
 # Exit codes per design spec §9
 var EXIT_OK       = 0;
@@ -95,8 +106,9 @@ var g_header_open = 0;
 
 # 1.1.8 — wrap-continuation needs to know the in-flight token color
 # so the gutter break can reset, draw the continuation prefix in
-# lineno color, and restore the prior token color. render_highlighted_buf
-# writes this on every color transition; render_chunk leaves it -1.
+# lineno color, and restore the prior token color.
+# `_render_highlighted_with_tb` writes this on every color
+# transition; render_chunk leaves it -1.
 var g_render_active_color = 0 - 1;
 
 # Audit FINDING-001: file-origin terminal escapes are stripped from
@@ -887,9 +899,9 @@ fn _in_range() {
 }
 
 # 1.1.8/1.1.9 — wrap line break with continuation gutter. Saves the
-# active token color (set by render_highlighted_buf), resets so the
-# gutter renders cleanly in lineno color, then restores the token
-# color so the next byte continues with its highlighting intact.
+# active token color (set by `_render_highlighted_with_tb`), resets
+# so the gutter renders cleanly in lineno color, then restores the
+# token color so the next byte continues with its highlighting intact.
 # render_chunk leaves g_render_active_color at -1 so the save/restore
 # is a no-op. 1.1.9: continuation glyph is U+21AA "↪" (3 bytes) so
 # wrapped rows are visually distinct from the U+2502 "│" divider that
@@ -1229,25 +1241,30 @@ fn render_chunk(buf, n) {
 # same buffer).
 #
 # Vyakarana 2.0.0 (ADR 0017) replaced the one-shot `tokenize_source`
-# with the push-based streaming primitive. owl drives a one-shot feed
-# here — slurp+tokenize is correct for HIGHLIGHT_MAX-bounded buffers.
-# Multi-chunk feed against the same `tokenbuf_new`-returned `tb` is a
-# valid future shape for lifting HIGHLIGHT_MAX past 128 KB
-# (vyakarana 2.0.1's rolling-buffer scanner caps live span at 16 MB,
-# not total input — see roadmap "HIGHLIGHT_MAX lift" entry).
+# with the push-based streaming primitive. owl's slurp callers in
+# `render_fd` / `render_path` drive the stream lifecycle themselves
+# (1.3.6 lift) so per-chunk feed during the read loop keeps
+# vyakarana's scanner state bounded by the live in-progress span
+# (vyakarana 2.0.1's rolling buffer) rather than total input. This
+# wrapper is the simple one-shot variant kept for any caller that
+# wants to tokenize a buffer it already has in memory; it just
+# new/feed/finish/free's the stream and forwards to
+# `_render_highlighted_with_tb`.
 #
 # Layering: drives the loop byte-by-byte so the line-number gutter, tab
 # expansion, and -A non-printable glyphs all still work — M3b adds
 # color on top of M2/M5 behaviors, it doesn't replace them. ANSI reset
 # is emitted before newlines so line endings don't bleed color into
 # the next gutter.
-fn render_highlighted_buf(buf, n, lang) {
-    var s = tokenize_stream_new(lang);
-    if (s == 0) { return 0 - 1; }
-    var tb = tokenbuf_new();
-    tokenize_stream_feed(s, buf, n);
-    tokenize_stream_finish(s, tb);
-    tokenize_stream_free(s);
+# Render `buf` (n bytes) with token coloring driven by `tb` (a tokenbuf
+# already populated by the caller's stream lifecycle). Caller owns
+# the stream + tokenbuf; this fn only reads `tb`. Both highlight
+# slurp paths in `render_fd` and `render_path` drive the streaming
+# tokenizer themselves so they can feed each `file_read` chunk
+# incrementally (1.3.6 HIGHLIGHT_MAX lift) — see those call sites
+# for the new/feed*/finish/free dance, then this helper for the
+# render loop.
+fn _render_highlighted_with_tb(buf, n, tb) {
     if (tb == 0) { return 0 - 1; }
 
     var tok_count = tokenbuf_count(tb);
@@ -1413,18 +1430,32 @@ fn render_fd(fd, path_for_header) {
         return render_fd_loop(fd);
     }
 
-    # Slurp up to HIGHLIGHT_MAX. Stdin can be unbounded so we cap and
-    # fall back to streaming on overflow, mirroring the render_path
-    # branch. One extra byte for a defensive trailing \0 — vyakarana
-    # 2.x's streaming feed takes explicit length so the NUL isn't
-    # load-bearing for tokenization, but other code paths that touch
-    # the slurp buffer still benefit from the cstr-shape guarantee.
+    # Slurp up to HIGHLIGHT_MAX, feeding each chunk to vyakarana's
+    # streaming tokenizer as it arrives (1.3.6 lift). Stdin can be
+    # unbounded so we cap and fall back to streaming on overflow.
+    # The stream lifecycle (new/feed*/finish/free) is driven here
+    # so per-chunk feed keeps vyakarana's scanner state bounded by
+    # the live span (vyakarana 2.0.1's rolling buffer) instead of
+    # total input; `_render_highlighted_with_tb` then walks the
+    # populated tokenbuf for the byte-by-byte render.
+    # One extra byte for a defensive trailing \0 (cstr-shape buffer
+    # for any consumer that touches it; not load-bearing for the
+    # streaming feed, which takes explicit length).
+    var s = tokenize_stream_new(lang);
+    if (s == 0) {
+        # Grammar dropped between the has_grammar probe and now (or
+        # the stream ctor failed for another reason). Fall back to
+        # plain streaming — same shape as highlight_ok == 0 above.
+        return render_fd_loop(fd);
+    }
+    var tb = tokenbuf_new();
     var big = alloc(HIGHLIGHT_MAX + 1);
     var total = 0;
     while (total < HIGHLIGHT_MAX) {
         var got = file_read(fd, big + total, HIGHLIGHT_MAX - total);
-        if (got < 0) { return 0 - 1; }
+        if (got < 0) { tokenize_stream_free(s); return 0 - 1; }
         if (got == 0) { break; }
+        tokenize_stream_feed(s, big + total, got);
         total = total + got;
     }
     var overflow = 0;
@@ -1436,10 +1467,13 @@ fn render_fd(fd, path_for_header) {
     store8(big + total, 0);
 
     if (overflow == 0) {
-        var hrc = render_highlighted_buf(big, total, lang);
+        tokenize_stream_finish(s, tb);
+        tokenize_stream_free(s);
+        var hrc = _render_highlighted_with_tb(big, total, tb);
         if (hrc != 0) { render_chunk(big, total); }
         return 0;
     }
+    tokenize_stream_free(s);
 
     # Overflow — same fallback notice render_path uses, then stream
     # the remainder plainly.
@@ -1447,20 +1481,20 @@ fn render_fd(fd, path_for_header) {
     eprint_sanitized(path_for_header, strlen(path_for_header));
     var msg = ": input too large for highlighting (> ";
     eprint(msg, strlen(msg));
-    var kb_buf[12];
-    var kb = HIGHLIGHT_MAX / 1024;
-    var kpi = 11;
-    store8(&kb_buf + kpi, 0);
-    kpi = kpi - 1;
-    if (kb == 0) { store8(&kb_buf + kpi, 48); kpi = kpi - 1; }
-    while (kb > 0) {
-        store8(&kb_buf + kpi, 48 + kb % 10);
-        kpi = kpi - 1;
-        kb = kb / 10;
+    var mb_buf[12];
+    var mb = HIGHLIGHT_MAX / 1048576;
+    var mpi = 11;
+    store8(&mb_buf + mpi, 0);
+    mpi = mpi - 1;
+    if (mb == 0) { store8(&mb_buf + mpi, 48); mpi = mpi - 1; }
+    while (mb > 0) {
+        store8(&mb_buf + mpi, 48 + mb % 10);
+        mpi = mpi - 1;
+        mb = mb / 10;
     }
-    kpi = kpi + 1;
-    eprint(&kb_buf + kpi, 11 - kpi);
-    var tail = " KB), rendering without color\n";
+    mpi = mpi + 1;
+    eprint(&mb_buf + mpi, 11 - mpi);
+    var tail = " MB), rendering without color\n";
     eprint(tail, strlen(tail));
 
     render_chunk(big, total);
@@ -1597,26 +1631,56 @@ fn render_path(path) {
     if (resolved_show_header() == 1) { emit_header(path); }
 
     if (highlight_ok == 1) {
-        # Buffer the full file (up to HIGHLIGHT_MAX) then tokenize.
-        # One extra byte for a defensive trailing \0 — vyakarana
-        # 2.x's streaming feed (1.3.1+) takes explicit length so the
-        # NUL is no longer load-bearing for tokenization itself, but
-        # the cstr-shape buffer is still useful for other paths.
+        # Buffer the full file (up to HIGHLIGHT_MAX) and feed each
+        # read chunk to vyakarana's streaming tokenizer as it arrives
+        # (1.3.6 lift). The first_n bytes already buffered in
+        # first_buf (read upstream for binary detection) get fed
+        # before the loop so the stream sees the file in order.
+        # Stream lifecycle is driven here so per-chunk feed keeps
+        # vyakarana's scanner state bounded by the live span
+        # (vyakarana 2.0.1's rolling buffer) instead of total input;
+        # `_render_highlighted_with_tb` then walks the populated
+        # tokenbuf for the byte-by-byte render. One extra byte for
+        # a defensive trailing \0 (cstr-shape buffer for any consumer
+        # that touches it; not load-bearing for tokenization).
+        var s = tokenize_stream_new(lang);
+        if (s == 0) {
+            # Grammar dropped between has_grammar probe and now.
+            # Treat as not-highlightable; render the prefix + drain
+            # the rest plainly.
+            var big0 = alloc(BUFSIZE);
+            var k0 = 0;
+            while (k0 < first_n) {
+                store8(big0 + k0, load8(first_buf + k0));
+                k0 = k0 + 1;
+            }
+            render_chunk(big0, first_n);
+            var rc0 = render_fd_loop(fd);
+            file_close(fd);
+            if (rc0 < 0) { return 0 - 1; }
+            return 0;
+        }
+        var tb = tokenbuf_new();
         var big = alloc(HIGHLIGHT_MAX + 1);
         var j = 0;
         while (j < first_n) {
             store8(big + j, load8(first_buf + j));
             j = j + 1;
         }
+        if (first_n > 0) {
+            tokenize_stream_feed(s, big, first_n);
+        }
         var total = first_n;
         while (total < HIGHLIGHT_MAX) {
             var got = file_read(fd, big + total, HIGHLIGHT_MAX - total);
             if (got < 0) {
+                tokenize_stream_free(s);
                 file_close(fd);
                 report_error(path, "read error");
                 return 0 - 1;
             }
             if (got == 0) { break; }
+            tokenize_stream_feed(s, big + total, got);
             total = total + got;
         }
         # If we filled the cap, check whether the file is larger.
@@ -1629,7 +1693,9 @@ fn render_path(path) {
         store8(big + total, 0);
 
         if (overflow == 0) {
-            var hrc = render_highlighted_buf(big, total, lang);
+            tokenize_stream_finish(s, tb);
+            tokenize_stream_free(s);
+            var hrc = _render_highlighted_with_tb(big, total, tb);
             file_close(fd);
             if (hrc != 0) {
                 # Tokenization bailed — emit the buffer plainly so the
@@ -1638,6 +1704,7 @@ fn render_path(path) {
             }
             return 0;
         }
+        tokenize_stream_free(s);
 
         # File exceeds HIGHLIGHT_MAX — flush what we have plainly and
         # stream the remainder. No color, but line numbers / -A / tabs
@@ -1648,20 +1715,20 @@ fn render_path(path) {
         eprint_sanitized(path, strlen(path));
         var msg = ": file too large for highlighting (> ";
         eprint(msg, strlen(msg));
-        var kb_buf[12];
-        var kb = HIGHLIGHT_MAX / 1024;
-        var kpi = 11;
-        store8(&kb_buf + kpi, 0);
-        kpi = kpi - 1;
-        if (kb == 0) { store8(&kb_buf + kpi, 48); kpi = kpi - 1; }
-        while (kb > 0) {
-            store8(&kb_buf + kpi, 48 + kb % 10);
-            kpi = kpi - 1;
-            kb = kb / 10;
+        var mb_buf[12];
+        var mb = HIGHLIGHT_MAX / 1048576;
+        var mpi = 11;
+        store8(&mb_buf + mpi, 0);
+        mpi = mpi - 1;
+        if (mb == 0) { store8(&mb_buf + mpi, 48); mpi = mpi - 1; }
+        while (mb > 0) {
+            store8(&mb_buf + mpi, 48 + mb % 10);
+            mpi = mpi - 1;
+            mb = mb / 10;
         }
-        kpi = kpi + 1;
-        eprint(&kb_buf + kpi, 11 - kpi);
-        var tail = " KB), rendering without color\n";
+        mpi = mpi + 1;
+        eprint(&mb_buf + mpi, 11 - mpi);
+        var tail = " MB), rendering without color\n";
         eprint(tail, strlen(tail));
 
         render_chunk(big, total);
@@ -1690,7 +1757,7 @@ fn print_version() {
     println(OWL_VERSION);
     if (g_flag_verbose == 1) {
         # Kept in sync with cyrius.cyml [deps.vyakarana].tag and
-        # [package].cyrius. Useful for bug reports — "owl 1.3.5
+        # [package].cyrius. Useful for bug reports — "owl 1.3.6
         # vyakarana 2.2.1 cyrius 5.10.10 linux-x86_64" pins the exact
         # toolchain + dep versions a user is running against.
         println("vyakarana 2.2.1");

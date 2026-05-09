@@ -619,6 +619,37 @@ case "$out" in
     *) fail "stdin + --color=always + --language=terraform did not emit ANSI" ;;
 esac
 
+# 1.3.6 — HIGHLIGHT_MAX lift. Pre-1.3.6 the cap was 128 KB total
+# input; files past that fell back to plain rendering with a
+# stderr "too large for highlighting (> 128 KB)" notice. 1.3.6
+# bumps the cap to 16 MB and feeds vyakarana per-chunk during the
+# read loop so the rolling-buffer scanner caps live in-progress
+# span (not total input). A 256 KB file — well past the old cap,
+# well under the new one — must highlight cleanly with no
+# fallback notice.
+{
+    awk 'BEGIN { for (i = 0; i < 8000; i++) print "def f_" i "(x): return x + 1" }' > "$TMPDIR/big.py"
+}
+[ "$(wc -c < "$TMPDIR/big.py")" -gt 131072 ] || fail "1.3.6 fixture not larger than old 128 KB cap"
+[ "$(wc -c < "$TMPDIR/big.py")" -lt 16777216 ] || fail "1.3.6 fixture exceeds new 16 MB cap"
+out=$("$BIN" --color=always --paging=never "$TMPDIR/big.py" 2>"$TMPDIR/big.err")
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "1.3.6 lift: 256 KB Python file did not emit ANSI under --color=always" ;;
+esac
+grep -q "too large for highlighting" "$TMPDIR/big.err" \
+    && fail "1.3.6 lift: 256 KB file should not trigger 'too large for highlighting' fallback"
+# Belt-and-suspenders: piped stdin path must also handle the same
+# size cleanly (the lift wires both render_path and the stdin
+# slurp).
+out=$("$BIN" --color=always --paging=never --language=python < "$TMPDIR/big.py" 2>"$TMPDIR/big.err")
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "1.3.6 lift: stdin > 128 KB did not emit ANSI" ;;
+esac
+grep -q "too large for highlighting" "$TMPDIR/big.err" \
+    && fail "1.3.6 lift: stdin > 128 KB triggered the fallback notice"
+
 # Shebang detection: python shebang.
 printf '#!/usr/bin/env python3\nprint("hi")\n' > "$TMPDIR/shebang"
 out=$("$BIN" -n "$TMPDIR/shebang")
@@ -1169,10 +1200,15 @@ grep -q "^hello$"   "$TMPDIR/out" || fail "mixed run missing a.txt content"
 grep -q "^world$"   "$TMPDIR/out" || fail "mixed run missing b.txt content"
 grep -q "^00000000" "$TMPDIR/out" || fail "mixed run missing hex-dump offsets for binary"
 
-# Large-file highlight fallback: creating a >128KB file should still
+# Large-file highlight fallback: creating a file past the 16 MB
+# HIGHLIGHT_MAX cap (raised from 128 KB at 1.3.6) should still
 # render (no crash) with color stripped and a stderr notice.
-yes "print('x')" 2>/dev/null | head -20000 > "$TMPDIR/big.py"
-"$BIN" --color=always "$TMPDIR/big.py" > "$TMPDIR/out" 2> "$TMPDIR/err" \
+# `print('x')` is 11 bytes per line including newline; 1.7M lines
+# lands at ~18 MB, comfortably over the cap.
+yes "print('x')" 2>/dev/null | head -1700000 > "$TMPDIR/huge.py"
+[ "$(wc -c < "$TMPDIR/huge.py")" -gt 16777216 ] \
+    || fail "large-file fixture not larger than 16 MB cap"
+"$BIN" --color=always "$TMPDIR/huge.py" > "$TMPDIR/out" 2> "$TMPDIR/err" \
     || fail "large file highlight fallback failed exit"
 ! grep -q $'\x1b' "$TMPDIR/out" \
     || fail "large file emitted ANSI — fallback did not kick in"
