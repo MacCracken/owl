@@ -3,9 +3,10 @@
 Forward-looking planning surface. Latest release and prior history
 live in `CHANGELOG.md`; this file tracks what's *next*. Current
 release is **1.3.6**; the 1.3.x catchup window is **closed** —
-all 2.1.x grammars wired and the HIGHLIGHT_MAX lift shipped.
-Major forward work beyond that is 2.x, gated on external
-dependencies (sit library export still parked).
+all 2.1.x grammars wired, vyakarana 2.x streaming-API migration
+complete, and the HIGHLIGHT_MAX lift shipped. Forward work is
+the **1.4.x feature line** — items each have a sketch below;
+none gate on toolchain or grammar work.
 
 ---
 
@@ -91,40 +92,81 @@ _Empty — last item closed in 1.1.11 (exact-gutter wrap math)._
 
 ---
 
-## 2.x backlog (breaking / large)
+## 1.4.x roadmap (feature line)
 
-- **SIT dependency swap.** When SIT (planned AGNOS-native VCS)
-  ships, `src/vcs.cyr` becomes a single-file rewrite: replace the
-  `execve("git", …)` path with a SIT library call. Interface
-  stays (`vcs_compute_markers`, `vcs_mark_for_line`,
-  `vcs_enabled`, `vcs_reset`, `set_style`). Tracked in memory.
-- **Streaming tokenizer.** Raise `HIGHLIGHT_MAX` past 128 KB
-  when either (a) the bump allocator gets a `free()` or (b)
-  vyakarana ships a streaming tokenizer. Not on vyakarana's
-  near-term list (1.2.0 → 1.8.0 was all grammar broadening, no
-  scanner-architecture work), so this item stays parked until at
-  least vyakarana 2.x.
+The 1.x line continues — 2.0.0 isn't on the table until either a
+genuine breaking-change need surfaces or AGNOS itself reaches a
+ship boundary that justifies coordinated major bumps. The
+following items are 1.4.x candidates; ordering is rough
+priority, not commitment. Each is independent — they don't
+have to ship in order.
 
-- **`--follow` / `-f` (tail-style live highlighting).** Needs
-  inotify and a re-tokenize strategy. Deferred explicitly.
-- **URL / remote-file support.** `owl https://…` fetching a
-  remote document. Out of scope for v1 per design-spec §1.
-- **JSON / structured output mode.** Emit tokens as NDJSON for
-  tool interop. Builds directly on vyakarana's NDJSON shape.
-- **Native AGNOS theming integration.** Wait until the AGNOS
-  theming system ships.
+- **SIT dependency swap.** When sit ships v0.7.7
+  ([`dist/sit.cyr` library export + diff-primitive cleanup](https://github.com/MacCracken/sit/blob/main/docs/development/roadmap.md)),
+  `src/vcs.cyr` becomes a single-file rewrite: replace the
+  `execve("git", "diff", …)` path with a `sit_diff_path(repo,
+  path)` library call. The five-fn public interface
+  (`vcs_compute_markers`, `vcs_mark_for_line`, `vcs_enabled`,
+  `vcs_reset`, `set_style`) stays unchanged so consumers see no
+  difference. Currently blocked on sit shipping the library —
+  sit is at 0.7.6 (binary-only, no `[lib]` clause). Highest
+  forward-priority item once unblocked.
+- **NDJSON output mode (`--format=ndjson`).** Emit tokens as
+  one JSON object per line for downstream tooling
+  (editor LSP-style consumers, code analyzers, indexing). The
+  shape mirrors vyakarana's existing NDJSON debug output:
+  `{"line": N, "col": C, "kind": "keyword", "text": "fn"}` per
+  token. Builds directly on the streaming-tokenizer primitive
+  owl already drives at 1.3.6 — drain after each feed, emit
+  per-token JSON, no buffer-resident render loop.
+- **`--follow` / `-f` (tail-style live highlighting).**
+  inotify-watch the file; on each modify event re-tokenize
+  the changed region and emit ANSI for the new bytes. Mirrors
+  `tail -f` semantics. Needs a re-tokenize strategy that
+  doesn't reset the user's scroll position; vyakarana's 2.0.1
+  rolling-buffer scanner makes the per-event cost cheap, but
+  owl-side rendering needs a "append-only ANSI" path that's
+  distinct from the current full-rerender shape.
+- **URL / remote-file support (`owl https://…`).** Fetch a
+  remote document via HTTP and render it like a local file.
+  Out of scope for v1 per design-spec §1; revisitable now
+  that sandhi (Cyrius's HTTP/TLS stack) is mature enough to
+  consume from owl. Adds a real network dep — needs an
+  explicit opt-in flag or schema-allowlist. Could ride
+  alongside the SIT swap if both want the same TLS surface.
+- **Native AGNOS theming integration.** When AGNOS ships its
+  system-wide theming primitive, owl's `theme_*` palette layer
+  becomes a thin shim over it instead of a self-contained 256-
+  color table. Architecture note 004 conformance from 1.3.0
+  (kind_name string keys for theme dispatch) is the load-
+  bearing prep — themes are already keyed on the stable
+  contract, so the swap is mechanical. Currently blocked on
+  AGNOS itself.
+
+### Closed in 1.3.x
+
+- ~~**Streaming tokenizer / `HIGHLIGHT_MAX` lift.**~~ Closed at
+  1.3.6 (2026-05-09). vyakarana 2.0.0 introduced the push-based
+  streaming primitive ([ADR 0017](https://github.com/MacCracken/vyakarana/blob/main/docs/adr/0017-streaming-api.md));
+  2.0.1's rolling-buffer scanner caps live span at 16 MB
+  rather than total input. owl 1.3.1 migrated to the streaming
+  API; owl 1.3.6 hoisted the lifecycle into the slurp callers
+  to drive per-chunk feed during the read loop, lifting
+  `HIGHLIGHT_MAX` from 128 KB to 16 MB.
 
 ### Closed in 1.2.x
 
 - ~~**Further bundled-grammar broadening.**~~ Closed by the 1.2.0
-  → 1.2.6 lockstep cascade tracking vyakarana 1.2.x → 1.8.0. The
-  bundled palette went 13 → 36 grammars, picking up everything
-  vyakarana 1.8.0 ships (assembly, JVM, C-family, scripting,
-  mobile, functional, data/IDL, markup/styling, DevOps). The
-  per-language wiring template (entry in `lang_name`/`lang_exts`
-  + `_owl_load_grammar` call in bootstrap + smoke gate) is what
-  any future vyakarana grammar drop needs. Filename-shape grammars
-  (no extension) additionally need a line in
+  → 1.2.6 lockstep cascade tracking vyakarana 1.2.x → 1.8.0
+  and extended through 1.3.0 (cyml + llvm_ir) and 1.3.2–1.3.5
+  (the 2.1.x batch — PowerShell, Crystal, Julia, Vue, Svelte,
+  Nix, Terraform). Bundled palette stands at **45 grammars**.
+  Per-language wiring template stays valid for any future
+  vyakarana grammar drop: a `lang_name` / `lang_exts` entry
+  in `src/lang.cyr` + matching `_owl_load_grammar` calls in
+  `_owl_bootstrap_grammars` + a smoke gate + a row in
+  `docs/grammar-coverage.md`. Filename-shape grammars (no
+  extension) additionally need a line in
   `detect_language_from_path` per the 1.2.6 dockerfile/makefile
   pattern.
 
@@ -162,6 +204,6 @@ See [`../adr/README.md`](../adr/README.md) for the full index.
 | Risk | Mitigation |
 |------|------------|
 | Pager integration breaks on AGNOS before the OS ships | `--paging=never` is a reliable fallback; test with `PAGER=cat`. Real-world precedent: 1.1.5 fixed a missing-`TERM` regression where `less` exited at terminfo init, by forwarding `/proc/self/environ` to the child |
-| Vyakarana grammar changes break owl's token palette | Palette is frozen at 10 kinds; vyakarana CHANGELOG-flags any layout change. Pin vyakarana tag in `cyrius.cyml` |
-| `HIGHLIGHT_MAX` surprises a user with a 200 KB source file | Stderr notice on fallback already in place; the streaming tokenizer 2.x item lifts the cap |
-| SIT takes longer than expected to ship | Current `git` scaffold is stable and covered by smoke; no urgency beyond SIT's own timeline |
+| Vyakarana grammar changes break owl's token palette | Palette is frozen at 10 kinds; kind names are the stable contract per [vyakarana architecture note 004](https://github.com/MacCracken/vyakarana/blob/main/docs/architecture/004-theme-palette-contract.md); owl dispatches via `kind_name(k)` since 1.3.0. Pin vyakarana tag in `cyrius.cyml` |
+| `HIGHLIGHT_MAX` surprises a user with a >16 MB source file | Stderr notice on fallback in place; cap was lifted from 128 KB to 16 MB at 1.3.6. Files past 16 MB still drop to plain rendering with a clear notice — true streaming-render-and-discard is filed as a future-when-needed item |
+| SIT takes longer than expected to ship | Current `git` scaffold is stable and covered by smoke; no urgency beyond sit's own timeline. sit roadmap tracks `dist/sit.cyr` as v0.7.7 — owl filed the upstream ask 2026-05-08 |
