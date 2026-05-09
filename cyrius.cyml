@@ -5,7 +5,7 @@ description = "Observant Watcher of Lines — a file viewer for AGNOS / Cyrius"
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/owl"
 language = "cyrius"
-cyrius = "5.9.43"
+cyrius = "5.10.10"
 
 [build]
 entry = "src/main.cyr"
@@ -21,13 +21,15 @@ output = "owl"
 #   assert                — tests/owl.tcyr
 # toml/cyml (config, M7) and any syntax-grammar deps come later.
 # vyakarana — tokenizer library for M3b (token-level highlighting).
-# Ships the ten-kind palette + 38 bundled grammars (the eleven
-# starter set — shell, python, js, ts, rust, c, cyrius, toml, json,
-# yaml, markdown — plus go/zig at 1.2.0, asm_x86_64 at 1.2.2,
-# asm_aarch64 at 1.2.3, java/kotlin/cpp/csharp at 1.3.0, php/ruby/
-# lua/swift at 1.4.0, elixir/ocaml/haskell at 1.5.0, sql/graphql/
-# protobuf at 1.6.0, html/xml/css/scss at 1.7.0, dockerfile/makefile/
-# ini at 1.8.0, cyml/llvm_ir at 1.9.0).
+# 2.2.1 ships 45 bundled grammars; owl currently wires 38 of them
+# (matching the 1.9.0 set). The 7 grammars added in the 2.1.x
+# window — powershell, crystal, julia (2.1.0); vue, svelte (2.1.1);
+# nix (2.1.2); terraform (2.1.3) — are deferred to follow-up owl
+# patches per the 1.3.1 catchup-via-patches plan. 2.0.0's API
+# break (push-based streaming tokenizer per vyakarana ADR 0017)
+# is the load-bearing piece this 1.3.1 cut delivers; 2.0.1's
+# rolling-buffer scanner unblocks owl's HIGHLIGHT_MAX lift item
+# (parked since M3b) but the lift work is also a catchup patch.
 [deps]
 stdlib = [
     "syscalls",
@@ -47,6 +49,6 @@ stdlib = [
 
 [deps.vyakarana]
 git = "https://github.com/MacCracken/vyakarana.git"
-tag = "1.11.0"
+tag = "2.2.1"
 modules = ["dist/vyakarana.cyr"]
 ---

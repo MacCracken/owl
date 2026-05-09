@@ -6,6 +6,21 @@
 
 ## Version
 
+**1.3.1** — shipped 2026-05-08. Vyakarana 2.x toolchain bump.
+Cyrius 5.9.43 → 5.10.10; vyakarana 1.11.0 → 2.2.1. The
+load-bearing change is the breaking-API migration from
+`tokenize_source(buf, lang)` to the push-based streaming
+primitive (`tokenize_stream_new` / `_feed` / `_finish` /
+`_free`) per vyakarana ADR 0017 — single owl call site at
+`src/main.cyr:1220`. Behaviour unchanged: owl drives a
+one-shot feed since the highlight path is still
+HIGHLIGHT_MAX-bounded (128 KB). Per the catchup-via-patches
+plan, the seven new grammars in vyakarana's 2.1.x window
+(powershell, crystal, julia, vue, svelte, nix, terraform) and
+the `HIGHLIGHT_MAX` lift unblocked by 2.0.1's rolling-buffer
+scanner are deferred to subsequent 1.3.x patches. LANG_COUNT
+unchanged at 38.
+
 **1.3.0** — shipped 2026-05-08. Toolchain refresh + vyakarana
 1.8.0 → 1.11.0 cascade in one cut. Cyrius pin moves 5.9.41 →
 5.9.43. vyakarana 1.9.0 brings two new grammars (`cyml`,
@@ -165,33 +180,45 @@ complete; full owl attack surface audited and hardened.
 
 ## Toolchain
 
-- **Cyrius pin**: `5.9.43` (in `cyrius.cyml [package].cyrius`)
-  — bumped from `5.9.41` at 1.3.0 (2026-05-08). No source changes
+- **Cyrius pin**: `5.10.10` (in `cyrius.cyml [package].cyrius`)
+  — bumped from `5.9.43` at 1.3.1 (2026-05-08). No source changes
   required.
-- **vyakarana pin**: `1.11.0` (in `cyrius.cyml [deps.vyakarana].tag`)
-  — bumped from `1.8.0` at 1.3.0. Public tokenizer API unchanged
-  across the full 1.8.0 → 1.11.0 window. 1.9.0 wires two new
-  grammars (`cyml`, `llvm_ir`) into owl's language table and
-  bootstrap; `.cyml` redirects from `toml` to the new `cyml`
-  grammar. 1.10.0 documents the kind_name → palette contract
-  (architecture note 004) which owl now conforms to in
-  `theme.cyr`. 1.11.0 adds a `src/lsp.cyr` semantic-tokens
-  bridge; useful for editor consumers (cyim), unused by owl's
-  viewer path.
+- **vyakarana pin**: `2.2.1` (in `cyrius.cyml [deps.vyakarana].tag`)
+  — bumped from `1.11.0` at 1.3.1. **Crossed the 1.x → 2.x
+  major-version boundary.** Public tokenizer API broke at 2.0.0
+  (`tokenize_source` removed; replaced by the push-based
+  streaming primitive per ADR 0017). owl's single call site
+  migrated in 1.3.1; behaviour unchanged. The
+  1.12.0 → 1.13.3 pre-2.0 prep wave was pure fuzz/audit/perf
+  baseline work with no public surface changes. 2.0.0 itself
+  shipped only the API surface change — internal scanner stayed
+  one-shot. 2.0.1's rolling-buffer scanner is the load-bearing
+  improvement that unblocks owl's HIGHLIGHT_MAX lift; 2.0.2-2.0.4
+  shipped pull-adapter, additional fixes, and audit. 2.1.x added
+  7 grammars (powershell, crystal, julia, vue, svelte, nix,
+  terraform). 2.2.0 was a vyakarana-side cyrius pin refresh.
+  2.2.1 fixed a compose-rule prefix-buffering streaming bug.
+  All 7 new grammars + the HIGHLIGHT_MAX lift are deferred to
+  follow-up 1.3.x patches.
 
 ## Binary
 
-- ~233 KB (238,944 bytes, `build/owl`, DCE). +3,664 bytes vs
-  1.2.6's 235,280 — almost all of it the 2 new grammar tables
-  (cyml, llvm_ir) compiled into vyakarana 1.11.0's
-  `dist/vyakarana.cyr`. vyakarana 1.11.0's LSP bridge module
-  (`lsp_kind_from_token_type`, `lsp_kind_from_standard_index`)
-  ships in `[lib] modules` but DCE-strips cleanly on owl since
-  unused — confirmed in build output. owl-side growth: +4 lines
-  in `src/main.cyr` (bootstrap calls in user-overlay + bundled
-  paths) and +4 lines in `src/lang.cyr` (lang_name + lang_exts
-  entries for cyml + llvm_ir). The `theme.cyr` kind_name
-  refactor is size-neutral.
+- ~458 KB (468,616 bytes, `build/owl`, DCE). +229,672 bytes vs
+  1.3.0's 238,944 — almost double, primarily because vyakarana
+  2.x ships per ADR 0014 with **inlined CYML grammar text**
+  in the bundle, and the 2.1.x window added 7 grammars
+  (powershell, crystal, julia, vue, svelte, nix, terraform)
+  that ship in `dist/vyakarana.cyr` even though owl doesn't
+  wire them yet. The vyakarana bundle alone grew ~85 KB
+  (263 → 340 KB). Additional contribution from the streaming
+  scanner state machine, cyrius 5.10.x stdlib SWAR strlen +
+  println_int. owl-side source growth is small — +5 lines at
+  the migrated call site, comments updated at three sites.
+- Once the 1.3.x catchup patches wire those 7 grammars into
+  owl's lang table + bootstrap, the *bundle* size won't grow
+  further (already inlined in vyakarana's dist), but the
+  *grammars/* directory will grow with each patch as the
+  user-overlay copies are added per the existing pattern.
 - DCE and non-DCE builds are the same size but **not
   byte-identical** under cyrius 5.9.x: DCE NOPs out dead-code
   spans where the 5.7.x DCE was a no-op for owl's call graph.

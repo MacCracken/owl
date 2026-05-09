@@ -6,6 +6,92 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.3.1] — 2026-05-08
+
+Toolchain bump to vyakarana 2.x. Cyrius pin moves
+5.9.43 → 5.10.10; vyakarana tag moves 1.11.0 → 2.2.1. The
+load-bearing piece is the **breaking-API migration from
+`tokenize_source(src, lang)` to the push-based streaming
+primitive** introduced by vyakarana 2.0.0
+([ADR 0017](https://github.com/MacCracken/vyakarana/blob/main/docs/adr/0017-streaming-api.md)).
+This cut delivers the migration with no other behavioural
+changes — per the catchup-via-patches plan, the seven new
+grammars in vyakarana's 2.1.x window (powershell, crystal,
+julia, vue, svelte, nix, terraform) and the
+`HIGHLIGHT_MAX` lift unblocked by 2.0.1's rolling-buffer
+scanner are deferred to subsequent 1.3.x patches.
+
+### Changed
+
+- **`render_highlighted_buf` migrated to the streaming
+  tokenize API.** The single owl call site at
+  `src/main.cyr:1220` switches from
+  `tokenize_source(buf, lang)` to the five-call dance:
+  `tokenize_stream_new(lang)`, `tokenbuf_new()`,
+  `tokenize_stream_feed(s, buf, n)`,
+  `tokenize_stream_finish(s, tb)`, `tokenize_stream_free(s)`.
+  Behaviour unchanged — owl drives a one-shot feed because
+  the highlight path is HIGHLIGHT_MAX-bounded (128 KB).
+  The streaming benefit (memory bound by longest in-progress
+  span, not total input) lands when owl rewires the slurp
+  path to multi-chunk feed; tracked as a 1.3.x catchup
+  patch.
+- **Comments updated.** Three sites at `src/main.cyr` that
+  referenced `tokenize_source uses strlen internally` (the
+  reason owl always alloc'd HIGHLIGHT_MAX + 1) updated. The
+  trailing-NUL is preserved defensively for cstr-shape paths
+  but is no longer load-bearing for tokenization itself —
+  streaming feed takes explicit length.
+- **Toolchain pin bump: cyrius 5.9.43 → 5.10.10.** No source
+  changes required for the cyrius bump itself.
+- **Toolchain dep bump: vyakarana 1.11.0 → 2.2.1.** Public
+  surface owl uses today: streaming primitive (new),
+  tokenbuf accessors (`tokenbuf_count`, `tokenbuf_start`,
+  `tokenbuf_len`, `tokenbuf_kind` — unchanged), kind
+  constants + `kind_name` (unchanged), `has_grammar`,
+  `grammar_load`, `registry_init`, `registry_add`,
+  `_grammars_bootstrapped` flag (all unchanged). The 1.12.0
+  → 1.13.3 prep window added fuzz/audit/perf-baseline work
+  with no public surface changes. 2.1.0 → 2.1.5 added 7
+  grammars (deferred). 2.2.0 was a vyakarana-internal cyrius
+  pin bump. 2.2.1 fixed a streaming compose-rule prefix-
+  buffering bug owl doesn't currently exercise (HTML/Vue/
+  Markdown compose rules), but the fix lands transparently
+  via the dep bundle.
+
+### Verified
+
+- `cyrius build` + `CYRIUS_DCE=1 cyrius build` clean.
+- `cyrius test` — unit gates green.
+- `sh scripts/smoke.sh` — all M0–M8 gates green; existing
+  highlight smoke (`.rs` ANSI emission, `.go` / `.zig` /
+  `.cyml` / `.ll` / `.java` / `.sql` / `…` extension
+  detection + ANSI) covers the migrated path end-to-end.
+- `owl --version --verbose` reports `vyakarana 2.2.1` /
+  `cyrius 5.10.10`.
+
+### Notes
+
+- **`HIGHLIGHT_MAX` lift now unblocked upstream.**
+  vyakarana 2.0.1's rolling-buffer scanner caps live span
+  at 16 MB rather than total input. owl can now highlight
+  files of arbitrary size as long as the longest
+  in-progress span (block comment, multi-line string,
+  fenced body) fits in 16 MB. The lift work is mechanical
+  given the streaming primitive is already in place — drive
+  `tokenize_stream_feed` per chunk during the slurp instead
+  of one-shot at the end. Tracked as a 1.3.x catchup patch.
+- **7 vyakarana 2.1.x grammars deferred.** powershell +
+  crystal + julia (2.1.0); vue + svelte (2.1.1); nix
+  (2.1.2); terraform (2.1.3). Each lands in its own owl
+  patch following the 1.2.x cascade pattern (same
+  per-language wiring template — `lang_name` / `lang_exts`
+  entry in `src/lang.cyr` + `_owl_load_grammar` call in
+  `_owl_bootstrap_grammars` + smoke gate).
+- **SIT VCS swap stays parked.** Sit is at 0.7.6 (no
+  `[lib]`, no `dist/sit.cyr`); the v0.7.7 library-export
+  slot owl filed on sit's roadmap hasn't shipped yet.
+
 ## [1.3.0] — 2026-05-08
 
 Toolchain refresh + vyakarana 1.8.0 → 1.11.0 cascade in one cut.
