@@ -4,6 +4,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.3.7] — 2026-06-09
+
 ### Added
 
 - **AGNOS target support — owl now builds `--agnos`** and runs as a file viewer on
