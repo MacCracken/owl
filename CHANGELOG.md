@@ -4,7 +4,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-_No unreleased changes._
+### Added
+
+- **AGNOS target support — owl now builds `--agnos`** and runs as a file viewer on
+  the sovereign OS. Cyrius pin bumped **5.10.10 → 6.0.56** (the release that landed
+  `CYRIUS_TARGET_AGNOS`); compiles clean against 6.0.x with no source changes to the
+  viewer/highlighter core. agnos-unavailable facilities are gated behind
+  `#ifdef CYRIUS_TARGET_AGNOS`: the **pager** (`start_pager`/`stop_pager` — no
+  fork/execve on agnos → output goes straight to stdout), the **VCS gutter**
+  (`_run_git_diff` — no git/fork → disabled, same as git-not-installed on Linux),
+  **terminal-size ioctl** (`_term_cols` → default 80 cols), **tty detection**
+  (`is_tty` → reports tty so ANSI syntax-colour stays on; the fb console interprets
+  SGR per agnos 1.43.2), and **`/proc/self/exe` readlink** (`_resolve_grammars_dir`
+  → falls back to the compiled-in vyakarana grammars). Host (Linux) behavior is
+  unchanged — every gate's `#ifndef` branch keeps the prior code. CI/release now
+  build + ship the agnos binary (`owl_agnos`) alongside the host build.
 
 ## [1.3.6] — 2026-05-09
 

@@ -35,6 +35,13 @@ fn resolve_pager_cmd() {
 # paging — silent fallback; the first render syscall just writes to the
 # original TTY in that case).
 fn start_pager() {
+    #ifdef CYRIUS_TARGET_AGNOS
+    # agnos has no fork/execve — there is no external pager to spawn. Returning
+    # 0 takes the caller's "no paging" path, which writes straight to stdout (the
+    # fb console scrolls; there is no `less`).
+    return 0;
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     var cmd = resolve_pager_cmd();
 
     var pipefd[16];
@@ -113,6 +120,7 @@ fn start_pager() {
     sys_close(write_fd);
     g_pager_pid = pid;
     return pid;
+    #endif
 }
 
 # Close our write-end of the pipe (fd 1) so the pager gets EOF, then
@@ -120,6 +128,10 @@ fn start_pager() {
 # reporting from main still reaches the terminal (not the now-dead
 # pipe).
 fn stop_pager() {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return 0;
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     if (g_pager_pid == 0) { return 0; }
     sys_close(1);
     if (g_pager_orig_out > 0) {
@@ -135,6 +147,7 @@ fn stop_pager() {
     sys_waitpid(g_pager_pid, &status_buf, 0);
     g_pager_pid = 0;
     return 0;
+    #endif
 }
 
 # Called during arg parse. Parses --paging=<value>; returns 0 OK,

@@ -108,11 +108,12 @@ jobs:
       - name: Resolve dependencies
         run: cyrius deps
 
-      - name: Build DCE'd binary
+      - name: Build DCE'd binary (host + agnos)
         run: |
           mkdir -p build
           cyrius build src/main.cyr build/owl
-          echo "owl: $(wc -c < build/owl) bytes"
+          cyrius build --agnos src/main.cyr build/owl_agnos
+          echo "owl host: $(wc -c < build/owl) bytes, agnos: $(wc -c < build/owl_agnos) bytes"
 
       - name: Re-run smoke on the release binary
         # See ci.yml note — smoke.sh requires bash, not dash.
@@ -126,6 +127,7 @@ jobs:
           PKG="owl-${VERSION}-${{ matrix.target }}"
           mkdir -p "pkg/$PKG"
           cp build/owl "pkg/$PKG/"
+          cp build/owl_agnos "pkg/$PKG/"
           cp -r grammars "pkg/$PKG/"
           cp README.md LICENSE CHANGELOG.md VERSION "pkg/$PKG/"
           mkdir -p out

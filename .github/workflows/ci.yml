@@ -51,13 +51,20 @@ jobs:
         # ([deps.vyakarana] git + tag + modules) into lib/.
         run: cyrius deps
 
-      - name: Build
+      - name: Build (host + agnos)
+        # owl is agnos-capable (pager/VCS/ioctl/readlink gated behind
+        # CYRIUS_TARGET_AGNOS); build BOTH targets so a PR can't break the
+        # agnos path. Fresh `cyrius deps` above vendors the agnos stdlib
+        # variants (alloc_agnos / args_agnos / syscalls_x86_64_agnos / …).
         run: |
           mkdir -p build
           cyrius build src/main.cyr build/owl
+          cyrius build --agnos src/main.cyr build/owl_agnos
 
       - name: Verify ELF
-        run: xxd -l 4 build/owl | grep -q "7f45 4c46"
+        run: |
+          xxd -l 4 build/owl | grep -q "7f45 4c46"
+          xxd -l 4 build/owl_agnos | grep -q "7f45 4c46"
 
       - name: Lint
         # Every src file clean; the only tolerated warning is the

@@ -140,22 +140,35 @@ var g_at_line_start = 1;
 # spawn the pager: /dev/null is a char device but not a terminal.)
 # TCGETS = 0x5401 on Linux. termios is ~44 bytes; oversizing is free.
 fn is_tty(fd) {
+    #ifdef CYRIUS_TARGET_AGNOS
+    # agnos has no ioctl/termios. The fb console IS an ANSI/SGR-capable tty
+    # (fb_console 1.43.2 — the path anuenue's rainbow renders through), so report
+    # tty=1 to keep syntax-colour decoration enabled.
+    return 1;
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     var tbuf[128];
     var r = syscall(SYS_IOCTL, fd, 0x5401, &tbuf);
     if (r < 0) { return 0; }
     return 1;
+    #endif
 }
 
 # Terminal column count via TIOCGWINSZ on stdout. Returns 0 if not a
 # TTY (callers default to 80). winsize = { ws_row, ws_col, ws_xpixel,
 # ws_ypixel } as four u16; ws_col is at offset 2.
 fn _term_cols() {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return 0;   # no TIOCGWINSZ on agnos — callers default to 80 cols
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     var ws[8];
     var r = syscall(SYS_IOCTL, STDOUT, 0x5413, &ws);
     if (r < 0) { return 0; }
     var lo = load8(&ws + 2);
     var hi = load8(&ws + 3);
     return hi * 256 + lo;
+    #endif
 }
 
 # ── Mode resolution ────────────────────────────────────────────────────
@@ -502,6 +515,12 @@ fn _resolve_grammars_dir() {
 
     # readlink /proc/self/exe → absolute binary path. SYS_readlink = 89
     # on Linux x86_64. Returns negative on failure (no /proc, etc.).
+    #ifdef CYRIUS_TARGET_AGNOS
+    # No readlink / /proc on agnos — use the compiled-in vyakarana grammars
+    # (no external grammars dir relative to the binary).
+    g_grammars_dir = 0;
+    return 0;
+    #endif
     var link[512];
     var n = syscall(89, "/proc/self/exe", &link, 511);
     if (n <= 0) { g_grammars_dir = 0; return 0; }

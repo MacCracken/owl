@@ -91,6 +91,12 @@ fn _find_git() {
 # bytes read, or -1 on fork/pipe/exec failure (git-not-found, ENOMEM,
 # etc.).
 fn _run_git_diff(path, diff_buf, diff_cap) {
+    #ifdef CYRIUS_TARGET_AGNOS
+    # No git binary, fork, or execve on agnos — the VCS gutter is disabled
+    # (callers treat -1 as "no diff", the same as git-not-installed on Linux).
+    return 0 - 1;
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     var git = _find_git();
     if (git == 0) { return 0 - 1; }
 
@@ -140,6 +146,7 @@ fn _run_git_diff(path, diff_buf, diff_cap) {
     var stbuf[8];
     sys_waitpid(pid, &stbuf, 0);
     return total;
+    #endif
 }
 
 # ASCII decimal parse. Reads digits from buf[off..end], returns
