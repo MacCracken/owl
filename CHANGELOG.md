@@ -4,6 +4,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.3.8] — 2026-06-09
+
+### Fixed
+
+- **agnos: `owl FILE` printed its usage instead of the file.** Two AGNOS-only bugs,
+  both surfaced by AGNOS's 1.44.x agnsh→owl delegation smoke (`agnsh-delegation-test.py`):
+  1. **Entry form** — `var r = main();` ran at module scope, i.e. during gvar-init,
+     *before* cycc emits the init-rsp capture (placed after gvar-inits as of cyrius
+     6.1.14) — so `argc()`/`argv()` read 0/null and owl saw no positional → help.
+     Fixed with the canonical bare top-level call (`_owl_entry();`).
+  2. **fnptr** — cyrius pin **6.0.56 → 6.1.14** + re-vendored `lib/`, so `lib/fnptr.cyr`
+     carries the `CYRIUS_TARGET_AGNOS` fncall branch (without it the allocator vtable
+     returned 0 on agnos). Same class as kriya 1.1.2 / agnoshi 1.4.9.
+  Now `owl -p FILE` (byte-identical) and decorated `owl FILE` read files on agnos —
+  owl is AGNOS's `cat`. Host build + behavior unchanged.
+
 ## [1.3.7] — 2026-06-09
 
 ### Added
