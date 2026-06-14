@@ -10,7 +10,7 @@ include "src/config.cyr"
 
 # Keep OWL_VERSION in sync with the VERSION file.
 # A M8 CI check will enforce equality; for now, manual.
-var OWL_VERSION = "owl 1.3.8";
+var OWL_VERSION = "owl 1.4.0";
 
 var BUFSIZE = 65536;
 
@@ -1775,12 +1775,14 @@ fn render_path(path) {
 fn print_version() {
     println(OWL_VERSION);
     if (g_flag_verbose == 1) {
-        # Kept in sync with cyrius.cyml [deps.vyakarana].tag and
-        # [package].cyrius. Useful for bug reports — "owl 1.3.6
-        # vyakarana 2.2.1 cyrius 5.10.10 linux-x86_64" pins the exact
-        # toolchain + dep versions a user is running against.
-        println("vyakarana 2.2.1");
-        println("cyrius 5.10.10");
+        # Kept in sync with cyrius.cyml [deps.*].tag and [package].cyrius.
+        # Useful for bug reports — "owl 1.4.0 vyakarana 2.2.3 sit 1.0.1
+        # cyrius 6.2.2 linux-x86_64" pins the exact toolchain + dep
+        # versions a user is running against. sit (1.4.0) backs the VCS
+        # change-marker gutter via sit_diff_path.
+        println("vyakarana 2.2.3");
+        println("sit 1.0.1");
+        println("cyrius 6.2.2");
         println("target linux-x86_64");
     }
     return EXIT_OK;

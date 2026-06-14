@@ -2,32 +2,52 @@
 #
 # Scope
 # -----
-# Fork + execve `git diff --no-color -U0 -- <path>` once per rendered
-# file (no shell — argv boundaries are kernel-enforced, closing the
-# classic quoting-bug class), parse the unified-diff hunk headers into
-# per-line markers, and expose a line-indexed lookup to the gutter
-# renderer in main.cyr.
+# Ask sit (the AGNOS-native VCS) for the per-line diff of a rendered file
+# against its HEAD blob, then translate sit's line-level edit script into
+# the per-line ADD / MOD / DEL markers the gutter renderer in main.cyr
+# consumes via `vcs_mark_for_line`.
 #
-# All git-specific code lives in this module. Interim scaffold — when
-# SIT (planned AGNOS-native VCS) ships, this file becomes a
-# single-file rewrite: the interface stays (`vcs_compute_markers`,
-# `vcs_mark_for_line`, `vcs_reset`, `vcs_enabled`, `set_style`).
+# sit replaced the fork+execve `git diff` scaffold at owl 1.4.0. All
+# VCS-backend-specific code lives in this module; main.cyr sees only the
+# stable five-fn interface (`vcs_compute_markers`, `vcs_mark_for_line`,
+# `vcs_reset`, `vcs_enabled`, `set_style`), which is unchanged across the
+# swap. sit's library surface (ADR 0009) is the new backend:
+#   - sit_repo_open(cwd)        — open the repo at cwd, 1 / 0
+#   - sit_diff_path(repo, path) — HEAD-blob vs working-tree edit script,
+#                                 a vec of 32-byte annotated ops, or 0
+#   - sit_repo_close(repo)      — release the handle
+#   - ann_kind / ann_new / ann_old — accessors on each annotated op
 #
 # Marker semantics
 # ----------------
 #   VCS_MARK_ADD  — line exists only in the working copy (pure addition)
 #   VCS_MARK_MOD  — line changed content relative to HEAD
-#   VCS_MARK_DEL  — deletion anchor; shown on the line after the lost
+#   VCS_MARK_DEL  — deletion anchor; shown on the line preceding the lost
 #                   content, or on line 1 if the file lost its head
+#
+# How sit's edit script maps to markers
+# --------------------------------------
+# sit_diff_path returns an LCS edit script: one op per line, in file
+# order, where ann_kind is 0 = keep / 1 = delete (in HEAD, gone from the
+# working tree) / 2 = add (in the working tree, not in HEAD), and
+# ann_new is the 1-indexed working-tree line (0 for a delete). We group
+# the script into maximal "change runs" (consecutive non-keep ops) and
+# classify each run the way the old git `-U0` hunk parser did:
+#   - run has adds, no dels  → pure add  → mark each add's line ADD
+#   - run has adds and dels  → modify    → mark each add's line MOD
+#   - run has dels, no adds  → pure del  → mark the anchor line DEL
+# This preserves the marker output the git scaffold produced, so the
+# gutter and `--diff` behaviour are unchanged.
 #
 # Known limits
 # ------------
-#   - Submodules, packed refs, worktrees — whatever `git diff` handles
-#     in the user's environment is what we show
-#   - Diff output is capped at 64 KB; a file with a huge diff renders
-#     partial markers (audit FINDING-006)
-#   - If git is not installed under /usr/bin, /usr/local/bin, or /bin,
-#     the module silently no-ops
+#   - sit 1.0.1's sit_repo_open does not search upward for a repo root:
+#     markers appear only when owl is run from the directory holding
+#     `.sit/`, with a repo-root-relative path. Outside a sit repo the
+#     module silently no-ops (same as git-not-a-repo before the swap).
+#   - The diff is bounded by sit's LCS cap (16M cells); a file whose
+#     diff table exceeds that yields no markers (sit returns 0).
+#   - No git fallback: a directory tracked only by git shows no markers.
 
 var VCS_MARK_NONE = 0;
 var VCS_MARK_ADD  = 1;
@@ -69,238 +89,97 @@ fn vcs_enabled() {
     return 1;
 }
 
-# Resolve git's absolute path. Return pointer to the path string, or 0
-# if git isn't installed. Checks the three common install prefixes;
-# avoids PATH lookup entirely so we don't need to hand the child any
-# environment. Order matches Debian / Ubuntu / RHEL / Arch defaults.
-fn _find_git() {
-    var fd = sys_open("/usr/bin/git", 0, 0);
-    if (fd >= 0) { sys_close(fd); return "/usr/bin/git"; }
-    fd = sys_open("/usr/local/bin/git", 0, 0);
-    if (fd >= 0) { sys_close(fd); return "/usr/local/bin/git"; }
-    fd = sys_open("/bin/git", 0, 0);
-    if (fd >= 0) { sys_close(fd); return "/bin/git"; }
+# Store a marker for a 1-indexed working-tree line, bounds-checked.
+fn _vcs_mark(line, kind) {
+    if (line < 1) { return 0; }
+    if (line > g_vcs_mark_cap) { return 0; }
+    store8(g_vcs_marks + line - 1, kind);
     return 0;
 }
 
-# Run `git diff --no-color -U0 -- <path>` via execve with explicit
-# argv — no /bin/sh, no quoting. Closes audit FINDING-003 (shell
-# injection class) and FINDING-005 (paths with `'` no longer need to
-# be rejected). git's stderr is redirected to /dev/null in the child
-# so "not a git repository" etc. never reach owl's stderr. Returns
-# bytes read, or -1 on fork/pipe/exec failure (git-not-found, ENOMEM,
-# etc.).
-fn _run_git_diff(path, diff_buf, diff_cap) {
-    #ifdef CYRIUS_TARGET_AGNOS
-    # No git binary, fork, or execve on agnos — the VCS gutter is disabled
-    # (callers treat -1 as "no diff", the same as git-not-installed on Linux).
-    return 0 - 1;
-    #endif
-    #ifndef CYRIUS_TARGET_AGNOS
-    var git = _find_git();
-    if (git == 0) { return 0 - 1; }
-
-    var pipefd[16];
-    if (sys_pipe(&pipefd) < 0) { return 0 - 1; }
-    var rfd = load32(&pipefd);
-    var wfd = load32(&pipefd + 4);
-
-    var pid = sys_fork();
-    if (pid < 0) {
-        sys_close(rfd);
-        sys_close(wfd);
-        return 0 - 1;
-    }
-
-    if (pid == 0) {
-        sys_close(rfd);
-        sys_dup2(wfd, 1);
-        sys_close(wfd);
-        var devnull = sys_open("/dev/null", 1, 0);
-        if (devnull >= 0) { sys_dup2(devnull, 2); sys_close(devnull); }
-        var argv[56];
-        store64(&argv + 0,  git);
-        store64(&argv + 8,  "diff");
-        store64(&argv + 16, "--no-color");
-        store64(&argv + 24, "-U0");
-        store64(&argv + 32, "--");
-        store64(&argv + 40, path);
-        store64(&argv + 48, 0);
-        var envp[8];
-        store64(&envp + 0, 0);
-        sys_execve(git, &argv, &envp);
-        sys_exit(127);
-    }
-
-    sys_close(wfd);
-    var total = 0;
-    var keep_reading = 1;
-    while (keep_reading == 1) {
-        if (total >= diff_cap) { keep_reading = 0; continue; }
-        var n = sys_read(rfd, diff_buf + total, diff_cap - total);
-        if (n <= 0) { keep_reading = 0; continue; }
-        total = total + n;
-    }
-    sys_close(rfd);
-    # waitpid writes a kernel int (4 bytes). See audit FINDING-004.
-    var stbuf[8];
-    sys_waitpid(pid, &stbuf, 0);
-    return total;
-    #endif
-}
-
-# ASCII decimal parse. Reads digits from buf[off..end], returns
-# (value, one-past-last-digit-offset) via globals.
-var _vcs_pv = 0;
-var _vcs_pe = 0;
-fn _parse_uint(buf, off, end) {
-    var v = 0;
-    var i = off;
-    while (i < end) {
-        var c = load8(buf + i);
-        if (c < 48) { break; }
-        if (c > 57) { break; }
-        v = v * 10 + (c - 48);
-        i = i + 1;
-    }
-    _vcs_pv = v;
-    _vcs_pe = i;
-    return 0;
-}
-
-# Find offset of byte `c` in buf[off..end], or `end` if not found.
-fn _scan_byte(buf, off, end, c) {
-    var i = off;
-    while (i < end) {
-        if (load8(buf + i) == c) { return i; }
-        i = i + 1;
-    }
-    return end;
-}
-
-# Parse a unified-diff hunk header:
-#   @@ -OLD_START[,OLD_COUNT] +NEW_START[,NEW_COUNT] @@
-# Writes parsed values into _vcs_hunk_* globals. Returns 1 on success,
-# 0 on malformed header.
-var _vcs_hunk_old_start = 0;
-var _vcs_hunk_old_count = 0;
-var _vcs_hunk_new_start = 0;
-var _vcs_hunk_new_count = 0;
-fn _parse_hunk_header(buf, off, eol) {
-    # Must start with "@@ -"
-    if (eol - off < 8) { return 0; }
-    if (load8(buf + off + 0) != 64) { return 0; }  # '@'
-    if (load8(buf + off + 1) != 64) { return 0; }
-    if (load8(buf + off + 2) != 32) { return 0; }
-    if (load8(buf + off + 3) != 45) { return 0; }  # '-'
-
-    var p = off + 4;
-    _parse_uint(buf, p, eol);
-    _vcs_hunk_old_start = _vcs_pv;
-    p = _vcs_pe;
-    _vcs_hunk_old_count = 1;
-    if (p < eol) {
-        if (load8(buf + p) == 44) {  # ','
-            _parse_uint(buf, p + 1, eol);
-            _vcs_hunk_old_count = _vcs_pv;
-            p = _vcs_pe;
-        }
-    }
-    # expect " +"
-    if (p + 2 > eol) { return 0; }
-    if (load8(buf + p) != 32) { return 0; }
-    if (load8(buf + p + 1) != 43) { return 0; }  # '+'
-    p = p + 2;
-    _parse_uint(buf, p, eol);
-    _vcs_hunk_new_start = _vcs_pv;
-    p = _vcs_pe;
-    _vcs_hunk_new_count = 1;
-    if (p < eol) {
-        if (load8(buf + p) == 44) {
-            _parse_uint(buf, p + 1, eol);
-            _vcs_hunk_new_count = _vcs_pv;
-        }
-    }
-    return 1;
-}
-
-# Walk the captured diff, convert hunks to per-line markers. One pass,
-# O(diff_bytes).
-#
-# Hunk interpretation:
-#   old_count==0 && new_count>0 → pure add:  mark new_start..+new_count ADD
-#   old_count>0  && new_count==0 → pure del: mark new_start (or 1) DEL
-#   both>0                        → modify:  mark new_start..+new_count MOD
-fn _apply_hunks(diff_buf, diff_n) {
-    if (g_vcs_marks == 0) { return 0; }
+# First pass over the edit script: highest working-tree (new) line number
+# touched, so we size the marker array exactly. Keep and add ops carry a
+# new-side line; deletes carry 0.
+fn _max_new_line(ops) {
+    var n = vec_len(ops);
     var i = 0;
-    while (i < diff_n) {
-        var eol = _scan_byte(diff_buf, i, diff_n, 10);  # '\n'
-        # Only hunk headers matter for markers.
-        if (eol - i >= 4) {
-            if (load8(diff_buf + i) == 64) {
-                if (load8(diff_buf + i + 1) == 64) {
-                    if (_parse_hunk_header(diff_buf, i, eol) == 1) {
-                        var oc = _vcs_hunk_old_count;
-                        var nc = _vcs_hunk_new_count;
-                        var ns = _vcs_hunk_new_start;
-                        var kind = VCS_MARK_NONE;
-                        if (oc == 0) {
-                            if (nc > 0) { kind = VCS_MARK_ADD; }
-                        } else {
-                            if (nc == 0) {
-                                kind = VCS_MARK_DEL;
-                                nc = 1;
-                                if (ns == 0) { ns = 1; }
-                            } else {
-                                kind = VCS_MARK_MOD;
-                            }
-                        }
-                        if (kind != VCS_MARK_NONE) {
-                            var k = 0;
-                            while (k < nc) {
-                                var ln = ns + k;
-                                if (ln >= 1) {
-                                    if (ln <= g_vcs_mark_cap) {
-                                        store8(g_vcs_marks + ln - 1, kind);
-                                    }
-                                }
-                                k = k + 1;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        i = eol + 1;
-    }
-    return 0;
-}
-
-# First pass over the diff: find the highest affected line number so we
-# can size the mark array exactly. Avoids re-reading the file just to
-# count lines.
-fn _max_line_from_hunks(diff_buf, diff_n) {
     var max_line = 0;
-    var i = 0;
-    while (i < diff_n) {
-        var eol = _scan_byte(diff_buf, i, diff_n, 10);
-        if (eol - i >= 4) {
-            if (load8(diff_buf + i) == 64) {
-                if (load8(diff_buf + i + 1) == 64) {
-                    if (_parse_hunk_header(diff_buf, i, eol) == 1) {
-                        var nc = _vcs_hunk_new_count;
-                        var ns = _vcs_hunk_new_start;
-                        if (nc == 0) { nc = 1; if (ns == 0) { ns = 1; } }
-                        var last = ns + nc - 1;
-                        if (last > max_line) { max_line = last; }
-                    }
-                }
-            }
-        }
-        i = eol + 1;
+    while (i < n) {
+        var op = vec_get(ops, i);
+        var nl = ann_new(op);
+        if (nl > max_line) { max_line = nl; }
+        i = i + 1;
     }
     return max_line;
+}
+
+# Walk the edit script, convert change runs to per-line markers. One
+# forward pass; runs are grouped via a flag-controlled inner scan (no
+# `break` — see CLAUDE.md Cyrius conventions).
+fn _apply_ops(ops) {
+    if (g_vcs_marks == 0) { return 0; }
+    var n = vec_len(ops);
+    var i = 0;
+    # new-file line number of the most recent keep/add — the anchor a
+    # following pure-deletion run hangs its DEL marker on.
+    var last_new = 0;
+    while (i < n) {
+        var op = vec_get(ops, i);
+        var kind = ann_kind(op);
+        if (kind == 0) {
+            last_new = ann_new(op);
+            i = i + 1;
+            continue;
+        }
+
+        # Non-keep op — scan the maximal change run [i, j).
+        var run_has_del = 0;
+        var run_has_add = 0;
+        var anchor = last_new;
+        var j = i;
+        var scanning = 1;
+        while (scanning == 1) {
+            if (j >= n) {
+                scanning = 0;
+            } else {
+                var oj = vec_get(ops, j);
+                var kj = ann_kind(oj);
+                if (kj == 0) {
+                    scanning = 0;
+                } else {
+                    if (kj == 1) { run_has_del = 1; }
+                    if (kj == 2) { run_has_add = 1; }
+                    j = j + 1;
+                }
+            }
+        }
+
+        if (run_has_add == 1) {
+            # Added lines present: MOD when the run also dropped lines
+            # (content changed in place), pure ADD otherwise.
+            var mk = VCS_MARK_ADD;
+            if (run_has_del == 1) { mk = VCS_MARK_MOD; }
+            var m = i;
+            while (m < j) {
+                var om = vec_get(ops, m);
+                if (ann_kind(om) == 2) {
+                    var ln = ann_new(om);
+                    _vcs_mark(ln, mk);
+                    last_new = ln;
+                }
+                m = m + 1;
+            }
+        } else {
+            # Pure deletion run — anchor the DEL marker on the line that
+            # precedes the lost content (or line 1 if the head was lost),
+            # matching the old git `-U0` "+anchor,0" behaviour.
+            var al = anchor;
+            if (al == 0) { al = 1; }
+            _vcs_mark(al, VCS_MARK_DEL);
+        }
+        i = j;
+    }
+    return 0;
 }
 
 # Public entry — populate per-line markers for `path`. Silent on any
@@ -309,13 +188,27 @@ fn _max_line_from_hunks(diff_buf, diff_n) {
 fn vcs_compute_markers(path) {
     vcs_reset();
     if (vcs_enabled() == 0) { return 0; }
+    if (path == 0) { return 0; }
 
-    var diff_cap = 65536;
-    var diff_buf = alloc(diff_cap);
-    var diff_n = _run_git_diff(path, diff_buf, diff_cap);
-    if (diff_n <= 0) { return 0; }
+    #ifdef CYRIUS_TARGET_AGNOS
+    # sit's object store is not wired for agnos yet — the VCS gutter is
+    # disabled there, the same no-op as git-not-installed was on Linux.
+    return 0;
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
+    # Open the sit repo at the current directory. sit 1.0.1's
+    # sit_repo_open chdir(".") is a no-op when owl runs from the repo
+    # root; it returns 0 when there is no `.sit/HEAD` (not a sit repo),
+    # giving the same silent no-op as git-not-a-repo before the swap.
+    var repo = sit_repo_open(".");
+    if (repo == 0) { return 0; }
 
-    var max_line = _max_line_from_hunks(diff_buf, diff_n);
+    var ops = sit_diff_path(repo, path);
+    sit_repo_close(repo);
+    # 0 means unchanged, absent from both sides, or diff-table overflow.
+    if (ops == 0) { return 0; }
+
+    var max_line = _max_new_line(ops);
     if (max_line <= 0) { return 0; }
 
     g_vcs_marks = alloc(max_line);
@@ -323,8 +216,9 @@ fn vcs_compute_markers(path) {
     var z = 0;
     while (z < max_line) { store8(g_vcs_marks + z, 0); z = z + 1; }
 
-    _apply_hunks(diff_buf, diff_n);
+    _apply_ops(ops);
     return 0;
+    #endif
 }
 
 fn vcs_mark_for_line(line) {

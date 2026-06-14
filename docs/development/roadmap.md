@@ -2,11 +2,13 @@
 
 Forward-looking planning surface. Latest release and prior history
 live in `CHANGELOG.md`; this file tracks what's *next*. Current
-release is **1.3.6**; the 1.3.x catchup window is **closed** —
-all 2.1.x grammars wired, vyakarana 2.x streaming-API migration
-complete, and the HIGHLIGHT_MAX lift shipped. Forward work is
-the **1.4.x feature line** — items each have a sketch below;
-none gate on toolchain or grammar work.
+release is **1.4.0** — the **1.4.x feature line** is open and its
+headline item (the **SIT dependency swap**) has shipped: owl's VCS
+gutter now reads markers from sit's `sit_diff_path` library instead
+of forking `git`. The 1.3.x catchup window closed earlier (all 2.1.x
+grammars wired, vyakarana 2.x migration, HIGHLIGHT_MAX lift), and
+1.3.7/1.3.8 added the AGNOS target. Remaining 1.4.x items each have a
+sketch below; none gate on toolchain or grammar work.
 
 ---
 
@@ -17,6 +19,9 @@ forward-looking. Full prose in `CHANGELOG.md`.
 
 | Release | Date       | Headline                                                |
 |---------|------------|---------------------------------------------------------|
+| 1.4.0   | 2026-06-14 | SIT dependency swap — VCS gutter via sit_diff_path (off git); cyrius 6.2.2 + vyakarana 2.2.3 |
+| 1.3.8   | 2026-06-09 | agnos `owl FILE` fix (top-level entry; cyrius 6.1.14)   |
+| 1.3.7   | 2026-06-09 | AGNOS target support — `owl --agnos`; cyrius 6.0.56     |
 | 1.3.6   | 2026-05-09 | HIGHLIGHT_MAX 128 KB → 16 MB; per-chunk feed; closes 1.3.x catchup |
 | 1.3.5   | 2026-05-09 | vyakarana 2.1.3 — Terraform / HCL (closes 2.1.x batch)  |
 | 1.3.4   | 2026-05-09 | vyakarana 2.1.2 — Nix                                    |
@@ -101,16 +106,18 @@ following items are 1.4.x candidates; ordering is rough
 priority, not commitment. Each is independent — they don't
 have to ship in order.
 
-- **SIT dependency swap.** When sit ships v0.7.7
-  ([`dist/sit.cyr` library export + diff-primitive cleanup](https://github.com/MacCracken/sit/blob/main/docs/development/roadmap.md)),
-  `src/vcs.cyr` becomes a single-file rewrite: replace the
-  `execve("git", "diff", …)` path with a `sit_diff_path(repo,
-  path)` library call. The five-fn public interface
-  (`vcs_compute_markers`, `vcs_mark_for_line`, `vcs_enabled`,
-  `vcs_reset`, `set_style`) stays unchanged so consumers see no
-  difference. Currently blocked on sit shipping the library —
-  sit is at 0.7.6 (binary-only, no `[lib]` clause). Highest
-  forward-priority item once unblocked.
+- ~~**SIT dependency swap.**~~ **Shipped in 1.4.0** (2026-06-14).
+  `src/vcs.cyr` was rewritten from `execve("git", "diff", …)` to
+  sit's `sit_repo_open` / `sit_diff_path` / `sit_repo_close`
+  library calls (sit 1.0.1, ADR 0009 surface), walking the LCS
+  edit script into the same ADD/MOD/DEL markers. The five-fn
+  public interface is unchanged. The first co-link surfaced a
+  patra↔vyakarana `TK_*` symbol collision, fixed upstream as
+  patra 1.11.2; the broader stdlib-collision class is filed for
+  cyrius. Follow-ups: binary-size trim (owl is ~2.6 MB while it
+  links sit's full bundle — pending the 6.x lib-streamlining arc)
+  and sit repo-root discovery (markers need owl run from the
+  `.sit/` root, as sit 1.0.1 has no upward search).
 - **NDJSON output mode (`--format=ndjson`).** Emit tokens as
   one JSON object per line for downstream tooling
   (editor LSP-style consumers, code analyzers, indexing). The
@@ -206,4 +213,4 @@ See [`../adr/README.md`](../adr/README.md) for the full index.
 | Pager integration breaks on AGNOS before the OS ships | `--paging=never` is a reliable fallback; test with `PAGER=cat`. Real-world precedent: 1.1.5 fixed a missing-`TERM` regression where `less` exited at terminfo init, by forwarding `/proc/self/environ` to the child |
 | Vyakarana grammar changes break owl's token palette | Palette is frozen at 10 kinds; kind names are the stable contract per [vyakarana architecture note 004](https://github.com/MacCracken/vyakarana/blob/main/docs/architecture/004-theme-palette-contract.md); owl dispatches via `kind_name(k)` since 1.3.0. Pin vyakarana tag in `cyrius.cyml` |
 | `HIGHLIGHT_MAX` surprises a user with a >16 MB source file | Stderr notice on fallback in place; cap was lifted from 128 KB to 16 MB at 1.3.6. Files past 16 MB still drop to plain rendering with a clear notice — true streaming-render-and-discard is filed as a future-when-needed item |
-| SIT takes longer than expected to ship | Current `git` scaffold is stable and covered by smoke; no urgency beyond sit's own timeline. sit roadmap tracks `dist/sit.cyr` as v0.7.7 — owl filed the upstream ask 2026-05-08 |
+| ~~SIT takes longer than expected to ship~~ | **Resolved 1.4.0** — sit 1.0.1 shipped the library export; owl swapped off git. New tracked risk: owl now links sit's full object-store bundle (~2.6 MB binary) — mitigated by DCE today, to be trimmed by the cyrius 6.x lib-streamlining arc |

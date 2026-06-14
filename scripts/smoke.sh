@@ -21,6 +21,41 @@ trap 'rm -rf "$TMPDIR"' EXIT INT TERM
 
 fail() { echo "smoke: FAIL — $1" >&2; exit 1; }
 
+# Absolute owl path — the VCS-marker gates `cd` into a throwaway sit repo
+# (owl resolves the repo from CWD), so a relative $BIN would break there.
+BIN_ABS="$(cd "$(dirname "$BIN")" && pwd)/$(basename "$BIN")"
+
+# sit binary — owl 1.4.0 reads VCS change markers from sit's *library*
+# (no subprocess at runtime), but building a test repo for the marker gates
+# needs the sit CLI to init/commit. Discovery: $OWL_SIT_BIN → PATH → sibling
+# checkout. Empty when unavailable, in which case the sit-backed gates print
+# a NOTE and skip (they do not silently pass).
+SIT_BIN=""
+if [ -n "${OWL_SIT_BIN:-}" ] && [ -x "${OWL_SIT_BIN}" ]; then
+    SIT_BIN="$OWL_SIT_BIN"
+elif command -v sit >/dev/null 2>&1; then
+    SIT_BIN="$(command -v sit)"
+elif [ -x "../sit/build/sit" ]; then
+    SIT_BIN="$(cd ../sit/build && pwd)/sit"
+fi
+
+# Build a throwaway sit repo at $1 with a committed-then-modified file
+# `tracked.txt`: line 2 changed in place (→ MOD) and a line appended (→ ADD).
+# Used by the M6 marker gate and the --diff gate. Caller must have checked
+# $SIT_BIN is non-empty.
+make_sit_fixture() {
+    repo="$1"
+    mkdir -p "$repo"
+    (
+        cd "$repo" || exit 1
+        "$SIT_BIN" init        >/dev/null 2>&1 || exit 1
+        printf 'alpha\nbeta\ngamma\ndelta\n' > tracked.txt
+        "$SIT_BIN" add tracked.txt >/dev/null 2>&1 || exit 1
+        "$SIT_BIN" commit -m init  >/dev/null 2>&1 || exit 1
+        printf 'alpha\nBETA-changed\ngamma\ndelta\nepsilon-new\n' > tracked.txt
+    )
+}
+
 # ============================================================
 # M0 — version / help
 # ============================================================
@@ -935,7 +970,7 @@ diff "$TMPDIR/tab.txt" <("$BIN" -p -A -n "$TMPDIR/tab.txt") > /dev/null \
     || fail "-p did not override -A / -n"
 
 # ============================================================
-# M6 — VCS change markers (git scaffold; swappable for SIT)
+# M6 — VCS change markers (sit library backend, owl 1.4.0)
 # ============================================================
 
 # --style=bogus is a usage error.
@@ -949,23 +984,30 @@ set -e
 "$BIN" -n --color=always --style=no-changes "$TMPDIR/a.txt" > /dev/null \
     || fail "--style=no-changes on a plain file should render cleanly"
 
-# Non-git path doesn't hang and doesn't leak git errors onto stderr.
+# Outside any sit repo: no hang, no stderr leak (silent no-op, same as the
+# old git-not-a-repo behaviour).
 "$BIN" -n --color=always "$TMPDIR/a.txt" > /dev/null 2>"$TMPDIR/err" \
-    || fail "non-git file rendered non-zero under -n --color=always"
-[ ! -s "$TMPDIR/err" ] || fail "non-git file leaked stderr: $(cat "$TMPDIR/err")"
+    || fail "non-repo file rendered non-zero under -n --color=always"
+[ ! -s "$TMPDIR/err" ] || fail "non-repo file leaked stderr: $(cat "$TMPDIR/err")"
 
-# Inside a real git repo with a dirty file, markers should appear.
-# owl itself is under git; use its README as a controlled probe —
-# copy → append → render and grep for an ADD marker (+ in the
-# change column). Restore README afterwards via git checkout.
-README_BAK="$TMPDIR/README.bak"
-cp README.md "$README_BAK"
-printf '\nsmoke-marker-probe\n' >> README.md
-if ! "$BIN" -n --color=always README.md 2>/dev/null | grep -q '+'; then
-    cp "$README_BAK" README.md
-    fail "expected ADD marker (+) on dirty README.md inside repo"
+# Inside a real sit repo with a dirty file, markers come from sit's
+# sit_diff_path library call: MOD (~) on the in-place-changed line and
+# ADD (+) on the appended line. owl resolves the repo from CWD, so we cd in.
+if [ -n "$SIT_BIN" ]; then
+    make_sit_fixture "$TMPDIR/sitrepo" \
+        || fail "could not build sit fixture (sit init/add/commit failed)"
+    sit_out=$( cd "$TMPDIR/sitrepo" && "$BIN_ABS" -n --color=never --style=changes --paging=never tracked.txt 2>/dev/null )
+    case "$sit_out" in
+        *"+"*) ;;
+        *) fail "expected ADD marker (+) on appended line in dirty sit repo" ;;
+    esac
+    case "$sit_out" in
+        *"~"*) ;;
+        *) fail "expected MOD marker (~) on changed line in dirty sit repo" ;;
+    esac
+else
+    echo "smoke: NOTE — sit binary not found (set OWL_SIT_BIN); skipping VCS marker + --diff gates" >&2
 fi
-cp "$README_BAK" README.md
 
 # ============================================================
 # M7 — Config file (OWL_CONFIG + precedence)
@@ -1341,13 +1383,16 @@ for bad in bogus 5:2 ""; do
     [ "$rc" = "2" ] || fail "--line-range=$bad exit: got $rc, expected 2"
 done
 
-# FINDING-003 — git via argv (no shell). Markers still appear on a
-# dirty file inside the owl repo.
-cp README.md "$TMPDIR/README.bak"
-printf '\nsmoke-hardening-probe\n' >> README.md
-if ! "$BIN" -n --color=always README.md 2>/dev/null | grep -q '+'; then
-    cp "$TMPDIR/README.bak" README.md
-    fail "FINDING-003 regression: argv-git no longer produces ADD markers"
+# FINDING-003/005 — the git fork+execve scaffold is gone in owl 1.4.0. VCS
+# markers now come from sit's sit_diff_path *library* call, so there is no
+# subprocess at all: the shell-injection and argv-quoting classes are closed
+# by construction (nothing is spawned, nothing is quoted). Re-verify the
+# library path still produces markers (reuses the M6 sit fixture). Skipped
+# when sit is unavailable.
+if [ -n "$SIT_BIN" ]; then
+    if ! ( cd "$TMPDIR/sitrepo" && "$BIN_ABS" -n --color=never --style=changes --paging=never tracked.txt 2>/dev/null ) | grep -q '+'; then
+        fail "VCS regression: sit_diff_path no longer produces ADD markers"
+    fi
 fi
 
 # 1.1.4 — content-based language detection (post-shebang fallback).
@@ -1385,24 +1430,29 @@ case "$out" in
     *) ;;
 esac
 
-# 1.1.4 — --diff mode. README.md was just modified above (via the
-# FINDING-003 setup); --diff should emit only the appended lines.
-out=$("$BIN" --diff README.md)
-case "$out" in
-    *"smoke-hardening-probe"*) ;;
-    *) fail "--diff did not emit appended hunk: $out" ;;
-esac
-# Untouched parts of the file should not appear.
-case "$out" in
-    *"# owl"*) fail "--diff emitted unchanged content (header line leaked)" ;;
-    *) ;;
-esac
-# --diff on a file outside any git repo: silent empty output.
+# 1.1.4 — --diff mode (sit backend). The M6 fixture's tracked.txt changed
+# line 2 in place (MOD) and appended line 5 (ADD); --diff emits only the
+# changed/added lines, not the untouched ones. Skipped when sit is absent.
+if [ -n "$SIT_BIN" ]; then
+    out=$( cd "$TMPDIR/sitrepo" && "$BIN_ABS" --diff tracked.txt 2>/dev/null )
+    case "$out" in
+        *"epsilon-new"*) ;;
+        *) fail "--diff did not emit appended line: $out" ;;
+    esac
+    case "$out" in
+        *"BETA-changed"*) ;;
+        *) fail "--diff did not emit changed line: $out" ;;
+    esac
+    # Untouched lines should not appear.
+    case "$out" in
+        *"gamma"*) fail "--diff emitted unchanged content (gamma leaked)" ;;
+        *) ;;
+    esac
+fi
+# --diff on a file outside any sit repo: silent empty output.
 cp README.md "$TMPDIR/elsewhere.md"
 out=$("$BIN" --diff "$TMPDIR/elsewhere.md" 2>"$TMPDIR/err")
 [ -z "$out" ] || fail "--diff on non-tracked file should produce empty stdout, got: $out"
 [ ! -s "$TMPDIR/err" ] || fail "--diff on non-tracked file leaked stderr: $(cat "$TMPDIR/err")"
-
-cp "$TMPDIR/README.bak" README.md
 
 echo "smoke: OK ($v_long) — M0–M8 gates passing (security hardening FINDING-001/002/003/004 closed)"

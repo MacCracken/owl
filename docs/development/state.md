@@ -6,6 +6,51 @@
 
 ## Version
 
+**1.4.0** — shipped 2026-06-14. **Opens the 1.4.x feature
+line with the SIT dependency swap.** owl's VCS change-marker
+gutter no longer forks `git diff` — `src/vcs.cyr` is rewritten
+to read the working-tree-vs-HEAD diff from
+[sit](https://github.com/MacCracken/sit)'s library
+(`sit_repo_open` → `sit_diff_path` → `sit_repo_close`), walking
+sit's LCS edit script (`ann_kind`/`ann_new`) into the same
+ADD/MOD/DEL per-line markers. The five-fn public interface
+(`vcs_compute_markers`, `vcs_mark_for_line`, `vcs_enabled`,
+`vcs_reset`, `set_style`) is unchanged, so main.cyr and the
+gutter renderer are untouched. Toolchain moves to cyrius 6.2.2
++ vyakarana 2.2.3; new deps `sit 1.0.1` + its object-store
+stack (`patra 1.11.2`, `sigil 3.7.13`, `sankoch 2.3.1`,
+`sakshi 2.3.0`). The first co-link of vyakarana + sit→patra
+surfaced a silent symbol collision (patra's SQL `enum TokType`
+vs vyakarana's `TK_IDENT`/`TK_COUNT` token-kind palette) that
+broke patra's SQL parser → fixed upstream by namespacing
+patra's enum (`TK_*`→`SQLT_*`, patra 1.11.2); the broader
+stdlib constant-collision class is filed for cyrius
+(`cyrius/docs/development/issues/2026-06-14-stdlib-constant-value-collisions.md`).
+The git subprocess (fork+execve) is gone, closing audit
+FINDING-003/005 by construction. Binary jumps ~459 KB → ~2.6 MB
+(the object-store link; accepted, pending the 6.x
+lib-streamlining arc). Known limit: sit 1.0.1 doesn't search
+upward for `.sit/`, so markers need owl run from the repo root;
+VCS gutter stays disabled on agnos.
+
+**1.3.8** — shipped 2026-06-09. agnos fix: `owl FILE` printed
+usage instead of the file. Two AGNOS-only bugs — module-scope
+`var r = main();` ran during gvar-init (before cycc's init-rsp
+capture, placed after gvar-inits as of cyrius 6.1.14) so
+argc/argv read 0/null → help; fixed with the bare top-level
+`_owl_entry();` call. And cyrius pin 6.0.56 → 6.1.14 + re-vendored
+`lib/` so `lib/fnptr.cyr` carries the `CYRIUS_TARGET_AGNOS`
+fncall branch. Host build/behaviour unchanged.
+
+**1.3.7** — shipped 2026-06-09. **AGNOS target support** — owl
+builds `--agnos` and runs as a file viewer on the sovereign OS.
+Cyrius pin 5.10.10 → 6.0.56 (`CYRIUS_TARGET_AGNOS` landed there).
+agnos-unavailable facilities gated behind `#ifdef
+CYRIUS_TARGET_AGNOS`: pager, VCS gutter, terminal-size ioctl,
+tty detection, `/proc/self/exe` readlink. Host (Linux) behaviour
+unchanged. CI/release build + ship `owl_agnos` alongside the host
+binary.
+
 **1.3.6** — shipped 2026-05-09. **Closes the 1.3.x catchup
 window.** Lifts `HIGHLIGHT_MAX` from 128 KB to 16 MB by
 hoisting the streaming-tokenizer lifecycle out of
@@ -246,56 +291,59 @@ complete; full owl attack surface audited and hardened.
 
 ## Toolchain
 
-- **Cyrius pin**: `5.10.10` (in `cyrius.cyml [package].cyrius`)
-  — bumped from `5.9.43` at 1.3.1 (2026-05-09). No source
-  changes required.
-- **vyakarana pin**: `2.2.1` (in `cyrius.cyml [deps.vyakarana].tag`)
-  — bumped from `1.11.0` at 1.3.1. **Crossed the 1.x → 2.x
-  major-version boundary.** Public tokenizer API broke at 2.0.0
-  (`tokenize_source` removed; replaced by the push-based
-  streaming primitive per [ADR 0017](https://github.com/MacCracken/vyakarana/blob/main/docs/adr/0017-streaming-api.md)).
-  owl's call sites migrated in 1.3.1 (one-shot feed) and again
-  in 1.3.6 (per-chunk feed during the slurp read loop). 2.0.1's
-  rolling-buffer scanner caps live span at 16 MB rather than
-  total input — the load-bearing improvement that unblocked
-  owl's HIGHLIGHT_MAX lift at 1.3.6. 2.1.x added 7 grammars
-  (powershell, crystal, julia, vue, svelte, nix, terraform);
-  all wired by owl 1.3.2–1.3.5. 2.2.0/2.2.1 are streaming-
-  correctness fixes that ride along transparently.
+- **Cyrius pin**: `6.2.2` (in `cyrius.cyml [package].cyrius`)
+  — bumped from `6.1.14` at 1.4.0. Prior moves: `5.9.43`→`5.10.10`
+  (1.3.1), `5.10.10`→`6.0.56` (1.3.7, agnos target),
+  `6.0.56`→`6.1.14` (1.3.8). No source changes required for the
+  6.1.14 → 6.2.2 bump.
+- **vyakarana pin**: `2.2.3` (in `cyrius.cyml [deps.vyakarana].tag`)
+  — bumped from `2.2.1` at 1.4.0 (2.2.2/2.2.3 are CI/docs/
+  language-table touch-ups; no owl-visible change). The 1.x→2.x
+  history: API broke at 2.0.0 (`tokenize_source` → push-based
+  streaming primitive per [ADR 0017](https://github.com/MacCracken/vyakarana/blob/main/docs/adr/0017-streaming-api.md));
+  owl migrated at 1.3.1 (one-shot feed) + 1.3.6 (per-chunk feed).
+  2.0.1's rolling-buffer scanner caps live span at 16 MB →
+  unblocked the HIGHLIGHT_MAX lift (1.3.6). 2.1.x added 7
+  grammars, all wired by 1.3.2–1.3.5.
+- **sit pin**: `1.0.1` (in `cyrius.cyml [deps.sit].tag`) — added
+  at 1.4.0 for the VCS change-marker gutter (library swap off
+  git). Pulls its object-store stack as explicit deps:
+  `patra 1.11.2`, `sigil 3.7.13`, `sankoch 2.3.1`, `sakshi 2.3.0`.
+  patra moved 1.11.1 → **1.11.2** as part of this cut — an
+  upstream fix owl drove: patra's SQL `enum TokType` collided
+  with vyakarana's `TK_IDENT`/`TK_COUNT` token-kind constants
+  under co-link; patra namespaced its enum (`TK_*`→`SQLT_*`).
 
 ## Binary
 
-- ~459 KB (470,448 bytes, `build/owl`, DCE) at 1.3.6.
-  +231,504 bytes vs 1.3.0's 238,944 — almost double, primarily
-  because vyakarana 2.x ships per ADR 0014 with **inlined CYML
-  grammar text** in the bundle, and the full 45-grammar set
-  (1.3.x catchup) is now both inlined upstream and wired in
-  owl's `_owl_bootstrap_grammars`. owl-side source growth
-  across the 1.3.x window is modest — ~100 lines net (45 lines
-  in `lang.cyr` table entries, 30 lines in `main.cyr` bootstrap
-  calls, ~25 lines in the streaming-API + per-chunk-feed
-  refactor at 1.3.1 / 1.3.6).
-- DCE and non-DCE builds are the same size but **not
-  byte-identical** under cyrius 5.10.x: DCE NOPs out dead-code
-  spans (the streaming primitive's pull-adapter, vyakarana's
-  LSP bridge, and the historical handcoded shell tokenizer all
-  strip cleanly).
-- Startup targets: `owl --version` 1–2 ms, tiny-file highlight
-  2 ms (25× under the 50 ms no-op target in
-  `docs/design-spec.md`). Bootstrap of 45 grammars at
-  first-token-color path is marginally more than the original
-  11; first-byte plain-mode path is unaffected (grammars load
-  lazily on first highlight).
+- **~2.6 MB (2,662,096 bytes, `build/owl`, DCE) at 1.4.0** — up
+  from 1.3.6's ~459 KB. The jump is the sit object-store link:
+  `dist/sit.cyr` (427 KB) + patra (B+tree/WAL store) + sigil
+  (hashing) + sankoch (zlib) + sakshi. DCE strips sit's unused
+  serve/wire/http/ssh surface, but `sit_diff_path`'s read path
+  genuinely needs the store layer (read commit/tree/blob objects
+  from patra, decompress via sankoch). Accepted for 1.4.0;
+  trimming the sit-only tail waits on the cyrius 6.x
+  lib-streamlining arc (cleaner per-symbol includes).
+- Build emits expected co-link warnings, all benign: a
+  `duplicate fn '_stream_grow'` (sankoch streaming vs vyakarana —
+  inert, sit's reads use one-shot decompress) and
+  `undefined function` notes for sit's async/ssh wire surface
+  (DCE-stripped, owl never calls them).
+- Startup targets unchanged on the plain/highlight paths
+  (`owl --version` 1–2 ms; grammars still load lazily on first
+  highlight). VCS marker computation now opens a patra DB per
+  file when in a sit repo — only on the decorated/`--diff` path.
 
 ## Source
 
-- 3,823 lines across 6 modules (1.3.6 cut):
-  - `src/main.cyr` (2,112) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff, bat-style header frame (1.1.7), wrap-continuation gutter (1.1.8), `↪` wrap-arrow glyph (1.1.9), VCS-aware wrap budget (1.1.11), grammar bootstrap (1.1.12 → 1.3.5 covering 45 grammars), tokenize_source → streaming-API migration (1.3.1), per-chunk feed during slurp + HIGHLIGHT_MAX 128 KB → 16 MB (1.3.6)
+- 3,768 lines across 6 modules (1.4.0 cut):
+  - `src/main.cyr` (2,143) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff, bat-style header frame (1.1.7), wrap-continuation gutter (1.1.8), `↪` wrap-arrow glyph (1.1.9), VCS-aware wrap budget (1.1.11), grammar bootstrap (1.1.12 → 1.3.5 covering 45 grammars), tokenize_source → streaming-API migration (1.3.1), per-chunk feed during slurp + HIGHLIGHT_MAX 128 KB → 16 MB (1.3.6), agnos `#ifdef` gates + bare-`_owl_entry()` top-level call (1.3.7/1.3.8), `--version --verbose` banner reports sit (1.4.0)
   - `src/lang.cyr` (499) — extension/shebang/content detection + ext-override table + filename-shape detection (1.2.6); LANG_COUNT 45 (latest additions: terraform 1.3.5, nix 1.3.4, vue/svelte 1.3.3, powershell/crystal/julia 1.3.2, cyml/llvm_ir 1.3.0)
   - `src/theme.cyr` (439) — bundled themes, 10-kind palette, ANSI emission, user-theme loader (1.1.3); kind_name-keyed `theme_token_color` per vyakarana architecture note 004 (1.3.0)
-  - `src/vcs.cyr` (328) — git VCS markers (M6) + --diff bypass for piped output
+  - `src/vcs.cyr` (229) — **sit-backed VCS markers (1.4.0)** via `sit_repo_open`/`sit_diff_path`/`sit_repo_close`; LCS edit-script → ADD/MOD/DEL mapping; `--diff` bypass for piped output; agnos `#ifdef` no-op. Replaced the git fork+execve scaffold; public five-fn interface unchanged
   - `src/config.cyr` (298) — `key = value` config parser (M7) + `ext.*` keys (1.1.1)
-  - `src/pager.cyr` (147) — pager spawn + SIGPIPE handling + env forward (1.1.5)
+  - `src/pager.cyr` (160) — pager spawn + SIGPIPE handling + env forward (1.1.5) + agnos `#ifdef` no-op (1.3.7)
 
 ## Tests
 
@@ -306,10 +354,34 @@ complete; full owl attack surface audited and hardened.
 
 ## Dependencies
 
-- **Cyrius stdlib** — `syscalls`, `alloc`, `fmt`, `io`, `fs`, `str`, `string`, `vec`, `args`, `hashmap`, `process`, `tagged`, `assert`
-- **vyakarana** 2.2.1 — tokenizer + 45 bundled grammars (git-tag pinned in `[deps.vyakarana]`). The 1.x grammar cascade (1.2.0 → 1.9.0) brought owl from 11 → 38 bundled grammars; the 2.1.x grammar batch (2.1.0 → 2.1.3, picked up at owl 1.3.2 → 1.3.5) added the final 7 (powershell, crystal, julia, vue, svelte, nix, terraform). 2.0.0's streaming-API break replaced `tokenize_source` with the push primitive (owl's call sites migrated at 1.3.1); 2.0.1's rolling-buffer scanner unblocked the HIGHLIGHT_MAX lift owl shipped at 1.3.6. The 1.11.0 LSP bridge ships in `[lib] modules` but DCE-strips on owl (editor-consumer surface, unused by the viewer path).
+- **Cyrius stdlib** — owl's own viewer surface needs `syscalls`,
+  `alloc`, `fmt`, `io`, `fs`, `str`, `string`, `vec`, `args`,
+  `hashmap`, `process`, `tagged`, `assert`. As of 1.4.0 the
+  `[deps] stdlib` list also carries sit's transitive footprint
+  (`slice`, `chrono`, `fnptr`, `thread`, `freelist`, `bayan`,
+  `ct`, `keccak`, `bench`, `net`, `mmap`, `dynlib`, `fdlopen`,
+  `tls`, `tls_native`, `ws`, `http`, `sandhi`) so `dist/sit.cyr`'s
+  full bundle resolves at compile time — DCE strips the unused
+  serve/wire/http functions from the binary. The 6.x lib-
+  streamlining arc should let owl drop the sit-only tail.
+- **vyakarana** 2.2.3 — tokenizer + 45 bundled grammars
+  (git-tag pinned in `[deps.vyakarana]`). 11 → 45 grammars across
+  the 1.2.x/1.3.x cascade; 2.0.0 streaming-API break migrated at
+  1.3.1/1.3.6.
+- **sit** 1.0.1 — AGNOS-native VCS (added 1.4.0). owl consumes its
+  ADR-0009 library surface (`sit_repo_open` / `sit_diff_path` /
+  `sit_repo_close` + `ann_*` accessors) for the VCS change-marker
+  gutter, replacing the git fork+execve scaffold. Pulls a
+  transitive object-store stack:
+  - **patra** 1.11.2 — B+tree/WAL object store (sit's `.sit/objects`).
+    1.11.2 namespaced its SQL token enum (`TK_*`→`SQLT_*`) to clear
+    a co-link collision with vyakarana's token-kind constants.
+  - **sigil** 3.7.13 — hashing (object addressing).
+  - **sankoch** 2.3.1 — zlib/DEFLATE (object compression).
+  - **sakshi** 2.3.0 — sit primitive used by the store stack.
 
-No FFI. No third-party deps beyond vyakarana.
+No FFI. Third-party deps: vyakarana (tokenizer) + the sit VCS
+stack (sit/patra/sigil/sankoch/sakshi).
 
 ## Consumers
 
@@ -329,27 +401,28 @@ No FFI. No third-party deps beyond vyakarana.
 | 004 | LOW    | `waitpid` status buffers sized at 8 bytes (were `var buf[1]` — 3-byte overrun into adjacent bump arena) | — |
 | 005 | —      | Subsumed by 003. Paths with `'`, `$`, spaces, or shell-meaningful bytes render correctly under VCS markers | — |
 
+**1.4.0 update:** the SIT swap removes the VCS subprocess entirely —
+markers are computed in-process by sit's `sit_diff_path` library call,
+with no `fork`/`execve` and no argv at all. FINDING-003 (shell
+injection) and FINDING-005 (path quoting) are now closed *by
+construction* on the VCS path, not just by careful argv handling.
+
 ## Verification
 
-- `cyrius build src/main.cyr build/owl` — clean
+- `cyrius build src/main.cyr build/owl` — clean (cyrius 6.2.2)
+- `CYRIUS_DCE=1 cyrius build` — clean; ~2.6 MB
 - `cyrius test` — all `.tcyr` green
-- `sh scripts/smoke.sh` — all M0–M8 behavioral gates green
+- `cyrius lint src/*.cyr` — 0 warnings
+- `sh scripts/smoke.sh` — all M0–M8 behavioral gates green; the M6
+  marker + `--diff` gates build a real sit repo fixture and assert
+  MOD/ADD markers via `sit_diff_path` (skip with a stderr NOTE, not a
+  silent pass, when no `sit` binary is found — set `OWL_SIT_BIN` in CI)
 
 ## Next
 
-The 1.3.x catchup window is closed — the four blockers it
-worked through (vyakarana 2.x API migration, the 2.1.x grammar
-batch, the architecture-note-004 conformance refactor, the
-HIGHLIGHT_MAX lift unblocked by 2.0.1's rolling-buffer
-scanner) all shipped between 1.3.0 and 1.3.6. See
-[`roadmap.md`](roadmap.md) for the forward list — **1.4.x is
-the next minor**, with five candidate items each independent
-of the others:
+**1.4.0 shipped the SIT dependency swap** — the highest-priority
+1.4.x item. Remaining 1.4.x candidates, each independent:
 
-- **SIT dependency swap** (highest priority once unblocked) —
-  swap `src/vcs.cyr`'s `execve("git", "diff", …)` for a
-  `sit_diff_path` library call. Blocked on sit 0.7.7 shipping
-  `dist/sit.cyr` with a stable public API; sit is at 0.7.6.
 - **NDJSON output mode** (`--format=ndjson`) — emit tokens as
   one JSON object per line for tooling consumers. Mirrors
   vyakarana's existing NDJSON debug shape. No upstream blocker.
@@ -358,16 +431,25 @@ of the others:
   vyakarana 2.0.1's rolling-buffer scanner is in place; needs
   owl-side append-only ANSI render path.
 - **URL / remote-file support** (`owl https://…`) — fetch
-  via sandhi's HTTP/TLS surface. Was out of scope for v1; now
-  reachable since AGNOS's networking stack is mature.
+  via sandhi's HTTP/TLS surface. (sandhi is now linked anyway as
+  part of sit's stdlib footprint, so the TLS surface is present.)
 - **Native AGNOS theming** — wait until AGNOS ships its
   system-wide theming primitive; owl's kind_name-keyed theme
   layer (1.3.0) is the load-bearing prep, swap is mechanical.
 
-No upstream toolchain or grammar items currently parked —
-when vyakarana ships another batch of grammars or owl-relevant
-scanner work, the same catchup-window pattern applies (one
-focused patch per upstream minor).
+Follow-ups opened by the SIT swap:
+
+- **Binary-size trim** — owl is ~2.6 MB while it links sit's full
+  bundle; revisit once the cyrius 6.x lib-streamlining arc lands
+  cleaner per-symbol includes (drop the sit-only stdlib tail).
+- **sit repo-root discovery** — markers need owl run from the
+  `.sit/` root (sit 1.0.1's `sit_repo_open` has no upward search).
+  Revisit if sit adds upward discovery, or add owl-side walk-up.
+- **Stdlib constant collisions** — filed for cyrius
+  (`cyrius/docs/development/issues/2026-06-14-stdlib-constant-value-collisions.md`):
+  `ERR_*`/`SYS_*` value mismatches across vendored libs, plus a
+  proposed cycc warning on conflicting-value symbol dupes (the
+  class that produced the patra/vyakarana `TK_IDENT` bug).
 
 Stdlib follow-ups: M7's `key = value` parser will swap to a formal
 CYML parser when `cyml` lands in stdlib.

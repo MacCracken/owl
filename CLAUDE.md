@@ -53,7 +53,7 @@ Module responsibilities (file list in `state.md`):
 - **`lang.cyr`** — extension + shebang language detection, name table
 - **`theme.cyr`** — bundled themes (dark, light), 10-kind token palette, ANSI emission
 - **`pager.cyr`** — pager spawn (`OWL_PAGER` → `PAGER` → `less -R`), SIGPIPE handling
-- **`vcs.cyr`** — git-backed VCS change markers for the gutter; git-specific code confined here so a SIT swap is a single-file rewrite
+- **`vcs.cyr`** — sit-backed VCS change markers for the gutter (since 1.4.0): `sit_repo_open` / `sit_diff_path` / `sit_repo_close` library calls, LCS edit-script → ADD/MOD/DEL mapping. All VCS-backend code confined here behind a stable five-fn interface (`vcs_compute_markers`, `vcs_mark_for_line`, `vcs_enabled`, `vcs_reset`, `set_style`) so a backend swap is a single-file rewrite
 - **`config.cyr`** — minimal `key = value` config parser; no stdlib `toml`/`cyml` dep
 
 Include order in `main.cyr`: `lib/vyakarana.cyr` first, then owl modules. Runtime grammar resolution is cwd-relative (`grammars/<lang>.cyml`); installed-binary (exe-relative) resolution is a packaging concern.
@@ -84,7 +84,7 @@ Include order in `main.cyr`: `lib/vyakarana.cyr` first, then owl modules. Runtim
 - Control-byte sanitization on any path/arg echoed to stderr (prevent ANSI injection via `owl $(printf '\x1b[2Jevil')`) — use `eprint_sanitized`
 - File-read bounds: `BUFSIZE` and `HIGHLIGHT_MAX` verified against allocation sizes
 - Pager spawn sanitizes environment: `OWL_PAGER` / `PAGER` values are passed as argv[0], never shelled-out
-- VCS markers use `fork` + `execve` with explicit argv — never `/bin/sh -c`
+- VCS markers are computed in-process via sit's `sit_diff_path` library (since 1.4.0) — no subprocess, no shell, no argv on the VCS path (closes the FINDING-003/005 injection class by construction). The pre-1.4.0 git scaffold used `fork` + `execve` with explicit argv — never `/bin/sh -c`; the no-subprocess rule supersedes it
 - Audit findings filed in `docs/audit/YYYY-MM-DD-audit.md`; closure status tracked in `state.md`
 
 ### Closeout Pass (before minor/major bump)

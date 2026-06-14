@@ -4,6 +4,99 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-06-14
+
+Opens the **1.4.x feature line** with its headline item: the **SIT
+dependency swap**. owl's VCS change-marker gutter no longer shells out
+to `git diff` — it reads the working-tree-vs-HEAD diff directly from
+[sit](https://github.com/MacCracken/sit)'s library (`sit_diff_path`).
+Toolchain moves to cyrius **6.2.2** and vyakarana **2.2.3**.
+
+### Changed
+
+- **VCS markers now come from sit's library, not `git`.** `src/vcs.cyr`
+  is rewritten: the `fork` + `execve("git", "diff", "--no-color",
+  "-U0", …)` scaffold (and its hand-written unified-diff hunk parser)
+  is replaced by `sit_repo_open(".")` → `sit_diff_path(repo, path)` →
+  `sit_repo_close(repo)`, walking sit's LCS edit script
+  (`ann_kind`/`ann_new`) into the same ADD/MOD/DEL per-line markers the
+  gutter has always emitted. **The five-fn public interface
+  (`vcs_compute_markers`, `vcs_mark_for_line`, `vcs_enabled`,
+  `vcs_reset`, `set_style`) is unchanged** — main.cyr and the gutter
+  renderer are untouched. A change run with adds-only → ADD, adds+dels
+  → MOD, dels-only → DEL anchored on the line before the lost content,
+  reproducing the prior git `-U0` semantics. Verified byte-for-byte in
+  `scripts/smoke.sh` against a real sit repo fixture.
+- **Toolchain pin: cyrius 6.1.14 → 6.2.2.**
+- **Dep bump: vyakarana 2.2.1 → 2.2.3** (CI/docs/language-table touch-ups
+  upstream; no owl-visible behaviour change).
+- **New deps:** `sit 1.0.1` plus its transitive object-store stack
+  (`patra 1.11.2`, `sigil 3.7.13`, `sankoch 2.3.1`, `sakshi 2.3.0`).
+  owl's `[deps] stdlib` widened to sit's union (adds `slice`, `chrono`,
+  `fnptr`, `thread`, `freelist`, `bayan`, `ct`, `keccak`, `bench`,
+  `net`, `mmap`, `dynlib`, `fdlopen`, `tls`, `tls_native`, `ws`, `http`,
+  `sandhi`) so `dist/sit.cyr`'s full bundle compiles; DCE strips the
+  unused serve/wire/http surface from the binary.
+
+### Security
+
+- **The git subprocess class is closed by construction.** With no
+  `fork`/`execve` on the VCS path, the shell-injection (audit
+  FINDING-003) and path-quoting (FINDING-005) classes no longer have a
+  subprocess to exploit — markers are computed in-process by sit's
+  library. `-r` / escape-stripping defaults are unchanged.
+
+### Fixed
+
+- **patra symbol collision (filed + fixed upstream as patra 1.11.2).**
+  The first co-link of vyakarana + sit→patra surfaced a silent
+  symbol clash: patra's SQL-tokenizer `enum TokType` and vyakarana's
+  public token-kind palette both defined `TK_IDENT` / `TK_COUNT` with
+  different values. cyrius's flat namespace resolved both to one
+  definition (no warning for enum-vs-`var` data symbols), so inside
+  patra `TK_IDENT` became `0` — aliasing patra's own `TK_EOF = 0` —
+  and every SQL identifier tokenized as EOF, breaking `patra_query`
+  and making every diff line read as ADD. Fixed upstream by
+  namespacing patra's enum (`TK_* → SQLT_*`, patra 1.11.2); the broader
+  stdlib/lib constant-collision class is filed for the cyrius toolchain
+  (`cyrius/docs/development/issues/2026-06-14-stdlib-constant-value-collisions.md`).
+
+### Known limits
+
+- **sit markers require running from the repo root.** sit 1.0.1's
+  `sit_repo_open` does not search upward for a `.sit/` root, so markers
+  appear only when owl is invoked from the directory holding `.sit/`
+  with a repo-root-relative path. Outside a sit repo the gutter
+  silently shows no markers (same no-op as git-not-a-repo before the
+  swap). A directory tracked only by git shows no markers — there is no
+  git fallback.
+- **VCS markers are disabled on the agnos target** (`#ifdef
+  CYRIUS_TARGET_AGNOS`), unchanged from 1.3.7 — sit's object store is
+  not yet wired for agnos.
+
+### Verified
+
+- `cyrius build` + `CYRIUS_DCE=1 cyrius build` clean under cyrius 6.2.2.
+- `cyrius test` — unit gates green.
+- `sh scripts/smoke.sh` — all M0–M8 gates green; the M6 marker gate and
+  the `--diff` gate now build a real sit repo fixture (init → commit →
+  modify) and assert MOD (`~`) on the changed line + ADD (`+`) on the
+  appended line via `sit_diff_path`. The gates skip with a stderr NOTE
+  (they do not silently pass) when no `sit` binary is found; set
+  `OWL_SIT_BIN` in CI.
+- `cyrius lint src/*.cyr` — 0 warnings.
+- `owl --version --verbose` reports `owl 1.4.0` / `vyakarana 2.2.3` /
+  `sit 1.0.1` / `cyrius 6.2.2`.
+
+### Notes
+
+- **Binary size jumps to ~2.6 MB** (DCE) from 1.3.x's ~459 KB — the
+  cost of linking sit's object-store stack (patra B+tree store, sigil
+  hashing, sankoch compression, sakshi). DCE strips sit's unused
+  serve/wire/http/ssh surface but the diff path genuinely needs the
+  store layer. Accepted for 1.4.0; the cyrius 6.x lib-streamlining arc
+  (cleaner per-symbol includes) is expected to trim the sit-only tail.
+
 ## [1.3.8] — 2026-06-09
 
 ### Fixed
