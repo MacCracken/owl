@@ -70,9 +70,15 @@ Toolchain moves to cyrius **6.2.2** and vyakarana **2.2.3**.
   silently shows no markers (same no-op as git-not-a-repo before the
   swap). A directory tracked only by git shows no markers — there is no
   git fallback.
-- **VCS markers are disabled on the agnos target** (`#ifdef
-  CYRIUS_TARGET_AGNOS`), unchanged from 1.3.7 — sit's object store is
-  not yet wired for agnos.
+- **The agnos build target is temporarily disabled** (commented out in
+  `ci.yml` / `release.yml`). owl's viewer core stays agnos-capable and
+  the `#ifdef CYRIUS_TARGET_AGNOS` gates (pager / VCS / ioctl / readlink)
+  remain in the source, but linking sit drags in its transitive stdlib
+  (`tls`/`net`/`mmap`/…) which is not yet agnos-ported — agnos TLS is
+  unimplemented and `lib/mmap.cyr` references `CLONE_VM`, absent from the
+  agnos syscall variant. cyrius has no conditional deps, so the agnos
+  build can't skip sit. Re-enable once sit's stack is agnos-clean; owl's
+  VCS gutter already no-ops on agnos via the `#ifdef`.
 
 ### Verified
 

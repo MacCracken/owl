@@ -51,20 +51,24 @@ jobs:
         # ([deps.vyakarana] git + tag + modules) into lib/.
         run: cyrius deps
 
-      - name: Build (host + agnos)
-        # owl is agnos-capable (pager/VCS/ioctl/readlink gated behind
-        # CYRIUS_TARGET_AGNOS); build BOTH targets so a PR can't break the
-        # agnos path. Fresh `cyrius deps` above vendors the agnos stdlib
-        # variants (alloc_agnos / args_agnos / syscalls_x86_64_agnos / …).
+      - name: Build (host)
+        # owl's viewer core is agnos-capable (pager/VCS/ioctl/readlink gated
+        # behind CYRIUS_TARGET_AGNOS), but as of 1.4.0 owl links sit for the
+        # VCS gutter and sit's transitive stdlib (tls/net/mmap/…) is not yet
+        # agnos-ported — agnos TLS is unimplemented, and `lib/mmap.cyr`
+        # references CLONE_VM, absent from syscalls_x86_64_agnos. cyrius has
+        # no conditional deps, so the agnos build can't skip sit; the
+        # `--agnos` target is DISABLED until sit's stack is agnos-clean.
+        # owl's own agnos #ifdef gates stay in place for when it returns.
         run: |
           mkdir -p build
           cyrius build src/main.cyr build/owl
-          cyrius build --agnos src/main.cyr build/owl_agnos
+          # cyrius build --agnos src/main.cyr build/owl_agnos   # re-enable when sit's agnos stdlib (tls/net/mmap) lands
 
       - name: Verify ELF
         run: |
           xxd -l 4 build/owl | grep -q "7f45 4c46"
-          xxd -l 4 build/owl_agnos | grep -q "7f45 4c46"
+          # xxd -l 4 build/owl_agnos | grep -q "7f45 4c46"   # re-enable with the --agnos build above
 
       - name: Lint
         # Every src file clean; the only tolerated warning is the

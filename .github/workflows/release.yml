@@ -108,12 +108,17 @@ jobs:
       - name: Resolve dependencies
         run: cyrius deps
 
-      - name: Build DCE'd binary (host + agnos)
+      - name: Build DCE'd binary (host)
+        # agnos target DISABLED as of 1.4.0 — owl now links sit and its
+        # transitive stdlib (tls/net/mmap) is not yet agnos-ported (agnos TLS
+        # unimplemented; mmap.cyr needs CLONE_VM). cyrius has no conditional
+        # deps, so the agnos build can't skip sit. Re-enable below when
+        # sit's agnos stdlib lands. See ci.yml for the full note.
         run: |
           mkdir -p build
           cyrius build src/main.cyr build/owl
-          cyrius build --agnos src/main.cyr build/owl_agnos
-          echo "owl host: $(wc -c < build/owl) bytes, agnos: $(wc -c < build/owl_agnos) bytes"
+          # cyrius build --agnos src/main.cyr build/owl_agnos   # re-enable when sit's agnos stdlib (tls/net/mmap) lands
+          echo "owl host: $(wc -c < build/owl) bytes"
 
       - name: Re-run smoke on the release binary
         # See ci.yml note — smoke.sh requires bash, not dash.
@@ -127,7 +132,7 @@ jobs:
           PKG="owl-${VERSION}-${{ matrix.target }}"
           mkdir -p "pkg/$PKG"
           cp build/owl "pkg/$PKG/"
-          cp build/owl_agnos "pkg/$PKG/"
+          # cp build/owl_agnos "pkg/$PKG/"   # re-enable with the --agnos build above (deferred: sit agnos stdlib)
           cp -r grammars "pkg/$PKG/"
           cp README.md LICENSE CHANGELOG.md VERSION "pkg/$PKG/"
           mkdir -p out

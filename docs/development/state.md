@@ -30,8 +30,13 @@ The git subprocess (fork+execve) is gone, closing audit
 FINDING-003/005 by construction. Binary jumps ~459 KB → ~2.6 MB
 (the object-store link; accepted, pending the 6.x
 lib-streamlining arc). Known limit: sit 1.0.1 doesn't search
-upward for `.sit/`, so markers need owl run from the repo root;
-VCS gutter stays disabled on agnos.
+upward for `.sit/`, so markers need owl run from the repo root.
+The **agnos build target is temporarily disabled** (commented in
+both workflows): linking sit pulls its transitive stdlib
+(`tls`/`net`/`mmap`) which isn't agnos-ported yet (agnos TLS
+unimplemented; `mmap.cyr` needs `CLONE_VM`), and cyrius has no
+conditional deps to skip sit on agnos. owl's `#ifdef
+CYRIUS_TARGET_AGNOS` gates stay in the source for when it returns.
 
 **1.3.8** — shipped 2026-06-09. agnos fix: `owl FILE` printed
 usage instead of the file. Two AGNOS-only bugs — module-scope
@@ -445,6 +450,10 @@ Follow-ups opened by the SIT swap:
 - **sit repo-root discovery** — markers need owl run from the
   `.sit/` root (sit 1.0.1's `sit_repo_open` has no upward search).
   Revisit if sit adds upward discovery, or add owl-side walk-up.
+- **Re-enable the agnos build** — disabled in 1.4.0 because sit's
+  transitive stdlib (tls/net/mmap) isn't agnos-ported. Uncomment the
+  `--agnos` build + verify + package steps in `ci.yml`/`release.yml`
+  once agnos TLS lands and `mmap.cyr` is agnos-clean (`CLONE_VM`).
 - **Stdlib constant collisions** — filed for cyrius
   (`cyrius/docs/development/issues/2026-06-14-stdlib-constant-value-collisions.md`):
   `ERR_*`/`SYS_*` value mismatches across vendored libs, plus a
