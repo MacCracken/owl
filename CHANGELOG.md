@@ -4,6 +4,62 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.4.1] — 2026-06-19
+
+Toolchain + dependency refresh on the 1.4.x line. **No `src/*.cyr`
+behaviour change** — owl's viewer/highlighter/VCS surface is untouched
+except the version-banner triple. The load-bearing manifest change is one
+new stdlib declaration (`random`) dragged in by the sit object-store
+bump. Tracks sit's own [1.0.2] refresh, which moved the same dep set
+under the same cyrius 6.2.25 pin.
+
+### Changed
+
+- **Toolchain pin: cyrius 6.2.2 → 6.2.25.** No source changes required.
+- **Dep bump: sit 1.0.1 → 1.0.2** plus its object-store stack —
+  `sakshi 2.3.0 → 2.4.0`, `sankoch 2.3.1 → 2.4.4`, `sigil 3.7.13 → 3.9.1`,
+  `patra 1.11.2 → 1.12.0`. Versions match sit 1.0.2's own `[deps]` pins.
+  vyakarana stays at **2.2.3** (already current). sit 1.0.2 is a
+  toolchain/dep refresh of its own with no public-surface change — the
+  `sit_*` / `ann_*` library API owl consumes (`sit_repo_open` /
+  `sit_diff_path` / `sit_repo_close` + `ann_*` accessors) is unchanged, so
+  `src/vcs.cyr` and the gutter renderer are untouched.
+- **`[deps] stdlib` gains `random`.** sigil 3.9.1 reworked ed25519
+  keypair generation to source entropy via the cyrius stdlib
+  `random_bytes` (`lib/random.cyr`) instead of calling `getrandom`
+  directly. owl never generates keys, but `dist/sit.cyr`'s concatenated
+  bundle references the symbol, so it must resolve at compile time even
+  though DCE strips it from owl's binary. Without the declaration the
+  link leaves `random_bytes` undefined (in sit itself this manifests as a
+  `sit key generate` SIGILL / exit 132). The 43-line module adds
+  `random_bytes` only and stays well under the 256-global cap. (The
+  toolchain pulls stdlib modules into `lib/` via `cyrius lib sync`; `lib/`
+  is gitignored vendored output.)
+
+### Verified
+
+- `cyrius build` + `CYRIUS_DCE=1 cyrius build` clean under cyrius 6.2.25.
+- `cyrius test` — unit gates green.
+- `sh scripts/smoke.sh` — all M0–M8 gates green; the sit-backed VCS
+  marker + `--diff` gates built a real sit repo fixture and asserted
+  MOD/ADD markers via `sit_diff_path` (executed, not skipped).
+- `cyrius lint src/*.cyr` — 0 warnings.
+- `owl --version --verbose` reports `owl 1.4.1` / `vyakarana 2.2.3` /
+  `sit 1.0.2` / `cyrius 6.2.25`.
+
+### Notes
+
+- **Binary size ~2.70 MB** (DCE, 2,701,824 bytes) — up ~39 KB from
+  1.4.0's ~2.66 MB (2,662,096), the cost of 6.2.25 stdlib/dep heft (sit
+  reports the same ~38 KB bump on its side). The sit-only stdlib tail
+  still waits on the cyrius 6.x lib-streamlining arc for a trim.
+- Build emits the documented benign co-link warnings: a
+  `duplicate symbol 'SANDHI_CONN_OFF_FD'` and `duplicate fn '_stream_grow'`
+  (last-definition-wins, inert) plus `undefined function` notes for sit's
+  async/ssh/wire surface (DCE-stripped, owl never calls them) — all
+  match sit 1.0.2's own changelog. The pre-1.4.1 `random_bytes` undefined
+  warning is gone now that `random` is declared.
+
 ## [1.4.0] — 2026-06-14
 
 Opens the **1.4.x feature line** with its headline item: the **SIT

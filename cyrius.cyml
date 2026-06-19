@@ -5,7 +5,7 @@ description = "Observant Watcher of Lines — a file viewer for AGNOS / Cyrius"
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/owl"
 language = "cyrius"
-cyrius = "6.2.2"
+cyrius = "6.2.25"
 
 [build]
 entry = "src/main.cyr"
@@ -29,8 +29,16 @@ output = "owl"
 # dist/sit.cyr concatenates sit's full src (incl. the wire/serve/https
 # surface owl never calls), so every symbol it references must resolve at
 # compile time even though DCE strips the unused functions from the binary.
-# Mirrors sit's own [deps].stdlib list (sit 1.0.1). The later 6.x lib-
+# Mirrors sit's own [deps].stdlib list (sit 1.0.2). The later 6.x lib-
 # streamlining arc is expected to let owl drop the sit-only tail.
+#
+# `random` was added at owl 1.4.1 alongside the sit 1.0.1 → 1.0.2 bump:
+# sigil 3.9.1 reworked ed25519 keypair generation to source entropy via
+# the cyrius stdlib `random_bytes` (lib/random.cyr) instead of calling
+# getrandom itself. owl never generates keys, but dist/sit.cyr's
+# concatenated bundle references the symbol, so it must resolve at compile
+# time (DCE strips it from owl's binary). Without it the link leaves
+# random_bytes undefined.
 stdlib = [
     "syscalls",
     "alloc",
@@ -53,6 +61,7 @@ stdlib = [
     "bayan",
     "ct",
     "keccak",
+    "random",
     "bench",
     "net",
     "mmap",
@@ -79,26 +88,26 @@ modules = ["dist/vyakarana.cyr"]
 # compression, sakshi) — DCE strips the unused serve/wire/http surface.
 [deps.sit]
 git = "https://github.com/MacCracken/sit.git"
-tag = "1.0.1"
+tag = "1.0.2"
 modules = ["dist/sit.cyr"]
 
 [deps.sakshi]
 git = "https://github.com/MacCracken/sakshi.git"
-tag = "2.3.0"
+tag = "2.4.0"
 modules = ["dist/sakshi.cyr"]
 
 [deps.sankoch]
 git = "https://github.com/MacCracken/sankoch.git"
-tag = "2.3.1"
+tag = "2.4.4"
 modules = ["dist/sankoch.cyr"]
 
 [deps.sigil]
 git = "https://github.com/MacCracken/sigil.git"
-tag = "3.7.13"
+tag = "3.9.1"
 modules = ["dist/sigil.cyr"]
 
 [deps.patra]
 git = "https://github.com/MacCracken/patra.git"
-tag = "1.11.2"
+tag = "1.12.0"
 modules = ["dist/patra.cyr"]
 ---

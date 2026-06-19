@@ -6,6 +6,26 @@
 
 ## Version
 
+**1.4.1** — shipped 2026-06-19. **Toolchain + dependency
+refresh on the 1.4.x line.** No `src/*.cyr` behaviour change —
+owl's viewer/highlighter/VCS surface is untouched except the
+version-banner triple. Cyrius pin moves 6.2.2 → **6.2.25**; sit
+1.0.1 → **1.0.2** with its object-store stack
+(`sakshi 2.3.0→2.4.0`, `sankoch 2.3.1→2.4.4`,
+`sigil 3.7.13→3.9.1`, `patra 1.11.2→1.12.0`); vyakarana stays
+**2.2.3**. The load-bearing manifest change is one new stdlib
+declaration: **`[deps] stdlib` gains `random`** — sigil 3.9.1
+routes ed25519 keypair entropy through the cyrius stdlib
+`random_bytes` (`lib/random.cyr`) instead of `getrandom`. owl
+never generates keys, but `dist/sit.cyr`'s concatenated bundle
+references the symbol, so it must resolve at compile time (DCE
+strips it from owl's binary); without it the link leaves
+`random_bytes` undefined. Tracks sit's own 1.0.2 refresh under
+the same cyrius pin. DCE binary ~2.66 MB → **~2.70 MB**
+(2,701,824 bytes, +~39 KB toolchain/dep heft). The agnos build
+stays disabled (unchanged from 1.4.0 — sit's tls/net/mmap tail
+isn't agnos-ported).
+
 **1.4.0** — shipped 2026-06-14. **Opens the 1.4.x feature
 line with the SIT dependency swap.** owl's VCS change-marker
 gutter no longer forks `git diff` — `src/vcs.cyr` is rewritten
@@ -296,11 +316,11 @@ complete; full owl attack surface audited and hardened.
 
 ## Toolchain
 
-- **Cyrius pin**: `6.2.2` (in `cyrius.cyml [package].cyrius`)
-  — bumped from `6.1.14` at 1.4.0. Prior moves: `5.9.43`→`5.10.10`
-  (1.3.1), `5.10.10`→`6.0.56` (1.3.7, agnos target),
-  `6.0.56`→`6.1.14` (1.3.8). No source changes required for the
-  6.1.14 → 6.2.2 bump.
+- **Cyrius pin**: `6.2.25` (in `cyrius.cyml [package].cyrius`)
+  — bumped from `6.2.2` at 1.4.1. Prior moves: `6.1.14`→`6.2.2`
+  (1.4.0), `5.9.43`→`5.10.10` (1.3.1), `5.10.10`→`6.0.56`
+  (1.3.7, agnos target), `6.0.56`→`6.1.14` (1.3.8). No source
+  changes required for the 6.2.2 → 6.2.25 bump.
 - **vyakarana pin**: `2.2.3` (in `cyrius.cyml [deps.vyakarana].tag`)
   — bumped from `2.2.1` at 1.4.0 (2.2.2/2.2.3 are CI/docs/
   language-table touch-ups; no owl-visible change). The 1.x→2.x
@@ -310,19 +330,32 @@ complete; full owl attack surface audited and hardened.
   2.0.1's rolling-buffer scanner caps live span at 16 MB →
   unblocked the HIGHLIGHT_MAX lift (1.3.6). 2.1.x added 7
   grammars, all wired by 1.3.2–1.3.5.
-- **sit pin**: `1.0.1` (in `cyrius.cyml [deps.sit].tag`) — added
-  at 1.4.0 for the VCS change-marker gutter (library swap off
-  git). Pulls its object-store stack as explicit deps:
-  `patra 1.11.2`, `sigil 3.7.13`, `sankoch 2.3.1`, `sakshi 2.3.0`.
-  patra moved 1.11.1 → **1.11.2** as part of this cut — an
-  upstream fix owl drove: patra's SQL `enum TokType` collided
-  with vyakarana's `TK_IDENT`/`TK_COUNT` token-kind constants
-  under co-link; patra namespaced its enum (`TK_*`→`SQLT_*`).
+- **sit pin**: `1.0.2` (in `cyrius.cyml [deps.sit].tag`) —
+  bumped from `1.0.1` at 1.4.1 (toolchain/dep refresh; no
+  public-surface change — the `sit_*`/`ann_*` library API owl
+  consumes is unchanged). Added at 1.4.0 for the VCS
+  change-marker gutter (library swap off git). Pulls its
+  object-store stack as explicit deps, bumped in lockstep at
+  1.4.1 to match sit 1.0.2's own pins: `patra 1.11.2`→**1.12.0**,
+  `sigil 3.7.13`→**3.9.1**, `sankoch 2.3.1`→**2.4.4**,
+  `sakshi 2.3.0`→**2.4.0**.
+  - **`random` stdlib added at 1.4.1.** sigil 3.9.1 sources
+    ed25519 keypair entropy via cyrius stdlib `random_bytes`
+    (`lib/random.cyr`); `dist/sit.cyr` references the symbol so
+    `[deps] stdlib` must declare `random` to link (DCE strips it
+    from owl's binary — owl never generates keys).
+  - At 1.4.0, patra moved 1.11.1 → 1.11.2 — an upstream fix owl
+    drove: patra's SQL `enum TokType` collided with vyakarana's
+    `TK_IDENT`/`TK_COUNT` token-kind constants under co-link;
+    patra namespaced its enum (`TK_*`→`SQLT_*`).
 
 ## Binary
 
-- **~2.6 MB (2,662,096 bytes, `build/owl`, DCE) at 1.4.0** — up
-  from 1.3.6's ~459 KB. The jump is the sit object-store link:
+- **~2.70 MB (2,701,824 bytes, `build/owl`, DCE) at 1.4.1** — up
+  ~39 KB from 1.4.0's ~2.66 MB (2,662,096), the cost of the
+  6.2.25 stdlib/dep refresh (sit reports the same ~38 KB bump on
+  its side). The 1.4.0 baseline jumped from 1.3.6's ~459 KB.
+  The jump is the sit object-store link:
   `dist/sit.cyr` (427 KB) + patra (B+tree/WAL store) + sigil
   (hashing) + sankoch (zlib) + sakshi. DCE strips sit's unused
   serve/wire/http/ssh surface, but `sit_diff_path`'s read path
@@ -365,25 +398,31 @@ complete; full owl attack surface audited and hardened.
   `[deps] stdlib` list also carries sit's transitive footprint
   (`slice`, `chrono`, `fnptr`, `thread`, `freelist`, `bayan`,
   `ct`, `keccak`, `bench`, `net`, `mmap`, `dynlib`, `fdlopen`,
-  `tls`, `tls_native`, `ws`, `http`, `sandhi`) so `dist/sit.cyr`'s
-  full bundle resolves at compile time — DCE strips the unused
-  serve/wire/http functions from the binary. The 6.x lib-
+  `tls`, `tls_native`, `ws`, `http`, `sandhi`), plus `random`
+  added at 1.4.1 (sigil 3.9.1's ed25519 keygen routes entropy
+  through stdlib `random_bytes`), so `dist/sit.cyr`'s full bundle
+  resolves at compile time — DCE strips the unused
+  serve/wire/http/keygen functions from the binary. The 6.x lib-
   streamlining arc should let owl drop the sit-only tail.
 - **vyakarana** 2.2.3 — tokenizer + 45 bundled grammars
   (git-tag pinned in `[deps.vyakarana]`). 11 → 45 grammars across
   the 1.2.x/1.3.x cascade; 2.0.0 streaming-API break migrated at
-  1.3.1/1.3.6.
-- **sit** 1.0.1 — AGNOS-native VCS (added 1.4.0). owl consumes its
+  1.3.1/1.3.6. Unchanged at 1.4.1 (already current).
+- **sit** 1.0.2 — AGNOS-native VCS (added 1.4.0; bumped 1.0.1 →
+  1.0.2 at 1.4.1, no public-surface change). owl consumes its
   ADR-0009 library surface (`sit_repo_open` / `sit_diff_path` /
   `sit_repo_close` + `ann_*` accessors) for the VCS change-marker
   gutter, replacing the git fork+execve scaffold. Pulls a
-  transitive object-store stack:
-  - **patra** 1.11.2 — B+tree/WAL object store (sit's `.sit/objects`).
-    1.11.2 namespaced its SQL token enum (`TK_*`→`SQLT_*`) to clear
-    a co-link collision with vyakarana's token-kind constants.
-  - **sigil** 3.7.13 — hashing (object addressing).
-  - **sankoch** 2.3.1 — zlib/DEFLATE (object compression).
-  - **sakshi** 2.3.0 — sit primitive used by the store stack.
+  transitive object-store stack (versions track sit 1.0.2's pins):
+  - **patra** 1.12.0 — B+tree/WAL object store (sit's `.sit/objects`).
+    patra 1.11.2 (at owl 1.4.0) namespaced its SQL token enum
+    (`TK_*`→`SQLT_*`) to clear a co-link collision with vyakarana's
+    token-kind constants.
+  - **sigil** 3.9.1 — hashing (object addressing). 3.9.1 routes
+    ed25519 keypair entropy through stdlib `random_bytes` →
+    drove owl's `random` stdlib declaration at 1.4.1.
+  - **sankoch** 2.4.4 — zlib/DEFLATE (object compression).
+  - **sakshi** 2.4.0 — sit primitive used by the store stack.
 
 No FFI. Third-party deps: vyakarana (tokenizer) + the sit VCS
 stack (sit/patra/sigil/sankoch/sakshi).
@@ -414,8 +453,8 @@ construction* on the VCS path, not just by careful argv handling.
 
 ## Verification
 
-- `cyrius build src/main.cyr build/owl` — clean (cyrius 6.2.2)
-- `CYRIUS_DCE=1 cyrius build` — clean; ~2.6 MB
+- `cyrius build src/main.cyr build/owl` — clean (cyrius 6.2.25)
+- `CYRIUS_DCE=1 cyrius build` — clean; ~2.70 MB (2,701,824 bytes)
 - `cyrius test` — all `.tcyr` green
 - `cyrius lint src/*.cyr` — 0 warnings
 - `sh scripts/smoke.sh` — all M0–M8 behavioral gates green; the M6
