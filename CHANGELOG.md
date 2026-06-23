@@ -4,6 +4,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.4.2] — 2026-06-22
+
+### Changed
+
+- **cyrius toolchain pin `6.2.25` → `6.2.37`** (the agnosys-retirement line). The stale
+  vendored `lib/` (6.2.25) is refreshed to the 6.2.37 snapshot — the "`./lib/` shadows the
+  version-pinned snapshot" warning is gone. **Host build clean; no behavior change.**
+
+### Known — AGNOS build still blocked on the `sit` port (backlog)
+
+- The pin bump clears the *first* `--agnos` blocker (`sit.cyr`'s `SYS_LSEEK` — 6.2.25's
+  agnos syscall peer predated `lseek`#58; 6.2.37 has it), but `--agnos` now stops at
+  **`SYS_CHDIR`**: `sit` calls `chdir(2)`, which **AGNOS deliberately does not provide** —
+  CWD is userland-owned (agnsh tracks its own CWD + passes absolute paths). So `sit`'s
+  object store needs an agnos port (absolute-path navigation, no `chdir`; plus its wire/TLS
+  tail) before owl's `sit`-backed VCS-gutter path can build `--agnos`. The working agnos
+  owl remains the **cat-only** build (pre-`sit`, the 1.3.x lineage) — that's what ships in
+  the agnos install media today.
+
 ## [1.4.1] — 2026-06-19
 
 Toolchain + dependency refresh on the 1.4.x line. **No `src/*.cyr`
