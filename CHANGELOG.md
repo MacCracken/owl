@@ -4,6 +4,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.4.3] — 2026-07-06 — VCS gutter works on AGNOS (via the sit repo-root port)
+
+The `sit`-backed VCS change-marker gutter — `#ifdef`-gated OFF on AGNOS since 1.4.0 *because* `sit`
+`chdir`'d, which AGNOS has no syscall for — now runs on AGNOS. Requires **sit 1.3.2** (fully
+repo-root-relative, no `chdir`). This is the "our port debt, not a wall" fix: nothing cut.
+
+### Changed
+- **`src/vcs.cyr`**: un-gated the gutter for AGNOS. AGNOS has no cwd, so `vcs_compute_markers` now finds
+  the repo root by walking up from the file's absolute path to a `.sit/HEAD` (`_vcs_find_repo_root`),
+  tells sit the root explicitly (`sit_set_repo_root`), and diffs the repo-relative path
+  (`_vcs_rel_to_root`). The Linux path (`sit_repo_open(".")`) is unchanged; both feed a shared
+  marker-processing tail.
+- **`cyrius.cyml`**: `sit` dep → **1.3.2** (the repo-root-relative release).
+
+### Fixed
+- **AGNOS build unblocked**: `owl --agnos` previously hard-failed at sit's `SYS_CHDIR`; with sit 1.3.2 the
+  whole bundle compiles (`sit`'s unused wire/serve/ssh surface is DCE'd on AGNOS). `owl --agnos` builds
+  with the gutter live; Linux builds unregressed.
+
 ## [1.4.2] — 2026-06-22
 
 ### Changed

@@ -1,9 +1,7 @@
 commit	a20268d8beca7301436cc88cc8b0a004dfed1bad	vyakarana	https://github.com/MacCracken/vyakarana.git	2.2.3
-commit	25f277085b788387ece487df91e0858a1c8b2edf	sit	https://github.com/MacCracken/sit.git	1.0.2
 commit	65f2508b52a60ccc42ee7d9606f11fb5772d7e26	sakshi	https://github.com/MacCracken/sakshi.git	2.4.0
 commit	8f8d201cb122906dfb7a3844b001d698ff1b0c1f	sankoch	https://github.com/MacCracken/sankoch.git	2.4.4
 commit	c4888d22dc925a9fd2ae5c163434621cfe5b7c93	sigil	https://github.com/MacCracken/sigil.git	3.9.1
-commit	019f3e434dcb99c60f2549be646d638e44494b30	patra	https://github.com/MacCracken/patra.git	1.12.0
 d9f3b17ddbbe1bba48917c3a679807b01c39c4a1ce776efdbdfbb7a1680e86e4  lib/tagged.cyr
 d0e618655388c9d43c9927a9f5b306e61cb333546abc166f4f280a25993624f5  lib/net.cyr
 e84c090fd0f8532700d967ca3190837780a52a42630f4c6a0a4567ad9a49ab6b  lib/cffi.cyr
@@ -54,7 +52,7 @@ bc0de2ed93e4f0fa1ca2295678929caa75204413af4b2f2d77a5ce82886874ff  lib/tls.cyr
 0a5791275809278617b4ab5805f5ab920abfb10d1f885d5f2c1b070a0a04ff52  lib/yukti.cyr
 c9e220ca9bcb929cbc682e9b7eed7086b3b5a90474d562b600e137fde85eb7f0  lib/assert.cyr
 619f0bce74b6b1ec0acf8ce3ed6839fe0a7c043bf16af6bae4e06f5e492af874  lib/args.cyr
-9318c962e3432840e2965315aea4431fc417c89300a6c6b13494a6067d219c40  lib/patra.cyr
+a862ce69f4b551f774b5fa10bb7dba893b9a91631fac2467a5a45682bc269fdd  lib/patra.cyr
 7bafd8f98f4b113673fd1c4c20fb2762fbd1a6a21f5d0137af15d0b4208b3f8e  lib/protobuf.cyr
 f1e40c09f70d0a4203c172a195f551149ad57c4f889c3c0a3a7599881ee0a9cc  lib/vani.cyr
 af3dc72c3e2d0f94ea4d4a6bdeb60963cd36e7849b7ccf06299bf5c616de7100  lib/sync_windows.cyr
@@ -71,7 +69,7 @@ c882b87d1dc16dbf64a811ff83921869f794eb21a048b302e572d0d168d7ee98  lib/thread_win
 75199ecb8aa173413c97c4a9300b65d738cc40401631d107d14c4188748610a9  lib/thread.cyr
 f7b9d52f29de6d3d633962ccc765a76637091a7256eebc1da5547530eed2c44b  lib/args_win.cyr
 03b00c6f58f54f690505d94bc6d173c0e4ec64e709288f43939fbc7f756847ce  lib/process_agnos.cyr
-3030d927b3c63b238f857798720281c6de1a9efcc5f157946ef615fd0b39f092  lib/sit.cyr
+464c7d3c98fbbbb1398a56cec8bf5aa01512064a615a937b127fa1e7abc23d99  lib/sit.cyr
 f6563cc78843147905c8a7e957da1d182d696a371ba392347d1e1522f42a993c  lib/syscalls_aarch64_linux.cyr
 2907e90cae9f66370dce6e9567e24b03dab31221cb4f0e505a5c5745232d5de4  lib/sha1.cyr
 262348eaa67e4c26c0d9e4488b1ffb32a395e15eeaa92f6ea837c124e629f0c9  lib/shadow.cyr

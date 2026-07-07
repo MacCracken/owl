@@ -87,8 +87,7 @@ modules = ["dist/vyakarana.cyr"]
 # object-store stack (patra B+tree store, sigil hashing, sankoch
 # compression, sakshi) — DCE strips the unused serve/wire/http surface.
 [deps.sit]
-git = "https://github.com/MacCracken/sit.git"
-tag = "1.0.2"
+path = "../sit"
 modules = ["dist/sit.cyr"]
 
 [deps.sakshi]
@@ -107,7 +106,8 @@ tag = "3.9.1"
 modules = ["dist/sigil.cyr"]
 
 [deps.patra]
-git = "https://github.com/MacCracken/patra.git"
-tag = "1.12.0"
+# TEMP (proof): local canonical patra with the agnos file_open ABI-bridge fix.
+# Revert to tag once patra cuts the release carrying it.
+path = "../patra"
 modules = ["dist/patra.cyr"]
 ---

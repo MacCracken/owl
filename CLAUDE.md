@@ -115,7 +115,8 @@ Include order in `main.cyr`: `lib/vyakarana.cyr` first, then owl modules. Runtim
 - Cyrius string literals do NOT parse `\x??` hex escapes — `"\x1b"` emits literal `\x1b` bytes. Build ANSI escapes via `store8(&buf + i, 0x1B)` instead (see `ansi_reset` in `src/theme.cyr`)
 - Test exit pattern: `syscall(60, assert_summary())`
 - All struct fields are 8-byte slots unless explicitly packed (vyakarana's 12-byte Token is the exception)
-- Max limits per compilation unit: 4,096 variables, 1,024 functions, 256 initialized globals
+- Max limits per compilation unit: 4,096 variables, 1,024 functions, 4,096 initialized globals
+- Counting rule: only a top-level `var NAME = <non-literal>;` (call / identifier / expression initializer) consumes an initialized-globals slot; a bare integer-literal init (`var x = 42;`) takes the static-init fast path and enum members are const-folded, so neither counts. See the cyrius guide's **Global Initializers** section (`docs/guides/cyrius-guide.md` in the cyrius repo)
 
 ## CI / Release
 

@@ -182,6 +182,52 @@ fn _apply_ops(ops) {
     return 0;
 }
 
+#ifdef CYRIUS_TARGET_AGNOS
+# Walk up from an ABSOLUTE file path to the nearest ancestor holding a
+# `.sit/HEAD`; return that directory (heap, caller-owns) or 0. agnos has no
+# cwd (CWD is userland-owned), so the repo root is discovered from the file's
+# own path rather than assumed to be the process cwd.
+fn _vcs_find_repo_root(path) {
+    var len = strlen(path);
+    if (len == 0) { return 0; }
+    if (load8(path) != 47) { return 0; }   # need an absolute path (leading '/')
+    var end = len;
+    while (end > 1) {
+        var slash = end - 1;
+        while (slash > 0 && load8(path + slash) != 47) { slash = slash - 1; }
+        if (slash == 0) { return 0; }       # reached '/'; no repo above
+        var probe = alloc(slash + 11);      # <dir> + "/.sit/HEAD"(10) + NUL
+        memcpy(probe, path, slash);
+        memcpy(probe + slash, "/.sit/HEAD", 10);
+        store8(probe + slash + 10, 0);
+        if (file_exists(probe) == 1) {
+            var root = alloc(slash + 1);
+            memcpy(root, path, slash);
+            store8(root + slash, 0);
+            return root;
+        }
+        end = slash;
+    }
+    return 0;
+}
+
+# The portion of ABSOLUTE `path` below `root` (repo-relative), heap, or 0 if
+# `path` isn't under `root`. e.g. (/a/b/src/f, /a/b) -> "src/f".
+fn _vcs_rel_to_root(path, root) {
+    var rl = strlen(root);
+    var pl = strlen(path);
+    if (pl <= rl + 1) { return 0; }
+    var i = 0;
+    while (i < rl) { if (load8(path + i) != load8(root + i)) { return 0; } i = i + 1; }
+    if (load8(path + rl) != 47) { return 0; }
+    var start = rl + 1;
+    var rel = alloc(pl - start + 1);
+    memcpy(rel, path + start, pl - start);
+    store8(rel + pl - start, 0);
+    return rel;
+}
+#endif
+
 # Public entry — populate per-line markers for `path`. Silent on any
 # failure: gutter just shows no markers. Call exactly once per file,
 # before render begins.
@@ -191,20 +237,29 @@ fn vcs_compute_markers(path) {
     if (path == 0) { return 0; }
 
     #ifdef CYRIUS_TARGET_AGNOS
-    # sit's object store is not wired for agnos yet — the VCS gutter is
-    # disabled there, the same no-op as git-not-installed was on Linux.
-    return 0;
+    # agnos has no cwd — find the repo root by walking up from the file's
+    # absolute path to a `.sit/HEAD`, tell sit the root explicitly (sit's
+    # 2026-07 repo-root refactor: sit_set_repo_root → absolute-path reads),
+    # and diff the repo-relative path. Silent no-op if the file isn't in a repo.
+    var root = _vcs_find_repo_root(path);
+    if (root == 0) { return 0; }
+    var rel = _vcs_rel_to_root(path, root);
+    if (rel == 0) { return 0; }
+    sit_set_repo_root(root);
+    var repo = sit_repo_open(root);
+    if (repo == 0) { sit_set_repo_root(0); return 0; }
+    var ops = sit_diff_path(repo, rel);
+    sit_repo_close(repo);
+    sit_set_repo_root(0);
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
-    # Open the sit repo at the current directory. sit 1.0.1's
-    # sit_repo_open chdir(".") is a no-op when owl runs from the repo
-    # root; it returns 0 when there is no `.sit/HEAD` (not a sit repo),
-    # giving the same silent no-op as git-not-a-repo before the swap.
+    # Open the sit repo at the current directory (owl runs from the repo root).
+    # Returns 0 when there is no `.sit/HEAD` (not a sit repo) — silent no-op.
     var repo = sit_repo_open(".");
     if (repo == 0) { return 0; }
-
     var ops = sit_diff_path(repo, path);
     sit_repo_close(repo);
+    #endif
     # 0 means unchanged, absent from both sides, or diff-table overflow.
     if (ops == 0) { return 0; }
 
@@ -218,7 +273,6 @@ fn vcs_compute_markers(path) {
 
     _apply_ops(ops);
     return 0;
-    #endif
 }
 
 fn vcs_mark_for_line(line) {
