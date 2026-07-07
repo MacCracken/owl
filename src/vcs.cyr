@@ -182,25 +182,37 @@ fn _apply_ops(ops) {
     return 0;
 }
 
-#ifdef CYRIUS_TARGET_AGNOS
-# Walk up from an ABSOLUTE file path to the nearest ancestor holding a
-# `.sit/HEAD`; return that directory (heap, caller-owns) or 0. agnos has no
-# cwd (CWD is userland-owned), so the repo root is discovered from the file's
-# own path rather than assumed to be the process cwd.
+# --- repo discovery (shared: Linux + agnos) ------------------------------
+# owl finds a file's repo by walking UP from the file's own absolute path to
+# the nearest ancestor holding a `.sit/` or `.git/` — never the process cwd.
+# That keeps markers correct for a file in a different repo than cwd, for an
+# absolute path anywhere, and for agnos (which has no cwd at all).
+
+# `<path[0..slash]>` is a repo root iff it has a `.sit/HEAD` or `.git/HEAD`.
+fn _vcs_probe_repo(path, slash) {
+    var probe = alloc(slash + 11);          # <dir> + "/.sit/HEAD"|"/.git/HEAD"(10) + NUL
+    memcpy(probe, path, slash);
+    memcpy(probe + slash, "/.sit/HEAD", 10);
+    store8(probe + slash + 10, 0);
+    if (file_exists(probe) == 1) { return 1; }
+    memcpy(probe + slash, "/.git/HEAD", 10);
+    store8(probe + slash + 10, 0);
+    if (file_exists(probe) == 1) { return 1; }
+    return 0;
+}
+
+# Nearest ancestor of ABSOLUTE `path` that is a repo root, heap, or 0 if the
+# file is under no repo (checked at the file's level and every level up).
 fn _vcs_find_repo_root(path) {
     var len = strlen(path);
     if (len == 0) { return 0; }
-    if (load8(path) != 47) { return 0; }   # need an absolute path (leading '/')
+    if (load8(path) != 47) { return 0; }    # need an absolute path (leading '/')
     var end = len;
     while (end > 1) {
         var slash = end - 1;
         while (slash > 0 && load8(path + slash) != 47) { slash = slash - 1; }
-        if (slash == 0) { return 0; }       # reached '/'; no repo above
-        var probe = alloc(slash + 11);      # <dir> + "/.sit/HEAD"(10) + NUL
-        memcpy(probe, path, slash);
-        memcpy(probe + slash, "/.sit/HEAD", 10);
-        store8(probe + slash + 10, 0);
-        if (file_exists(probe) == 1) {
+        if (slash == 0) { return 0; }        # reached '/'; no repo above
+        if (_vcs_probe_repo(path, slash) == 1) {
             var root = alloc(slash + 1);
             memcpy(root, path, slash);
             store8(root + slash, 0);
@@ -226,31 +238,82 @@ fn _vcs_rel_to_root(path, root) {
     store8(rel + pl - start, 0);
     return rel;
 }
-#endif
 
-#ifndef CYRIUS_TARGET_AGNOS
-# owl runs from the repo root, and sit_diff_path looks `path` up in HEAD's
-# tree (repo-relative names). A relative path is already repo-relative; an
-# ABSOLUTE path must be under cwd (the repo root sit_repo_open(".") opened)
-# to belong to this repo — return its repo-relative suffix, else 0. Without
-# this, an absolute path OUTSIDE the repo is absent from HEAD yet present on
-# disk, so sit reports every line as "added" (e.g. `owl --diff /tmp/x.md`
-# from owl's own .git repo lit up the whole file). getcwd is Linux-only;
-# agnos has no cwd and uses the walk-up-from-absolute-path branch below.
-fn _vcs_cwd_rel(path) {
-    if (load8(path) != 47) { return path; }      # relative → already repo-relative
-    var cwd = alloc(4096);
-    var n = syscall(SYS_GETCWD, cwd, 4096);
-    if (n <= 0) { return 0; }
-    var clen = strlen(cwd);
+# Canonicalise an ABSOLUTE path: resolve "." and ".." so a relative arg that
+# escapes the repo (e.g. `../x`) walks up from its REAL location, not through
+# the cwd repo. Collapses to "/" when everything cancels. Heap, caller-owns.
+fn _vcs_normalize(path) {
     var plen = strlen(path);
-    if (plen <= clen + 1) { return 0; }           # not strictly under cwd
+    var out = alloc(plen + 2);
+    store8(out, 47);                         # leading '/'
+    var olen = 1;
     var i = 0;
-    while (i < clen) { if (load8(path + i) != load8(cwd + i)) { return 0; } i = i + 1; }
-    if (load8(path + clen) != 47) { return 0; }   # need a '/' boundary
-    return path + clen + 1;                        # repo-relative suffix
+    var done = 0;
+    while (done == 0) {
+        while (i < plen && load8(path + i) == 47) { i = i + 1; }   # skip '/'
+        if (i >= plen) { done = 1; } else {
+            var j = i;
+            while (j < plen && load8(path + j) != 47) { j = j + 1; }
+            var clen = j - i;
+            var dot = 0;
+            var dotdot = 0;
+            if (clen == 1) { if (load8(path + i) == 46) { dot = 1; } }
+            if (clen == 2) { if (load8(path + i) == 46) { if (load8(path + i + 1) == 46) { dotdot = 1; } } }
+            if (dot == 0) {
+                if (dotdot == 1) {
+                    if (olen > 1) {           # pop the last kept component
+                        var k = olen - 1;
+                        while (k > 0 && load8(out + k) != 47) { k = k - 1; }
+                        olen = k;
+                        if (olen == 0) { olen = 1; }
+                    }
+                } else {
+                    if (olen > 1) { store8(out + olen, 47); olen = olen + 1; }
+                    var m = 0;
+                    while (m < clen) { store8(out + olen + m, load8(path + i + m)); m = m + 1; }
+                    olen = olen + clen;
+                }
+            }
+            i = j;
+        }
+    }
+    store8(out + olen, 0);
+    return out;
 }
-#endif
+
+# Resolve `path` to a canonical absolute path. Linux: prepend cwd for a
+# relative arg (getcwd), then normalise. agnos: no cwd — require an absolute
+# path (owl is always handed one there), just normalise. 0 on getcwd failure
+# or a relative path on agnos.
+fn _vcs_abspath(path) {
+    #ifndef CYRIUS_TARGET_AGNOS
+    if (load8(path) != 47) {
+        var cwd = alloc(4096);
+        var n = syscall(SYS_GETCWD, cwd, 4096);
+        if (n <= 0) { return 0; }
+        var clen = strlen(cwd);
+        var plen = strlen(path);
+        var joined = alloc(clen + 1 + plen + 1);
+        memcpy(joined, cwd, clen);
+        store8(joined + clen, 47);
+        memcpy(joined + clen + 1, path, plen);
+        store8(joined + clen + 1 + plen, 0);
+        return _vcs_normalize(joined);
+    }
+    return _vcs_normalize(path);
+    #endif
+    #ifdef CYRIUS_TARGET_AGNOS
+    if (load8(path) != 47) { return 0; }
+    return _vcs_normalize(path);
+    #endif
+}
+
+# owl was asked to `--diff` a file outside any repo: say why nothing rendered,
+# then show no markers. Self-gating — silent for a plain (non-`--diff`) view,
+# so `owl file` outside a repo stays quiet.
+fn _vcs_warn_outside() {
+    if (g_flag_diff == 1) { eprint("owl: outside of repo - no diff\n", 31); }
+}
 
 # Public entry — populate per-line markers for `path`. Silent on any
 # failure: gutter just shows no markers. Call exactly once per file,
@@ -260,35 +323,23 @@ fn vcs_compute_markers(path) {
     if (vcs_enabled() == 0) { return 0; }
     if (path == 0) { return 0; }
 
-    #ifdef CYRIUS_TARGET_AGNOS
-    # agnos has no cwd — find the repo root by walking up from the file's
-    # absolute path to a `.sit/HEAD`, tell sit the root explicitly (sit's
-    # 2026-07 repo-root refactor: sit_set_repo_root → absolute-path reads),
-    # and diff the repo-relative path. Silent no-op if the file isn't in a repo.
-    var root = _vcs_find_repo_root(path);
-    if (root == 0) { return 0; }
-    var rel = _vcs_rel_to_root(path, root);
-    if (rel == 0) { return 0; }
+    # Discover the file's OWN repo by walking up from its absolute path (both
+    # platforms), so markers reflect the repo the file actually lives in — not
+    # the process cwd. Outside any repo: warn (under --diff) and show nothing,
+    # rather than diffing against an unrelated repo, which marks the whole file
+    # "added" (a name absent from HEAD but present on disk).
+    var abspath = _vcs_abspath(path);
+    if (abspath == 0) { return 0; }
+    var root = _vcs_find_repo_root(abspath);
+    if (root == 0) { _vcs_warn_outside(); return 0; }
+    var rel = _vcs_rel_to_root(abspath, root);
+    if (rel == 0) { _vcs_warn_outside(); return 0; }
     sit_set_repo_root(root);
     var repo = sit_repo_open(root);
     if (repo == 0) { sit_set_repo_root(0); return 0; }
     var ops = sit_diff_path(repo, rel);
     sit_repo_close(repo);
     sit_set_repo_root(0);
-    #endif
-    #ifndef CYRIUS_TARGET_AGNOS
-    # Open the sit repo at the current directory (owl runs from the repo root).
-    # Returns 0 when the cwd is neither a `.sit/` nor a `.git/` repo — no-op.
-    var repo = sit_repo_open(".");
-    if (repo == 0) { return 0; }
-    # sit_diff_path wants a repo-relative name; make an absolute path relative
-    # to the repo root (cwd) and bail with no markers if it's outside the repo
-    # (else sit sees a name absent from HEAD but present on disk → all-added).
-    var rel = _vcs_cwd_rel(path);
-    if (rel == 0) { sit_repo_close(repo); return 0; }
-    var ops = sit_diff_path(repo, rel);
-    sit_repo_close(repo);
-    #endif
     # 0 means unchanged, absent from both sides, or diff-table overflow.
     if (ops == 0) { return 0; }
 

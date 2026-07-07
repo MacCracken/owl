@@ -1,7 +1,9 @@
 commit	a20268d8beca7301436cc88cc8b0a004dfed1bad	vyakarana	https://github.com/MacCracken/vyakarana.git	2.2.3
+commit	6d0740bc8a1ee2c2017619577726acd015c1e1c1	sit	https://github.com/MacCracken/sit.git	1.3.2
 commit	65f2508b52a60ccc42ee7d9606f11fb5772d7e26	sakshi	https://github.com/MacCracken/sakshi.git	2.4.0
 commit	8f8d201cb122906dfb7a3844b001d698ff1b0c1f	sankoch	https://github.com/MacCracken/sankoch.git	2.4.4
 commit	c4888d22dc925a9fd2ae5c163434621cfe5b7c93	sigil	https://github.com/MacCracken/sigil.git	3.9.1
+commit	f95d94ab53d2e1aa73579e65ba29125896f5fa65	patra	https://github.com/MacCracken/patra.git	1.12.9
 d9f3b17ddbbe1bba48917c3a679807b01c39c4a1ce776efdbdfbb7a1680e86e4  lib/tagged.cyr
 d0e618655388c9d43c9927a9f5b306e61cb333546abc166f4f280a25993624f5  lib/net.cyr
 e84c090fd0f8532700d967ca3190837780a52a42630f4c6a0a4567ad9a49ab6b  lib/cffi.cyr

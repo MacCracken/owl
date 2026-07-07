@@ -4,6 +4,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.4.4] — 2026-07-07 — `--diff` discovers the file's own repo (walk-up), warns when outside
+
+`--diff` and the gutter now find a file's repo by walking **up** from the file's own path —
+checking for a `.sit/` or `.git/` at the file's level and every ancestor — instead of assuming
+the process cwd is the repo. A file outside any repo warns `outside of repo - no diff` and shows
+no markers, rather than being diffed against an unrelated repo (which marked the whole file
+"added"). Closes the relative-`..`-escape edge left open in 1.4.3.
+
+### Changed
+- **`src/vcs.cyr`**: unified the Linux and AGNOS paths into one repo-discovery walk-up.
+  `_vcs_find_repo_root` now probes **both** `.sit/HEAD` and `.git/HEAD` at every level;
+  `_vcs_abspath` canonicalises the arg to an absolute path (getcwd on Linux; require-absolute on
+  AGNOS) and `_vcs_normalize` collapses `.`/`..` so a relative arg that escapes the repo is
+  discovered from its real location. The file's own repo — not the cwd's — drives the diff, on
+  both platforms.
+
+### Fixed
+- **`--diff` on a file outside any repo dumped the whole file** (every line marked "added"). owl
+  diffed against the cwd repo — which, via sit's `.git`-read backend, is *any* git repo (owl's
+  own included) — with a path absent from HEAD but present on disk, so every line read as added.
+  owl now resolves the file's own repo (or none) and, when there is none under `--diff`, prints
+  `owl: outside of repo - no diff` to stderr and renders no markers. The smoke `--diff on
+  non-tracked file` gate asserts the warning.
+
 ## [1.4.3] — 2026-07-06 — VCS gutter works on AGNOS (via the sit repo-root port)
 
 The `sit`-backed VCS change-marker gutter — `#ifdef`-gated OFF on AGNOS since 1.4.0 *because* `sit`

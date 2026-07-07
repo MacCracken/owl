@@ -1449,10 +1449,12 @@ if [ -n "$SIT_BIN" ]; then
         *) ;;
     esac
 fi
-# --diff on a file outside any sit repo: silent empty output.
+# --diff on a file outside any sit/git repo: empty stdout + an "outside of
+# repo - no diff" warning on stderr (owl 1.4.4 — walk-up repo discovery finds
+# no .sit/.git at the file's level or above).
 cp README.md "$TMPDIR/elsewhere.md"
 out=$("$BIN" --diff "$TMPDIR/elsewhere.md" 2>"$TMPDIR/err")
 [ -z "$out" ] || fail "--diff on non-tracked file should produce empty stdout, got: $out"
-[ ! -s "$TMPDIR/err" ] || fail "--diff on non-tracked file leaked stderr: $(cat "$TMPDIR/err")"
+grep -q "outside of repo" "$TMPDIR/err" || fail "--diff on non-tracked file should warn 'outside of repo', got: $(cat "$TMPDIR/err")"
 
 echo "smoke: OK ($v_long) — M0–M8 gates passing (security hardening FINDING-001/002/003/004 closed)"
