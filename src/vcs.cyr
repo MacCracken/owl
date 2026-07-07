@@ -228,6 +228,30 @@ fn _vcs_rel_to_root(path, root) {
 }
 #endif
 
+#ifndef CYRIUS_TARGET_AGNOS
+# owl runs from the repo root, and sit_diff_path looks `path` up in HEAD's
+# tree (repo-relative names). A relative path is already repo-relative; an
+# ABSOLUTE path must be under cwd (the repo root sit_repo_open(".") opened)
+# to belong to this repo — return its repo-relative suffix, else 0. Without
+# this, an absolute path OUTSIDE the repo is absent from HEAD yet present on
+# disk, so sit reports every line as "added" (e.g. `owl --diff /tmp/x.md`
+# from owl's own .git repo lit up the whole file). getcwd is Linux-only;
+# agnos has no cwd and uses the walk-up-from-absolute-path branch below.
+fn _vcs_cwd_rel(path) {
+    if (load8(path) != 47) { return path; }      # relative → already repo-relative
+    var cwd = alloc(4096);
+    var n = syscall(SYS_GETCWD, cwd, 4096);
+    if (n <= 0) { return 0; }
+    var clen = strlen(cwd);
+    var plen = strlen(path);
+    if (plen <= clen + 1) { return 0; }           # not strictly under cwd
+    var i = 0;
+    while (i < clen) { if (load8(path + i) != load8(cwd + i)) { return 0; } i = i + 1; }
+    if (load8(path + clen) != 47) { return 0; }   # need a '/' boundary
+    return path + clen + 1;                        # repo-relative suffix
+}
+#endif
+
 # Public entry — populate per-line markers for `path`. Silent on any
 # failure: gutter just shows no markers. Call exactly once per file,
 # before render begins.
@@ -254,10 +278,15 @@ fn vcs_compute_markers(path) {
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     # Open the sit repo at the current directory (owl runs from the repo root).
-    # Returns 0 when there is no `.sit/HEAD` (not a sit repo) — silent no-op.
+    # Returns 0 when the cwd is neither a `.sit/` nor a `.git/` repo — no-op.
     var repo = sit_repo_open(".");
     if (repo == 0) { return 0; }
-    var ops = sit_diff_path(repo, path);
+    # sit_diff_path wants a repo-relative name; make an absolute path relative
+    # to the repo root (cwd) and bail with no markers if it's outside the repo
+    # (else sit sees a name absent from HEAD but present on disk → all-added).
+    var rel = _vcs_cwd_rel(path);
+    if (rel == 0) { sit_repo_close(repo); return 0; }
+    var ops = sit_diff_path(repo, rel);
     sit_repo_close(repo);
     #endif
     # 0 means unchanged, absent from both sides, or diff-table overflow.

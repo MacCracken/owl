@@ -14,14 +14,22 @@ repo-root-relative, no `chdir`). This is the "our port debt, not a wall" fix: no
 - **`src/vcs.cyr`**: un-gated the gutter for AGNOS. AGNOS has no cwd, so `vcs_compute_markers` now finds
   the repo root by walking up from the file's absolute path to a `.sit/HEAD` (`_vcs_find_repo_root`),
   tells sit the root explicitly (`sit_set_repo_root`), and diffs the repo-relative path
-  (`_vcs_rel_to_root`). The Linux path (`sit_repo_open(".")`) is unchanged; both feed a shared
-  marker-processing tail.
-- **`cyrius.cyml`**: `sit` dep → **1.3.2** (the repo-root-relative release).
+  (`_vcs_rel_to_root`). The Linux path opens the repo at cwd (`sit_repo_open(".")`) and now makes an
+  absolute target repo-relative before diffing (see Fixed); both feed a shared marker-processing tail.
+- **`cyrius.cyml`**: `sit` dep → **1.3.2** (the repo-root-relative release); `patra` dep → **1.12.9**
+  (the `file_open` agnos-ABI fix its object store transitively needs).
 
 ### Fixed
 - **AGNOS build unblocked**: `owl --agnos` previously hard-failed at sit's `SYS_CHDIR`; with sit 1.3.2 the
   whole bundle compiles (`sit`'s unused wire/serve/ssh surface is DCE'd on AGNOS). `owl --agnos` builds
   with the gutter live; Linux builds unregressed.
+- **`--diff`/gutter no longer marks a whole file "added" when it's outside the repo.** owl passed the
+  file path straight to `sit_diff_path`, which resolves the name against HEAD's tree — a path outside
+  the cwd repo is absent from HEAD but present on disk, so sit reported every line as added. Because
+  sit's library also detects a `.git` repo, running owl from *any* git repo (owl's own included) lit up
+  the whole file under `--diff` (e.g. `owl --diff /tmp/other.md`). `vcs_compute_markers` now makes an
+  absolute path repo-relative (cwd = repo root, via `getcwd`) and skips files outside the repo — no
+  markers. Caught by the smoke `--diff on non-tracked file` gate.
 
 ## [1.4.2] — 2026-06-22
 
