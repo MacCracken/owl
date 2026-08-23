@@ -1,16 +1,250 @@
-# owl fuzz harness
+# owl — fuzz harness for the file-origin escape classifier
+#
+# Opened at 1.4.7, on the 1.4.6 audit's recommendation: FINDING-006 lived
+# in this state machine, the machine is driven entirely by untrusted file
+# bytes, and it is small enough that a harness can assert real invariants
+# rather than just "did not crash".
+#
+# `src/escape.cyr` is included directly — it is self-contained over two
+# globals and pulls in nothing else, which is why it was split out of
+# main.cyr in the first place.
+#
+# ── Invariants ────────────────────────────────────────────────────────
+#
+#   1. **Bounded suppression.** From any state, feeding at most
+#      ESC_MAX_LEN + 1 bytes returns the classifier to state 0. This is
+#      FINDING-006 stated as a property: no input can latch the machine
+#      forever, so no input can hide an unbounded amount of a file.
+#
+#   2. **Newlines always survive.** `_emit_file_byte(10)` returns 1 in
+#      every state. The gutter counts lines from emitted bytes, so a
+#      swallowed newline silently desynchronises every line number after
+#      it — the second half of FINDING-006.
+#
+#   3. **No ESC ever reaches the terminal.** Whatever the byte sequence,
+#      `_emit_file_byte(0x1B)` never returns 1. This is FINDING-001's
+#      guarantee, and the reason the whole module exists.
+#
+#   4. **Emission is monotone in a plain file.** A byte stream containing
+#      no ESC is emitted in full — the classifier must never drop content
+#      from a file that has no escapes in it at all, which is the common
+#      case and the one where a regression would be most damaging.
+#
+#   5. **Reset is total.** After `escape_reset()` the machine behaves
+#      identically to a fresh start, so one file cannot bleed into the
+#      next.
+#
+# Inputs are pseudorandom from a fixed xorshift seed, so a failure
+# reproduces exactly. The corpus deliberately over-weights 0x1B and the
+# CSI/OSC introducer bytes — uniform random bytes almost never build a
+# sequence, and the interesting states are the ones inside one.
+
+include "src/escape.cyr"
+
+var FUZZ_ROUNDS = 4096;
+
+var g_rng = 0x2545F4914F6CDD1D;
+
+fn _rnd() {
+    var x = g_rng;
+    x = x ^ (x * 8192);          # x ^= x << 13
+    x = x ^ (x / 128);           # x ^= x >> 7
+    x = x ^ (x * 262144);        # x ^= x << 17
+    if (x == 0) { x = 88172645463325252; }
+    g_rng = x;
+    if (x < 0) { return 0 - x; }
+    return x;
+}
+
+# A byte drawn from a distribution that actually reaches the escape states:
+# ~1 in 4 is ESC, ~1 in 4 an introducer or terminator, the rest arbitrary.
+fn _rnd_byte() {
+    var r = _rnd() % 100;
+    if (r < 25) { return 0x1B; }
+    if (r < 33) { return 0x5B; }        # [  CSI introducer
+    if (r < 39) { return 0x5D; }        # ]  OSC introducer
+    if (r < 44) { return 0x07; }        # BEL
+    if (r < 49) { return 0x5C; }        # \  ST tail
+    if (r < 54) { return 10; }          # LF
+    if (r < 60) { return 0x40 + (_rnd() % 63); }   # CSI final range
+    return _rnd() % 256;
+}
+
+fn _fail(msg) {
+    eprint("owl fuzz: ", 10);
+    eprint(msg, strlen(msg));
+    eprint("\n", 1);
+    return 1;
+}
+
+# A byte for the ceiling test: same shape as _rnd_byte but with NO newline
+# and no CSI final byte, so the ONLY thing that can break a latched
+# sequence is ESC_MAX_LEN. Without this the ceiling invariant is vacuous —
+# the LF rule resets the machine long before 257 bytes accumulate, and the
+# test passes against a build with the ceiling removed. (It did, until this
+# split; see the CHANGELOG note for 1.4.7.)
+fn _rnd_byte_no_break() {
+    var r = _rnd() % 100;
+    if (r < 30) { return 0x1B; }
+    if (r < 45) { return 0x5B; }        # [  CSI introducer
+    if (r < 55) { return 0x5D; }        # ]  OSC introducer
+    # 0x20-0x3F: CSI parameter/intermediate bytes. Never a final byte,
+    # never LF, never BEL — a sequence built from these runs forever.
+    return 0x20 + (_rnd() % 32);
+}
+
+# Invariant 1 + 3: drive random bytes, assert ESC is never emitted and the
+# machine is never latched beyond the bound.
+fn _fuzz_bounded_and_no_esc() {
+    var round = 0;
+    while (round < FUZZ_ROUNDS) {
+        escape_reset();
+        var since_state0 = 0;
+        var i = 0;
+        var n = 64 + (_rnd() % 512);
+        while (i < n) {
+            var c = _rnd_byte();
+            var emitted = _emit_file_byte(c);
+            if (c == 0x1B) {
+                if (emitted == 1) { return _fail("ESC was emitted (FINDING-001)"); }
+            }
+            if (g_esc_state == 0) { since_state0 = 0; }
+            else {
+                since_state0 = since_state0 + 1;
+                if (since_state0 > ESC_MAX_LEN + 1) {
+                    return _fail("classifier latched past ESC_MAX_LEN (FINDING-006)");
+                }
+            }
+            i = i + 1;
+        }
+        round = round + 1;
+    }
+
+    # Dedicated ceiling round. Deterministic opening (ESC [) then ONLY CSI
+    # parameter/intermediate bytes (0x20-0x3F): never an ESC, never an LF,
+    # never a final byte. Nothing in this stream can terminate the sequence
+    # or restart the budget, so ESC_MAX_LEN is the only thing that can —
+    # which is exactly the FINDING-006 input, and the only shape under
+    # which this invariant has any teeth. Two earlier drafts of this test
+    # passed against a build with the ceiling deleted; see the 1.4.7
+    # CHANGELOG note.
+    round = 0;
+    while (round < 256) {
+        escape_reset();
+        _emit_file_byte(0x1B);
+        _emit_file_byte(0x5B);          # -> state 2, CSI body
+        var j = 0;
+        var m = 2 * ESC_MAX_LEN + 16;
+        var saw_reset = 0;
+        var since0 = 0;
+        while (j < m) {
+            var b = 0x20 + (_rnd() % 32);
+            _emit_file_byte(b);
+            if (g_esc_state == 0) {
+                saw_reset = 1;
+                since0 = 0;
+            } else {
+                since0 = since0 + 1;
+                if (since0 > ESC_MAX_LEN + 1) {
+                    return _fail("classifier latched past ESC_MAX_LEN (FINDING-006)");
+                }
+            }
+            j = j + 1;
+        }
+        # The stream is twice a ceiling long and contains no terminator, so
+        # the ceiling MUST have fired. If it never did, this test proves
+        # nothing and should say so rather than passing quietly.
+        if (saw_reset == 0) {
+            return _fail("ceiling never fired - the bounded-suppression test is vacuous");
+        }
+        round = round + 1;
+    }
+    return 0;
+}
+
+# Invariant 2: a newline is emitted from every reachable state. Walk the
+# machine into each state deliberately rather than hoping random input
+# lands there.
+fn _fuzz_newline_always_emitted() {
+    # state 0
+    escape_reset();
+    if (_emit_file_byte(10) != 1) { return _fail("LF dropped in state 0"); }
+    # state 1 (saw ESC)
+    escape_reset();
+    _emit_file_byte(0x1B);
+    if (_emit_file_byte(10) != 1) { return _fail("LF dropped in state 1"); }
+    # state 2 (CSI body)
+    escape_reset();
+    _emit_file_byte(0x1B); _emit_file_byte(0x5B); _emit_file_byte(0x30);
+    if (_emit_file_byte(10) != 1) { return _fail("LF dropped in state 2"); }
+    # state 3 (OSC body)
+    escape_reset();
+    _emit_file_byte(0x1B); _emit_file_byte(0x5D); _emit_file_byte(0x35);
+    if (_emit_file_byte(10) != 1) { return _fail("LF dropped in state 3"); }
+    # state 4 (ESC seen inside a string body)
+    escape_reset();
+    _emit_file_byte(0x1B); _emit_file_byte(0x5D); _emit_file_byte(0x1B);
+    if (_emit_file_byte(10) != 1) { return _fail("LF dropped in state 4"); }
+    # and after a newline the machine must be clean again
+    if (g_esc_state != 0) { return _fail("LF did not reset the classifier"); }
+    return 0;
+}
+
+# Invariant 4: content with no ESC is emitted byte for byte.
+fn _fuzz_plain_passthrough() {
+    var round = 0;
+    while (round < FUZZ_ROUNDS) {
+        escape_reset();
+        var i = 0;
+        var n = 1 + (_rnd() % 256);
+        while (i < n) {
+            var c = _rnd() % 256;
+            if (c == 0x1B) { c = 65; }          # keep the stream ESC-free
+            if (_emit_file_byte(c) != 1) {
+                return _fail("dropped a byte from an escape-free stream");
+            }
+            i = i + 1;
+        }
+        round = round + 1;
+    }
+    return 0;
+}
+
+# Invariant 5: reset restores a fresh machine. Park the classifier
+# mid-sequence, reset, and confirm the next ordinary byte is emitted.
+fn _fuzz_reset_is_total() {
+    var round = 0;
+    while (round < 256) {
+        escape_reset();
+        var i = 0;
+        var n = 1 + (_rnd() % 8);
+        while (i < n) { _emit_file_byte(_rnd_byte()); i = i + 1; }
+        escape_reset();
+        if (g_esc_state != 0) { return _fail("reset left a non-zero state"); }
+        if (g_esc_len != 0)   { return _fail("reset left a non-zero length"); }
+        if (_emit_file_byte(65) != 1) { return _fail("byte dropped after reset"); }
+        round = round + 1;
+    }
+    return 0;
+}
 
 fn fuzz_main(data, len) {
-    if (len == 0) { return 0; }
+    if (_fuzz_bounded_and_no_esc() != 0)   { return 1; }
+    if (_fuzz_newline_always_emitted() != 0) { return 1; }
+    if (_fuzz_plain_passthrough() != 0)    { return 1; }
+    if (_fuzz_reset_is_total() != 0)       { return 1; }
     return 0;
 }
 
-fn main() {
+fn _harness_main() {
     alloc_init();
-    fuzz_main("test", 4);
-    println("fuzz: ok");
+    if (fuzz_main("x", 1) != 0) {
+        eprint("escape fuzz: FAIL\n", 18);
+        return 1;
+    }
+    print("escape fuzz: OK (5 invariants)\n", 30);
     return 0;
 }
 
-var r = main();
-syscall(60, r);
+var _ec = _harness_main();
+syscall(60, _ec);

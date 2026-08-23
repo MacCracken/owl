@@ -1560,4 +1560,27 @@ longest=$(XDG_CONFIG_HOME="$TMPDIR/th" "$BIN" -n --color=always --paging=never \
 "$BIN" --tabs=99999999999999999999 "$TMPDIR/csi.txt" >/dev/null 2>&1 \
     && fail "FINDING-010 regression: --tabs with a 20-digit value should be rejected"
 
-echo "smoke: OK ($v_long) — M0–M8 gates passing (security hardening FINDING-001/002/003/004/006/007/008/010 closed)"
+# FINDING-013 (1.4.7) — the byte ceiling added for FINDING-006 emitted the
+# byte that tripped it, and that byte can be an ESC. The ESC then reached
+# the terminal and the bytes after it were handed to it as a fresh
+# sequence — re-opening the FINDING-001 injection the classifier exists to
+# close. Found by tests/owl.fcyr, which explores the boundary; a
+# hand-written file misses it unless the ESC lands EXACTLY on the byte
+# that trips the ceiling. That is 254 padding bytes after `ESC [` with
+# ESC_MAX_LEN = 256 (ESC and `[` spend the first two of the budget), so
+# this gate is offset-sensitive: if ESC_MAX_LEN changes, this number must
+# change with it or the gate goes quiet.
+{
+    printf '\033['
+    i=0; while [ $i -lt 254 ]; do printf '3'; i=$((i+1)); done
+    printf '\033]52;c;cHduZWQ=\007TAIL\n'
+} > "$TMPDIR/ceil.txt"
+esc=$("$BIN" --color=always --paging=never "$TMPDIR/ceil.txt" | tr -dc '\033' | wc -c)
+[ "$esc" -eq 0 ] \
+    || fail "FINDING-013 regression: $esc raw ESC byte(s) reached stdout at the escape ceiling"
+# The tail must still render — the ceiling exists so content is not lost,
+# and a fix that simply dropped everything would also pass the check above.
+"$BIN" --color=always --paging=never "$TMPDIR/ceil.txt" | grep -q 'TAIL' \
+    || fail "FINDING-013: content after an over-long escape was suppressed"
+
+echo "smoke: OK ($v_long) — M0–M8 gates passing (security hardening FINDING-001/002/003/004/006/007/008/010/013 closed)"

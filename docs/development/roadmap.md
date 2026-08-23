@@ -19,6 +19,8 @@ forward-looking. Full prose in `CHANGELOG.md`.
 
 | Release | Date       | Headline                                                |
 |---------|------------|---------------------------------------------------------|
+| 1.4.7   | 2026-08-22 | sit read-only fold (−17.7% binary); `--format=ndjson`; `--follow`; fuzz harness finds FINDING-013 |
+| 1.4.6   | 2026-08-22 | P(−1) audit — 7 findings; an unterminated escape could hide a whole file |
 | 1.4.5   | 2026-08-22 | cyrius 6.5.35 + deps to latest; the four object-store layers become stdlib leaves; `--agnos` target returns; 46 grammars (openqasm) |
 | 1.4.4   | 2026-07-07 | `--diff` discovers the file's own repo (walk-up), warns when outside |
 | 1.4.3   | 2026-07-06 | VCS gutter works on AGNOS (via the sit repo-root port)   |

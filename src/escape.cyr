@@ -1,0 +1,116 @@
+# src/escape.cyr — file-origin terminal-escape classifier
+#
+# One job: decide, byte by byte, whether a byte that came out of a FILE may
+# reach the terminal. This is the mechanism behind audit FINDING-001
+# (2026-04-23) — a file carrying OSC 52, a DCS, or a title-set escape is
+# interpreted by the user's terminal exactly like an escape owl emitted
+# itself, and the class has a long CVE history (CVE-2019-9535 iTerm2,
+# CVE-2024-32487 less, CVE-2003-0063 xterm).
+#
+# Extracted from main.cyr at 1.4.7. It was always a self-contained state
+# machine over two globals; giving it a file makes it directly includable
+# by `tests/owl.fcyr`, which is what the 1.4.6 audit asked for — the
+# classifier is the piece of owl most worth fuzzing and the piece where
+# FINDING-006 lived. No behaviour change in the move.
+#
+# owl's OWN escapes never come through here: ansi_fg / ansi_reset write to
+# stdout directly. Only bytes loaded from a file are classified.
+#
+# The caller decides WHETHER to filter (`_strip_active()` in main.cyr,
+# which reads the flag state); this module decides WHAT a sequence is.
+
+var g_esc_state = 0;
+# Bytes consumed so far by the in-progress stripped sequence, and the
+# ceiling past which we stop believing it is one. Audit FINDING-006:
+# without a bound, a file opening with a CSI whose final byte (0x40-0x7E)
+# never arrives puts the classifier in state 2 forever and every
+# subsequent byte is dropped — owl renders an empty file, silently, exit
+# 0. 256 is far past any real sequence (a CSI is a handful of bytes; the
+# longest thing here is an OSC, which we drop wholesale anyway).
+var g_esc_len = 0;
+var ESC_MAX_LEN = 256;
+
+# Reset between inputs. A file that ends mid-sequence must not swallow
+# the first bytes of the next one.
+fn escape_reset() {
+    g_esc_state = 0;
+    g_esc_len = 0;
+    return 0;
+}
+
+# Byte classifier — updates g_esc_state and returns 1 if the byte
+# should be emitted to stdout, 0 if it should be dropped as part of a
+# file-origin terminal escape sequence. Called only when
+# _strip_active() == 1. Strips every ESC-initiated sequence: CSI (ESC
+# [ … final), OSC (ESC ] … BEL/ST), DCS/APC/PM/SOS (ESC P/_/^/X …
+# ST), and single-char escapes (ESC 7, ESC 8, ESC c, …). Owl's own
+# SGR output bypasses this by going through ansi_fg / ansi_reset
+# which write to stdout directly — only bytes loaded from the file
+# are filtered.
+fn _emit_file_byte(c) {
+    if (g_esc_state == 0) {
+        if (c == 0x1B) { g_esc_state = 1; g_esc_len = 1; return 0; }
+        return 1;
+    }
+
+    # ── Two bounds on how much a single sequence may swallow ──────────
+    # (audit FINDING-006). Both abandon the sequence and EMIT the byte
+    # that tripped them, so a malformed escape costs at most the bytes
+    # already consumed rather than the rest of the file.
+    #
+    # A newline can never appear inside a terminal escape sequence — no
+    # CSI, OSC, DCS, APC, PM or SOS form admits a raw LF, and terminals
+    # abandon the sequence on one. Treating it as a hard terminator
+    # bounds the damage to a single line AND keeps g_line_no in step
+    # with the file: a swallowed LF is a line the gutter never counts,
+    # so every subsequent line number would be wrong.
+    if (c == 10) { g_esc_state = 0; g_esc_len = 0; return 1; }
+    g_esc_len = g_esc_len + 1;
+    if (g_esc_len > ESC_MAX_LEN) {
+        # Abandon the over-long sequence and emit the byte that tripped the
+        # ceiling — EXCEPT when that byte is itself an ESC, which can only
+        # ever begin a new sequence. Emitting it would write a raw ESC to
+        # the terminal and hand the next bytes straight to it, which is
+        # precisely the injection FINDING-001 exists to stop. Found by
+        # tests/owl.fcyr against the 1.4.6 shape, which returned 1 here
+        # unconditionally.
+        if (c == 0x1B) { g_esc_state = 1; g_esc_len = 1; return 0; }
+        g_esc_state = 0;
+        g_esc_len = 0;
+        return 1;
+    }
+
+    if (g_esc_state == 1) {
+        # Classify by introducer byte.
+        if (c == 0x5B) { g_esc_state = 2; return 0; }   # [ → CSI
+        if (c == 0x5D) { g_esc_state = 3; return 0; }   # ] → OSC
+        if (c == 0x50) { g_esc_state = 3; return 0; }   # P → DCS
+        if (c == 0x5F) { g_esc_state = 3; return 0; }   # _ → APC
+        if (c == 0x5E) { g_esc_state = 3; return 0; }   # ^ → PM
+        if (c == 0x58) { g_esc_state = 3; return 0; }   # X → SOS
+        # Two-byte escape (ESC 7, ESC 8, ESC c, ESC D, ESC M, …).
+        g_esc_state = 0;
+        return 0;
+    }
+    if (g_esc_state == 2) {
+        # CSI body: params (0x30–0x3F) and intermediates (0x20–0x2F).
+        # Final byte is in the 0x40–0x7E range.
+        if (c >= 0x40) { if (c <= 0x7E) { g_esc_state = 0; return 0; } }
+        return 0;
+    }
+    if (g_esc_state == 3) {
+        # String body: look for BEL, C1 ST (0x9C), or ESC-starting ST.
+        if (c == 0x07) { g_esc_state = 0; return 0; }
+        if (c == 0x9C) { g_esc_state = 0; return 0; }
+        if (c == 0x1B) { g_esc_state = 4; return 0; }
+        return 0;
+    }
+    if (g_esc_state == 4) {
+        # Saw ESC inside a string; `\\` (0x5C) terminates, anything
+        # else means the ESC was a false alarm and we stay in string.
+        if (c == 0x5C) { g_esc_state = 0; return 0; }
+        g_esc_state = 3;
+        return 0;
+    }
+    return 1;
+}

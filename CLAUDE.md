@@ -55,8 +55,10 @@ Module responsibilities (file list in `state.md`):
 - **`pager.cyr`** — pager spawn (`OWL_PAGER` → `PAGER` → `less -R`), SIGPIPE handling
 - **`vcs.cyr`** — sit-backed VCS change markers for the gutter (since 1.4.0): `sit_repo_open` / `sit_diff_path` / `sit_repo_close` library calls, LCS edit-script → ADD/MOD/DEL mapping. All VCS-backend code confined here behind a stable five-fn interface (`vcs_compute_markers`, `vcs_mark_for_line`, `vcs_enabled`, `vcs_reset`, `set_style`) so a backend swap is a single-file rewrite
 - **`config.cyr`** — minimal `key = value` config parser; no stdlib `toml`/`cyml` dep
+- **`escape.cyr`** — the file-origin terminal-escape classifier (split out of `main.cyr` at 1.4.7). Self-contained state machine over two globals so `tests/owl.fcyr` can include it directly; the caller decides *whether* to filter (`_strip_active()` in main.cyr), this decides *what a sequence is*. Audit FINDING-001/006/013 all live here — change it with the fuzz harness in hand
+- **`fetch.cyr`** — http/https remote fetch. **Not wired into the build** (see its header): complete but parked at 1.4.7 because the sandhi transport could not be verified, it costs ~521 KB of network stdlib, and it wants its own audit pass
 
-Include order in `main.cyr`: `lib/vyakarana.cyr` first, then owl modules. Runtime grammar resolution is cwd-relative (`grammars/<lang>.cyml`); installed-binary (exe-relative) resolution is a packaging concern.
+Include order in `main.cyr`: `lib/vyakarana.cyr` first, then `src/escape.cyr` (no deps), then the rest of the owl modules. Runtime grammar resolution is cwd-relative (`grammars/<lang>.cyml`); installed-binary (exe-relative) resolution is a packaging concern.
 
 ## Key Constraints
 
@@ -65,6 +67,8 @@ Include order in `main.cyr`: `lib/vyakarana.cyr` first, then owl modules. Runtim
 - **Color is triply-gated** — `g_want_color` resolves from (`-p` → off, `--color=always` → on, `NO_COLOR` env → off unless `always`, else TTY detection). Highlight path gates on `g_want_color` *not* `g_decorated` — piped output with `--color=always` still colors tokens even though header/gutter stay off
 - **Highlight ceiling** — `HIGHLIGHT_MAX` caps the highlight path against the bump allocator (full file + tokenbuf + ANSI-inflated output ≈ 4× resident). Oversized files fall back to plain streaming. Raising the cap needs a freeing allocator or vyakarana 2.x streaming tokenizer
 - **Grammar files ship with owl** — `grammars/*.cyml` are runtime data, not source. They must be installed alongside the binary
+- **`[deps].stdlib` is what owl REACHES** — since 1.4.7 owl consumes sit's read-only fold (`dist/sit-read.cyr`), not the full bundle, so the list is 22 entries instead of 38. On a dep bump, start from the union of `dist/sit-read.deps` and `dist/vyakarana.deps`, then add back whatever the link reports undefined — the sidecars under-report sigil's crypto follow-throughs (`ct` / `keccak` / `bayan` / `random`). Do NOT trust either list alone
+- **An escape sequence may never swallow more than its own line** — the classifier is bounded at a newline and at `ESC_MAX_LEN`, and an ESC at either bound starts a new sequence rather than being emitted. Three audit findings (006, 013) came from getting this wrong; `tests/owl.fcyr` pins all of it
 - **File-origin escapes are stripped by default** — `-r` / `--raw-control-chars` is the opt-in for trusted-ANSI passthrough. The default must stay safe
 
 ## Development Process

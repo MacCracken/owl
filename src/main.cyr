@@ -2,6 +2,7 @@
 # Stdlib auto-included via cyrius.cyml
 
 include "lib/vyakarana.cyr"
+include "src/escape.cyr"
 include "src/lang.cyr"
 include "src/theme.cyr"
 include "src/pager.cyr"
@@ -10,7 +11,7 @@ include "src/config.cyr"
 
 # Keep OWL_VERSION in sync with the VERSION file.
 # A M8 CI check will enforce equality; for now, manual.
-var OWL_VERSION = "owl 1.4.6";
+var OWL_VERSION = "owl 1.4.7";
 
 var BUFSIZE = 65536;
 
@@ -69,6 +70,21 @@ var g_flag_strip_ansi = 0;
 # Auto-fallback also fires when a binary file is detected via NUL-byte
 # scan, replacing the pre-1.1.3 skip-notice with a useful dump.
 var g_flag_hex = 0;
+
+# --format: 0 = text (the viewer), 1 = ndjson (one JSON object per token).
+# ndjson is machine output — it forces decorations and colour off and never
+# pages (resolve_mode), and it needs a grammar, so it fails loudly rather
+# than silently emitting nothing for an undetected language.
+var g_flag_format = 0;
+
+# -f / --follow: after rendering the file, keep the fd open and render
+# bytes as they are appended, like `tail -f`. Forces paging off (there is
+# no end to page to) and highlighting off — see _follow_loop for why the
+# tail is deliberately not token-coloured.
+var g_flag_follow = 0;
+var FOLLOW_POLL_MS = 200;
+var FORMAT_TEXT   = 0;
+var FORMAT_NDJSON = 1;
 # --diff: filter rendered output to lines with VCS markers (ADD/MOD).
 # Forces VCS computation regardless of decoration state. Composes with
 # --line-range and --color (just gates emission via _in_range).
@@ -126,16 +142,6 @@ var g_flag_raw_controls = 0;
 #   2  in CSI, scanning for final byte (0x40–0x7E)
 #   3  in OSC/DCS/APC/PM/SOS string, scanning for ST/BEL
 #   4  in string body, just saw ESC (next byte might be `\` → ST)
-var g_esc_state = 0;
-# Bytes consumed so far by the in-progress stripped sequence, and the
-# ceiling past which we stop believing it is one. Audit FINDING-006:
-# without a bound, a file opening with a CSI whose final byte (0x40-0x7E)
-# never arrives puts the classifier in state 2 forever and every
-# subsequent byte is dropped — owl renders an empty file, silently, exit
-# 0. 256 is far past any real sequence (a CSI is a handful of bytes; the
-# longest thing here is an OSC, which we drop wholesale anyway).
-var g_esc_len = 0;
-var ESC_MAX_LEN = 256;
 
 # Streaming render state, reset per input.
 var g_line_no       = 1;
@@ -192,6 +198,16 @@ fn resolve_mode() {
         if (load8(nc) != 0) {
             if (g_flag_color != 1) { g_flag_color = 0; }
         }
+    }
+
+    # ndjson is machine output — decorations and colour are meaningless in
+    # it, and the escape-strip path never runs because no file byte is
+    # written raw (token text is JSON-escaped instead). Handled before -p so
+    # `--format=ndjson -p` still emits ndjson rather than silently degrading.
+    if (g_flag_format == FORMAT_NDJSON) {
+        g_decorated = 0;
+        g_want_color = 0;
+        return 0;
     }
 
     # -p overrides everything: no decorations, no color.
@@ -909,8 +925,7 @@ fn _hex_dump_fd(fd, first_buf, first_n) {
 fn render_reset() {
     g_line_no = 1;
     g_at_line_start = 1;
-    g_esc_state = 0;
-    g_esc_len = 0;
+    escape_reset();
     g_render_done = 0;
     g_wrap_col = 0;
     return 0;
@@ -1023,71 +1038,6 @@ fn _strip_active() {
     # Auto: strip in decorated/colored output (where owl emits its
     # own SGR), passthrough otherwise.
     if (g_want_color == 0)        { return 0; }
-    return 1;
-}
-
-# Byte classifier — updates g_esc_state and returns 1 if the byte
-# should be emitted to stdout, 0 if it should be dropped as part of a
-# file-origin terminal escape sequence. Called only when
-# _strip_active() == 1. Strips every ESC-initiated sequence: CSI (ESC
-# [ … final), OSC (ESC ] … BEL/ST), DCS/APC/PM/SOS (ESC P/_/^/X …
-# ST), and single-char escapes (ESC 7, ESC 8, ESC c, …). Owl's own
-# SGR output bypasses this by going through ansi_fg / ansi_reset
-# which write to stdout directly — only bytes loaded from the file
-# are filtered.
-fn _emit_file_byte(c) {
-    if (g_esc_state == 0) {
-        if (c == 0x1B) { g_esc_state = 1; g_esc_len = 1; return 0; }
-        return 1;
-    }
-
-    # ── Two bounds on how much a single sequence may swallow ──────────
-    # (audit FINDING-006). Both abandon the sequence and EMIT the byte
-    # that tripped them, so a malformed escape costs at most the bytes
-    # already consumed rather than the rest of the file.
-    #
-    # A newline can never appear inside a terminal escape sequence — no
-    # CSI, OSC, DCS, APC, PM or SOS form admits a raw LF, and terminals
-    # abandon the sequence on one. Treating it as a hard terminator
-    # bounds the damage to a single line AND keeps g_line_no in step
-    # with the file: a swallowed LF is a line the gutter never counts,
-    # so every subsequent line number would be wrong.
-    if (c == 10) { g_esc_state = 0; g_esc_len = 0; return 1; }
-    g_esc_len = g_esc_len + 1;
-    if (g_esc_len > ESC_MAX_LEN) { g_esc_state = 0; g_esc_len = 0; return 1; }
-
-    if (g_esc_state == 1) {
-        # Classify by introducer byte.
-        if (c == 0x5B) { g_esc_state = 2; return 0; }   # [ → CSI
-        if (c == 0x5D) { g_esc_state = 3; return 0; }   # ] → OSC
-        if (c == 0x50) { g_esc_state = 3; return 0; }   # P → DCS
-        if (c == 0x5F) { g_esc_state = 3; return 0; }   # _ → APC
-        if (c == 0x5E) { g_esc_state = 3; return 0; }   # ^ → PM
-        if (c == 0x58) { g_esc_state = 3; return 0; }   # X → SOS
-        # Two-byte escape (ESC 7, ESC 8, ESC c, ESC D, ESC M, …).
-        g_esc_state = 0;
-        return 0;
-    }
-    if (g_esc_state == 2) {
-        # CSI body: params (0x30–0x3F) and intermediates (0x20–0x2F).
-        # Final byte is in the 0x40–0x7E range.
-        if (c >= 0x40) { if (c <= 0x7E) { g_esc_state = 0; return 0; } }
-        return 0;
-    }
-    if (g_esc_state == 3) {
-        # String body: look for BEL, C1 ST (0x9C), or ESC-starting ST.
-        if (c == 0x07) { g_esc_state = 0; return 0; }
-        if (c == 0x9C) { g_esc_state = 0; return 0; }
-        if (c == 0x1B) { g_esc_state = 4; return 0; }
-        return 0;
-    }
-    if (g_esc_state == 4) {
-        # Saw ESC inside a string; `\\` (0x5C) terminates, anything
-        # else means the ESC was a false alarm and we stay in string.
-        if (c == 0x5C) { g_esc_state = 0; return 0; }
-        g_esc_state = 3;
-        return 0;
-    }
     return 1;
 }
 
@@ -1557,6 +1507,98 @@ fn render_fd(fd, path_for_header) {
     return 0;
 }
 
+# Tail an open fd: render whatever arrives, sleep when it is quiet, repeat.
+# Ends only on read error or signal (Ctrl-C) — like `tail -f`, there is no
+# natural end.
+#
+# The tail is rendered through `render_chunk`, NOT the highlight path, and
+# the whole follow session is forced down that path so the output is
+# consistent from the first byte. That is a deliberate trade, not an
+# oversight: token colouring needs a tokenbuf whose spans cover the bytes
+# being drawn, and a live stream produces spans in absolute stream offsets
+# while the render loop indexes into the chunk it was handed. Reconciling
+# the two means threading a base offset through the render loop and
+# reasoning about tokens that straddle an append boundary — real work with
+# real correctness risk, for a mode whose value is *seeing new lines
+# arrive*. Everything else survives: the line-number gutter, tab expansion,
+# `-A` glyphs, wrap, and — the one that matters — escape stripping, so a
+# log line carrying a terminal escape is filtered exactly as it is in the
+# normal viewer.
+fn _follow_loop(fd) {
+    var buf = alloc(BUFSIZE);
+    if (buf == 0) { return 0 - 1; }
+    var quiet = 0;
+    while (quiet == 0) {
+        var n = file_read(fd, buf, BUFSIZE);
+        if (n < 0) { return 0 - 1; }
+        if (n == 0) {
+            sleep_ms(FOLLOW_POLL_MS);
+            continue;
+        }
+        render_chunk(buf, n);
+    }
+    return 0;
+}
+
+# ndjson render path. Slurps up to HIGHLIGHT_MAX, drives the same
+# streaming tokenizer the highlight path uses, then emits the tokenbuf.
+# `first_buf`/`first_n` are the bytes render_path already read for binary
+# detection, so the stream still sees the file in order.
+#
+# Returns 0 on success, -1 on error (message already reported).
+fn _render_ndjson(fd, path, lang, first_buf, first_n) {
+    if (streq(lang, "plain") == 1) {
+        report_error(path, "no grammar for this file (--format=ndjson needs one; try --language=<name>)");
+        return 0 - 1;
+    }
+    if (_owl_has_grammar(lang) == 0) {
+        report_error(path, "no grammar for this file (--format=ndjson needs one; try --language=<name>)");
+        return 0 - 1;
+    }
+    var s = tokenize_stream_new(lang);
+    if (s == 0) {
+        report_error(path, "tokenizer unavailable");
+        return 0 - 1;
+    }
+    var tb = tokenbuf_new();
+    var big = alloc(HIGHLIGHT_MAX + 1);
+    if (big == 0) {
+        tokenize_stream_free(s);
+        report_error(path, "out of memory");
+        return 0 - 1;
+    }
+    var j = 0;
+    while (j < first_n) { store8(big + j, load8(first_buf + j)); j = j + 1; }
+    if (first_n > 0) { tokenize_stream_feed(s, big, first_n); }
+    var total = first_n;
+    while (total < HIGHLIGHT_MAX) {
+        var got = file_read(fd, big + total, HIGHLIGHT_MAX - total);
+        if (got < 0) {
+            tokenize_stream_free(s);
+            report_error(path, "read error");
+            return 0 - 1;
+        }
+        if (got == 0) { break; }
+        tokenize_stream_feed(s, big + total, got);
+        total = total + got;
+    }
+    # Oversized input is a hard error here rather than the viewer's
+    # quiet degrade-to-plain: a truncated token stream that still looks
+    # well-formed is worse for a consumer than no stream at all.
+    if (total >= HIGHLIGHT_MAX) {
+        var probe[1];
+        if (file_read(fd, &probe, 1) > 0) {
+            tokenize_stream_free(s);
+            report_error(path, "input too large for --format=ndjson");
+            return 0 - 1;
+        }
+    }
+    store8(big + total, 0);
+    tokenize_stream_finish(s, tb);
+    tokenize_stream_free(s);
+    return _emit_ndjson(big, total, tb);
+}
+
 # Render a file path. Performs extension-based language detection, a
 # shebang peek on the first chunk if the extension didn't resolve,
 # and honors --language override. M3b splits into two render paths:
@@ -1658,6 +1700,17 @@ fn render_path(path) {
 
     g_active_lang = lang;
 
+    # ── ndjson ──────────────────────────
+    # Machine output: tokenize and emit, no gutter, no VCS, no wrap, no
+    # header. Needs a grammar — without one there are no tokens to emit,
+    # and silently producing an empty stream would look like "this file has
+    # no content" to a consumer, so it fails loudly instead.
+    if (g_flag_format == FORMAT_NDJSON) {
+        var nrc = _render_ndjson(fd, path, lang, first_buf, first_n);
+        file_close(fd);
+        return nrc;
+    }
+
     # Compute VCS markers before any rendering — gutter (M3a) and
     # highlighted-byte loop (M3b) both read through vcs_mark_for_line.
     # Silent no-op when not in a repo, not decorated, or --no-changes.
@@ -1680,6 +1733,10 @@ fn render_path(path) {
             if (_owl_has_grammar(lang) == 1) { highlight_ok = 1; }
         }
     }
+    # --follow renders the whole session through the streaming path so the
+    # already-present content and the appended tail look the same. See
+    # _follow_loop for why the tail is not token-coloured.
+    if (g_flag_follow == 1) { highlight_ok = 0; }
 
     render_reset();
     if (resolved_show_header() == 1) { emit_header(path); }
@@ -1808,6 +1865,21 @@ fn render_path(path) {
 
     render_chunk(first_buf, first_n);
     var rc = render_fd_loop(fd);
+    # --follow: the file is fully rendered and the fd sits at EOF; hand it
+    # to the tail loop, which blocks until Ctrl-C. `highlight_ok` was forced
+    # to 0 above, so follow always lands here rather than on a highlight
+    # path that has already closed the fd.
+    if (g_flag_follow == 1) {
+        if (rc >= 0) {
+            var frc = _follow_loop(fd);
+            file_close(fd);
+            if (frc < 0) {
+                report_error(path, "read error");
+                return 0 - 1;
+            }
+            return 0;
+        }
+    }
     file_close(fd);
     if (rc < 0) {
         report_error(path, "read error");
@@ -1850,6 +1922,8 @@ fn print_help() {
     println("                         CR as ␍, other controls as ^X");
     println("  -x, --hex              xxd-style hex dump (auto for binary files)");
     println("      --diff             Show only changed lines (uses VCS markers)");
+    println("  -f, --follow           Keep rendering as the file grows (tail -f; no token colour)");
+    println("      --format=<fmt>     text (default) | ndjson (one JSON object per token)");
     println("  -r, --raw-control-chars  Pass file-origin terminal escapes through");
     println("                         unchanged (default: strip in decorated mode)");
     println("      --strip-ansi=<when> auto | always | never (less -R style alias of -r)");
@@ -1965,6 +2039,108 @@ fn set_strip_ansi(value) {
 }
 
 # Parse --tabs=N. Rejects negative values. Returns 0 OK, 1 on error.
+# --format=<text|ndjson>. Returns 0 OK, 1 on a bad value.
+fn set_format(value) {
+    if (streq(value, "text") == 1)   { g_flag_format = FORMAT_TEXT;   return 0; }
+    if (streq(value, "auto") == 1)   { g_flag_format = FORMAT_TEXT;   return 0; }
+    if (streq(value, "ndjson") == 1) { g_flag_format = FORMAT_NDJSON; return 0; }
+    return 1;
+}
+
+# Write one JSON string body (no surrounding quotes) for buf[s..s+len).
+# Escapes exactly what RFC 8259 requires and nothing else: `"` and `\`,
+# the two-character forms for \b \f \n \r \t, and \u00XX for every
+# other C0 control. Bytes >= 0x80 pass through untouched — they are UTF-8
+# continuation/lead bytes and re-encoding them would corrupt the text. This
+# is the one place owl writes file bytes into a structured format, so it
+# has to be exact: an unescaped control byte here would let file content
+# break out of the JSON string and forge a record for whatever consumes it.
+fn _ndjson_escape(buf, s, len) {
+    var i = 0;
+    while (i < len) {
+        var c = load8(buf + s + i);
+        if (c == 34) { print("\\\"", 2); }
+        else { if (c == 92) { print("\\\\", 2); }
+        else { if (c == 8)  { print("\\b", 2); }
+        else { if (c == 12) { print("\\f", 2); }
+        else { if (c == 10) { print("\\n", 2); }
+        else { if (c == 13) { print("\\r", 2); }
+        else { if (c == 9)  { print("\\t", 2); }
+        else { if (c < 32) {
+                    # \u00XX — the only remaining C0 shapes.
+                    print("\\u00", 4);
+                    var hi = c / 16;
+                    var lo = c % 16;
+                    _ndjson_hex_digit(hi);
+                    _ndjson_hex_digit(lo);
+                } else {
+                    if (c == 127) { print("\\u007f", 6); }
+                    else { print(buf + s + i, 1); }
+                } } } } } } } }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _ndjson_hex_digit(v) {
+    var d[1];
+    if (v < 10) { store8(&d, 48 + v); } else { store8(&d, 87 + v); }
+    print(&d, 1);
+    return 0;
+}
+
+# Emit the tokenbuf as newline-delimited JSON, one object per token:
+#
+#   {"kind":"keyword","start":0,"len":2,"line":1,"text":"fn"}
+#
+# `kind`/`start`/`len` are exactly vyakarana's own `vyk --ndjson` shape, so
+# a consumer written against that keeps working; `line` and `text` are
+# owl's additions — a viewer's consumers want to locate and display a span,
+# which is the whole reason to ask owl rather than vyakarana.
+#
+# `line` is 1-based and counted over the buffer, so it matches what the
+# gutter would have printed for the same file.
+fn _emit_ndjson(buf, n, tb) {
+    if (tb == 0) { return 0 - 1; }
+    var count = tokenbuf_count(tb);
+    var i = 0;
+    # Running line number: advance the scan cursor to each token's start,
+    # counting newlines on the way. Tokens are in ascending start order, so
+    # one forward pass over the buffer covers every token.
+    var scan = 0;
+    var line = 1;
+    while (i < count) {
+        var k = tokenbuf_kind(tb, i);
+        var st = tokenbuf_start(tb, i);
+        var ln = tokenbuf_len(tb, i);
+        # Defensive: a token span outside the buffer would read OOB. The
+        # tokenizer should never produce one, but this is the boundary
+        # between owl and a dep, and owl does not get to assume.
+        if (st < 0)      { st = 0; }
+        if (st > n)      { st = n; }
+        if (ln < 0)      { ln = 0; }
+        if (st + ln > n) { ln = n - st; }
+        while (scan < st) {
+            if (load8(buf + scan) == 10) { line = line + 1; }
+            scan = scan + 1;
+        }
+        print("{\"kind\":\"", 9);
+        var name = kind_name(k);
+        print(name, strlen(name));
+        print("\",\"start\":", 10);
+        fmt_int(st);
+        print(",\"len\":", 7);
+        fmt_int(ln);
+        print(",\"line\":", 8);
+        fmt_int(line);
+        print(",\"text\":\"", 9);
+        _ndjson_escape(buf, st, ln);
+        print("\"}\n", 3);
+        i = i + 1;
+    }
+    return 0;
+}
+
 # Audit FINDING-010: this accepted any digit string. `--tabs=` or a
 # `tabs =` config line with a huge value made every literal TAB expand
 # into that many spaces — a wedged process (or an unbounded write when
@@ -1998,6 +2174,9 @@ fn set_tabs(value) {
 # dependency-free of main.
 fn should_page() {
     if (g_flag_plain == 1) { return 0; }
+    # ndjson is machine output and --follow has no end to page to.
+    if (g_flag_format == FORMAT_NDJSON) { return 0; }
+    if (g_flag_follow == 1) { return 0; }
     if (g_flag_paging == 0) { return 0; }
     if (is_tty(STDOUT) == 0) { return 0; }
     return 1;
@@ -2058,6 +2237,8 @@ fn main() {
         if (streq(a, "-x") == 1)         { g_flag_hex = 1; i = i + 1; continue; }
         if (streq(a, "--hex") == 1)      { g_flag_hex = 1; i = i + 1; continue; }
         if (streq(a, "--diff") == 1)     { g_flag_diff = 1; i = i + 1; continue; }
+        if (streq(a, "-f") == 1)         { g_flag_follow = 1; i = i + 1; continue; }
+        if (streq(a, "--follow") == 1)   { g_flag_follow = 1; i = i + 1; continue; }
         if (streq(a, "-r") == 1)                     { g_flag_raw_controls = 1; i = i + 1; continue; }
         if (streq(a, "--raw-control-chars") == 1)    { g_flag_raw_controls = 1; i = i + 1; continue; }
 
@@ -2109,6 +2290,16 @@ fn main() {
             i = i + 1;
             continue;
         }
+        v = match_eq_flag(a, "--format");
+        if (v != 0) {
+            if (set_format(v) != 0) {
+                eprint("owl: invalid --format (want text or ndjson)\n", 44);
+                return 2;
+            }
+            i = i + 1;
+            continue;
+        }
+
         v = match_eq_flag(a, "--tabs");
         if (v != 0) {
             if (set_tabs(v) != 0) {

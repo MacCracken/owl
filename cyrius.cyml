@@ -25,40 +25,46 @@ output = "owl"
 # sit — VCS change-marker gutter via sit_diff_path (owl 1.4.0;
 #   replaced the git fork+execve scaffold).
 [deps]
-# owl's own viewer surface needs only the first block (syscalls → assert).
-# The remainder (slice → patra) is sit's transitive stdlib footprint:
-# dist/sit.cyr concatenates sit's full src (incl. the wire/serve/https
-# surface owl never calls), so every symbol it references must resolve at
-# compile time even though DCE strips the unused functions from the binary.
-# The list mirrors `dist/sit.deps` — the sidecar `cyrius distlib` emits
-# next to the bundle — verbatim; that sidecar IS the authority, so on a
-# sit bump diff it against this list rather than guessing.
+# **This list is now what owl REACHES, not what a bundle mentions.**
+# Through 1.4.6 it carried sit's entire transitive footprint (38 entries)
+# because `dist/sit.cyr` concatenates sit's full src — including the
+# wire/serve/https surface owl never calls — and every symbol it names had
+# to resolve at compile time. 1.4.7 moved to `dist/sit-read.cyr`, whose
+# fold contains only the read path, so the tail went with it.
 #
-# ── sakshi / sankoch / sigil / patra are stdlib leaves, not git deps ──
-# They moved here at owl 1.4.5, tracking sit 1.3.6. All four are folded
-# into the cyrius stdlib snapshot (`lib/<name>.cyr` ships in `lib sync
-# --full`), so the `[deps.<name>]` git blocks owl carried through 1.4.4
-# were wrong in the way sit documents at its own 1.3.6: a git pin does
-# not merely select a version for owl — `cyrius deps` overlays the git
-# resolution ON TOP of the snapshot on every build, so a stale pin pushes
-# the older file onto everything downstream of it. The only signal is an
-# unnamed "N bundled lib(s) differ" shadow warning, and `deps --verify`
-# cannot catch it because the lock is written FROM DISK — it records the
-# hash of the downgraded file. patra (1.13.0) and sigil (3.12.7) made the
-# same change upstream for the same reason.
+# Dropped at 1.4.7 (16): slice, fnptr, thread, thread_local, sync, bench,
+# net, mmap, dynlib, fdlopen, tls, tls_native, ws, http, sandhi, sakshi.
+# Every one was there for sit's network / signing / threading code, none of
+# which the read fold contains.
 #
-# ⚠ Do NOT re-add these as `[deps.<name>]` git blocks. Pinning a version
-# for them means pinning the toolchain — the `cyrius` pin in [package] is
-# that lever, and the only one.
+# KEPT, and not obvious: `ct`, `keccak`, `bayan`, `random`. The generated
+# sidecar does NOT list them — it under-reports, exactly as sit's own
+# manifest warns ("transitive stdlib resolution doesn't follow through
+# enum / constant references"). sigil's crypto primitives reach `u256_*`
+# and `ct_select` (ct + bayan, which is where the old bigint module was
+# folded at 6.1.24), `_keccak_*` / `shake256` (keccak), and `random_bytes`
+# (random). They were found the only reliable way — by trimming to the
+# sidecar and reading the link errors — not by inspection. Do the same on
+# the next bump rather than trusting either list alone.
 #
-# `random` (added owl 1.4.1) and `thread_local` (added 1.4.5) are the two
-# entries that are load-bearing at RUNTIME rather than link time, so they
-# are declared explicitly rather than left to the transitive arc: sigil
-# sources ed25519 entropy through `random_bytes`, and both sigil's crypto
-# bank and patra's storage slots call `thread_local_alloc`/`_get`/`_set`.
-# owl reaches neither path, but an undeclared module of this class fails
-# as a SIGILL at runtime, not as a build error — the shape of the missing
-# `random` bug at owl 1.4.1.
+# Start from the union of the two generated sidecars — `dist/sit-read.deps`
+# (16) and `dist/vyakarana.deps` (11); owl's own surface is already a subset
+# of them. Then add back whatever the link reports undefined, per the note
+# above. `thread_local` is NOT needed here (patra's storage slots and
+# sigil's crypto bank reach it only from write paths the read fold omits) —
+# it was required through 1.4.6 and dropping it is safe only for this fold.
+#
+#   owl's own viewer surface
+#     syscalls/alloc/fmt/io — required baseline
+#     str/string/vec        — file content, paths, multi-file list
+#     args                  — CLI flag parsing (M0, §3.3)
+#     fs                    — reading files by path (M1, §3.2)
+#     hashmap               — language + theme tables (M3, §5.1/§5.2)
+#     process               — pager spawn (M4, §7)
+#     assert                — tests/owl.tcyr
+#   reached through sit-read's diff path
+#     chrono/tagged/freelist + sankoch (zlib), sigil (hashing),
+#     patra (B+tree object store)
 stdlib = [
     "syscalls",
     "alloc",
@@ -73,31 +79,15 @@ stdlib = [
     "process",
     "tagged",
     "assert",
-    "slice",
     "chrono",
-    "fnptr",
-    "thread",
-    "thread_local",
-    "sync",
     "freelist",
-    "bayan",
-    "ct",
-    "keccak",
-    "random",
-    "bench",
-    "net",
-    "mmap",
-    "dynlib",
-    "fdlopen",
-    "tls",
-    "tls_native",
-    "ws",
-    "http",
-    "sandhi",
-    "sakshi",
     "sankoch",
     "sigil",
     "patra",
+    "ct",
+    "keccak",
+    "bayan",
+    "random",
 ]
 
 [deps.vyakarana]
@@ -113,13 +103,27 @@ modules = ["dist/vyakarana.cyr"]
 # object-store stack (patra B+tree store, sigil hashing, sankoch
 # compression, sakshi) — DCE strips the unused serve/wire/http surface.
 #
-# sit also publishes a lean read-only profile, `dist/sit-read.cyr`, built
-# for exactly this consumer (its manifest names owl's gutter markers) —
-# same public API, network + signing stack cut, 16 stdlib leaves instead
-# of 38. Adopting it is a real simplification but it changes what owl
-# links, so it is deliberately NOT folded into this refresh; see
-# docs/development/state.md §Next up.
+# **owl consumes the READ profile as of 1.4.7.** `dist/sit-read.cyr` is
+# sit's `[lib.read]` fold — the same public API built from only the read
+# path, with the signing module and the entire network stack (wire /
+# wire_http / serve) cut. sit's own manifest names owl's gutter markers as
+# the motivating consumer. 8.6k bundle lines instead of 13.5k, and the
+# sidecar `dist/sit-read.deps` lists 16 stdlib leaves instead of 38.
+#
+# Two things this buys beyond size. The full bundle references stdlib
+# globals a consumer's compile doesn't re-export and leaves its wire_ssh /
+# async transport symbols unresolved, so owl's link emitted 15 `undefined
+# function` warnings that were pure noise — a real one would have hidden in
+# them. Those are gone. And `[deps].stdlib` now lists what owl actually
+# REACHES rather than what sit's dead code happens to mention.
+#
+# The read profile keeps reflog / index / commit / merge: they ARE on the
+# read path (status honours .gitignore + the index; reading HEAD parses its
+# commit object into a tree; ref resolution consults the reflog). Three
+# `sign` symbols stay unresolved as dead-path placeholders, referenced only
+# by commit's signing path which the read API never calls — that is by
+# design upstream, not a missing dep.
 [deps.sit]
 git = "https://github.com/MacCracken/sit.git"
 tag = "1.6.1"
-modules = ["dist/sit.cyr"]
+modules = ["dist/sit-read.cyr"]

@@ -1,0 +1,325 @@
+# src/fetch.cyr — remote file fetch over http:// and https:// (1.4.7)
+#
+# ⚠ **NOT WIRED INTO THE BUILD.** `src/main.cyr` does not include this file
+# and `[deps].stdlib` does not carry the network modules it needs, so
+# nothing here is compiled today. It is complete and reviewable, and
+# enabling it is two changes: add `include "src/fetch.cyr"` to main.cyr's
+# chain, and add net/mmap/dynlib/fdlopen/tls/tls_native/ws/http/sandhi
+# (plus slice/fnptr/thread/sync) back to `[deps].stdlib`.
+#
+# Why it is parked, all three reasons independently sufficient:
+#
+#   1. **It cannot be verified here.** `sandhi_conn_open_fully_timed`
+#      returns 0 with `sandhi_conn_last_open_err() == SANDHI_CONN_OPEN_TIMEOUT`
+#      for EVERY target tried — a known-good local `python3 -m http.server`
+#      on 127.0.0.1, the same by hostname, and 127.0.0.1:22 — with the
+#      sandbox both on and off, while `curl` reaches the same server fine.
+#      That is a transport-level failure below owl. Shipping a network
+#      feature whose happy path has never once executed is not something a
+#      viewer should do.
+#   2. **It costs 521,352 bytes** (measured: 2,948,696 → 3,470,048 DCE).
+#      That gives back 81% of the 640 KB that adopting `dist/sit-read.cyr`
+#      just won, which is the other headline of this release.
+#   3. **It is new inbound network attack surface** — TLS, HTTP framing,
+#      server-controlled headers — landing one release after the 1.4.6
+#      audit. It deserves its own audit pass, not a ride-along.
+#
+# Not tested either, and deliberately so: a test would have to include this
+# file, which drags in the sandhi symbols `fetch_url` references, which
+# means re-adding the whole network dep set — the thing being avoided. The
+# pure helpers (`fetch_is_url`, `_fetch_status`, `_fetch_body_start`,
+# `_fetch_hdr_is`, `_fetch_build_request`) would split out cleanly into a
+# transport-free unit if that becomes worth doing when this is enabled.
+#
+# ── design ──────────────────────────
+#
+# `owl https://example.com/main.rs` reads a URL the way it reads a path.
+# The body is handed to the SAME render path a local file takes, so the
+# language detection, gutter, wrap and — the one that matters — the
+# file-origin escape stripping all apply to remote bytes unchanged.
+#
+# All network code lives here, behind three functions (`fetch_is_url`,
+# `fetch_url`, `fetch_len`), the same containment rule `src/vcs.cyr` uses
+# for the VCS backend: swapping the transport is a single-file rewrite.
+#
+# Posture
+# -------
+# This is owl's only inbound network surface and it is deliberately the
+# narrowest thing that does the job:
+#
+#   - **Two schemes only.** http:// and https://. Anything else is a path.
+#   - **No redirect following.** A 3xx reports its Location and exits
+#     non-zero rather than chasing it. Following redirects means
+#     re-validating scheme and host on every hop, and a viewer has no
+#     business deciding that silently — the user can look at the target and
+#     re-run. This is a deliberate non-feature.
+#   - **Hard size cap** (`FETCH_MAX`). The body is bounded before it is
+#     rendered, so a server that streams forever cannot exhaust memory.
+#   - **Explicit timeouts** on connect, read and write, so a black-holed
+#     host fails instead of hanging a terminal.
+#   - **Nothing is written to disk**, and no credential, cookie or
+#     authentication header is ever sent or stored.
+#   - **Non-2xx is an error**, reported with the status, not rendered.
+#     Rendering an error page as if it were the file you asked for is how
+#     a viewer lies to you.
+#
+# What owl trusts here is sandhi's TLS and URL parsing, which is the same
+# boundary the rest of AGNOS uses. owl adds no crypto of its own.
+
+var FETCH_MAX        = 16777216;   # 16 MB body ceiling, matches HIGHLIGHT_MAX
+var FETCH_HDR_MAX    = 65536;      # response headers must fit in this
+var FETCH_CONNECT_MS = 10000;
+var FETCH_IO_MS      = 30000;
+
+var g_fetch_len = 0;               # bytes in the last successful fetch
+
+# Length of the buffer returned by the last successful `fetch_url`.
+fn fetch_len() { return g_fetch_len; }
+
+# Does `arg` name a URL owl should fetch rather than a path to open?
+# Scheme match is exact and case-sensitive: a file literally named
+# `https:/...` on disk is vanishingly unlikely, but treating only the two
+# real prefixes as URLs keeps the rule easy to state.
+fn fetch_is_url(arg) {
+    if (arg == 0) { return 0; }
+    var n = strlen(arg);
+    if (n >= 7) { if (memeq(arg, "http://", 7) == 1)  { return 1; } }
+    if (n >= 8) { if (memeq(arg, "https://", 8) == 1) { return 1; } }
+    return 0;
+}
+
+# The path component of a URL, for extension-based language detection.
+# Returns a pointer into sandhi's parsed URL, or "" when there is none.
+fn fetch_url_path(url) {
+    var u = sandhi_url_parse(url);
+    if (u == 0) { return ""; }
+    var p = sandhi_url_path(u);
+    if (p == 0) { return ""; }
+    return p;
+}
+
+# Emit `owl: <url>: <reason>` — the same shape report_error uses, with the
+# URL sanitized: it came off the command line, but it is echoed back to a
+# terminal and a control byte in it would inject ANSI (audit FINDING-002).
+fn _fetch_err(url, reason) {
+    eprint("owl: ", 5);
+    eprint_sanitized(url, strlen(url));
+    eprint(": ", 2);
+    eprint(reason, strlen(reason));
+    eprint("\n", 1);
+    return 0;
+}
+
+# Build "GET <path> HTTP/1.1\r\nHost: <host>\r\n..." into a fresh buffer.
+# `Connection: close` so the server ends the body with EOF and owl does not
+# have to implement keep-alive framing. No Accept-Encoding, so no
+# compressed body to decode. No cookies, no auth, no referrer.
+fn _fetch_build_request(host, path) {
+    var hlen = strlen(host);
+    var plen = strlen(path);
+    if (plen == 0) { path = "/"; plen = 1; }
+    var a = "GET ";
+    var b = " HTTP/1.1\r\nHost: ";
+    var c = "\r\nUser-Agent: owl\r\nAccept: */*\r\nConnection: close\r\n\r\n";
+    var alen = strlen(a);
+    var blen = strlen(b);
+    var clen = strlen(c);
+    var total = alen + plen + blen + hlen + clen + 1;
+    var out = alloc(total);
+    if (out == 0) { return 0; }
+    var o = 0;
+    var i = 0;
+    while (i < alen) { store8(out + o, load8(a + i)); o = o + 1; i = i + 1; }
+    i = 0;
+    while (i < plen) { store8(out + o, load8(path + i)); o = o + 1; i = i + 1; }
+    i = 0;
+    while (i < blen) { store8(out + o, load8(b + i)); o = o + 1; i = i + 1; }
+    i = 0;
+    while (i < hlen) { store8(out + o, load8(host + i)); o = o + 1; i = i + 1; }
+    i = 0;
+    while (i < clen) { store8(out + o, load8(c + i)); o = o + 1; i = i + 1; }
+    store8(out + o, 0);
+    return out;
+}
+
+# Status code from "HTTP/1.1 200 OK". Returns 0 if the line is not a
+# status line we recognise — treated as a protocol error by the caller
+# rather than optimistically rendering whatever followed.
+fn _fetch_status(buf, n) {
+    if (n < 12) { return 0; }
+    if (memeq(buf, "HTTP/1.", 7) == 0) { return 0; }
+    # "HTTP/1.x " → code starts at 9.
+    var d0 = load8(buf + 9);
+    var d1 = load8(buf + 10);
+    var d2 = load8(buf + 11);
+    if (d0 < 48) { return 0; }
+    if (d0 > 57) { return 0; }
+    if (d1 < 48) { return 0; }
+    if (d1 > 57) { return 0; }
+    if (d2 < 48) { return 0; }
+    if (d2 > 57) { return 0; }
+    return (d0 - 48) * 100 + (d1 - 48) * 10 + (d2 - 48);
+}
+
+# Offset just past the CRLFCRLF that ends the headers, or -1 if the
+# response never produced one within FETCH_HDR_MAX.
+fn _fetch_body_start(buf, n) {
+    var limit = n;
+    if (limit > FETCH_HDR_MAX) { limit = FETCH_HDR_MAX; }
+    var i = 0;
+    while (i + 3 < limit) {
+        if (load8(buf + i) == 13) {
+            if (load8(buf + i + 1) == 10) {
+                if (load8(buf + i + 2) == 13) {
+                    if (load8(buf + i + 3) == 10) { return i + 4; }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+# Print the `Location:` header of a 3xx, if present, so the user can see
+# where the server wanted to send them. Case-insensitive on the header
+# name; the value is sanitized like any other server-supplied bytes.
+fn _fetch_report_location(buf, hdr_end) {
+    var i = 0;
+    while (i + 9 < hdr_end) {
+        var c = load8(buf + i);
+        if (c == 76) { i = i; }                 # 'L'
+        if (c == 108) { i = i; }                # 'l'
+        var hit = 0;
+        if (c == 76)  { hit = 1; }
+        if (c == 108) { hit = 1; }
+        if (hit == 1) {
+            if (_fetch_hdr_is(buf, i, "ocation:") == 1) {
+                var v = i + 9;
+                while (v < hdr_end) {
+                    if (load8(buf + v) != 32) { break; }
+                    v = v + 1;
+                }
+                var e = v;
+                while (e < hdr_end) {
+                    if (load8(buf + e) == 13) { break; }
+                    if (load8(buf + e) == 10) { break; }
+                    e = e + 1;
+                }
+                eprint("owl:   Location: ", 17);
+                eprint_sanitized(buf + v, e - v);
+                eprint("\n", 1);
+                return 0;
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Case-insensitive compare of buf[at..] against the lowercase `s`.
+fn _fetch_hdr_is(buf, at, s) {
+    var n = strlen(s);
+    var i = 0;
+    while (i < n) {
+        var c = load8(buf + at + 1 + i);
+        if (c >= 65) { if (c <= 90) { c = c + 32; } }
+        if (c != load8(s + i)) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# Fetch `url`. On success returns a pointer to the body and sets
+# `fetch_len()`; on failure reports to stderr and returns 0.
+fn fetch_url(url) {
+    g_fetch_len = 0;
+
+    var u = sandhi_url_parse(url);
+    if (u == 0) { _fetch_err(url, "malformed URL"); return 0; }
+
+    var scheme = sandhi_url_scheme(u);
+    var host   = sandhi_url_host(u);
+    var port   = sandhi_url_port(u);
+    var path   = sandhi_url_path(u);
+    if (host == 0)        { _fetch_err(url, "URL has no host"); return 0; }
+    if (load8(host) == 0) { _fetch_err(url, "URL has no host"); return 0; }
+
+    # sandhi_url_scheme returns an ENUM (SANDHI_URL_HTTP / _HTTPS), not a
+    # string — comparing it with streq would dereference an integer.
+    var use_tls = 0;
+    if (scheme == SANDHI_URL_HTTPS) { use_tls = 1; }
+
+    var req = _fetch_build_request(host, path);
+    if (req == 0) { _fetch_err(url, "out of memory"); return 0; }
+
+    var conn = sandhi_conn_open_fully_timed(host, port, use_tls, host,
+                                            FETCH_CONNECT_MS, FETCH_IO_MS, FETCH_IO_MS);
+    if (conn == 0) {
+        if (use_tls == 1) { _fetch_err(url, "connection failed (TLS handshake or DNS/connect)"); }
+        else              { _fetch_err(url, "connection failed (DNS or connect)"); }
+        return 0;
+    }
+
+    if (sandhi_conn_send_all(conn, req, strlen(req)) < 0) {
+        sandhi_conn_close(conn);
+        _fetch_err(url, "send failed");
+        return 0;
+    }
+
+    # Read until EOF or the cap. `Connection: close` means the server ends
+    # the body by closing, so EOF is the terminator and there is no chunked
+    # framing to unpick. The cap is checked BEFORE each recv so a hostile
+    # server cannot push one oversized chunk past it.
+    var cap = FETCH_MAX + FETCH_HDR_MAX;
+    var buf = alloc(cap + 1);
+    if (buf == 0) {
+        sandhi_conn_close(conn);
+        _fetch_err(url, "out of memory");
+        return 0;
+    }
+    var total = 0;
+    var reading = 1;
+    var truncated = 0;
+    while (reading == 1) {
+        if (total >= cap) { truncated = 1; reading = 0; continue; }
+        var n = sandhi_conn_recv(conn, buf + total, cap - total);
+        if (n <= 0) { reading = 0; continue; }
+        total = total + n;
+    }
+    sandhi_conn_close(conn);
+
+    if (total == 0) { _fetch_err(url, "empty response"); return 0; }
+
+    var status = _fetch_status(buf, total);
+    if (status == 0) { _fetch_err(url, "not an HTTP response"); return 0; }
+
+    var body = _fetch_body_start(buf, total);
+    if (body < 0) { _fetch_err(url, "malformed response headers"); return 0; }
+
+    if (status < 200 || status > 299) {
+        eprint("owl: ", 5);
+        eprint_sanitized(url, strlen(url));
+        eprint(": HTTP ", 7);
+        fmt_int_fd(2, status);
+        eprint("\n", 1);
+        # A redirect is the one non-2xx worth explaining: owl does not
+        # follow them by design, so show the target and let the user decide.
+        if (status >= 300) {
+            if (status <= 399) { _fetch_report_location(buf, body); }
+        }
+        return 0;
+    }
+
+    var blen = total - body;
+    if (blen > FETCH_MAX) { blen = FETCH_MAX; truncated = 1; }
+    if (truncated == 1) {
+        eprint("owl: ", 5);
+        eprint_sanitized(url, strlen(url));
+        var msg = ": response exceeds the 16 MB fetch cap, showing the first 16 MB\n";
+        eprint(msg, strlen(msg));
+    }
+
+    store8(buf + body + blen, 0);
+    g_fetch_len = blen;
+    return buf + body;
+}

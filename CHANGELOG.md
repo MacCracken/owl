@@ -6,6 +6,177 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.4.7] — 2026-08-22 — sit's read-only fold, `--format=ndjson`, `--follow`, and a fuzz harness that found a hole in 1.4.6's fix
+
+Closes out the 1.4.x follow-up list. Two of the four items landed as
+planned, one landed and immediately paid for itself, and one is parked with
+its reasons written down.
+
+### Added
+
+- **`--format=ndjson`** — one JSON object per token, for tooling consumers:
+
+  ```
+  {"kind":"keyword","start":0,"len":2,"line":1,"text":"fn"}
+  ```
+
+  `kind`/`start`/`len` are exactly vyakarana's own `vyk --ndjson` shape, so
+  anything written against that keeps working; `line` and `text` are owl's
+  additions, since a viewer's consumers want to locate and display a span —
+  which is the reason to ask owl rather than vyakarana. Machine output, so
+  it forces decorations and colour off and never pages. It needs a grammar
+  and says so loudly rather than emitting an empty stream, and oversized
+  input is a hard error rather than the viewer's quiet degrade-to-plain: a
+  truncated token stream that still parses is worse for a consumer than no
+  stream.
+
+  The escaping is exact — `"` and `\`, the two-character forms for
+  `\b \f \n \r \t`, `\u00XX` for every other C0 and DEL, and bytes ≥ 0x80
+  passed through untouched as UTF-8. Verified by reconstruction: a file
+  containing every C0 byte, DEL, a quote, a backslash and multi-byte UTF-8
+  (`é 中 🦉`) round-trips from the emitted `text` fields to the original 53
+  bytes exactly. A raw ESC in a file comes out as `\u001b`, so file content
+  cannot break out of the JSON string.
+
+- **`--follow` / `-f`** — render the file, then keep rendering as bytes are
+  appended, like `tail -f`. Forces paging off (there is no end to page to).
+
+  The tail is **not token-coloured**, and the whole session is forced down
+  the streaming path so it is consistent from the first byte rather than
+  changing appearance partway. That is a deliberate trade: colouring needs
+  a tokenbuf whose spans cover the bytes being drawn, and a live stream
+  produces absolute offsets while the render loop indexes into the chunk it
+  was handed — real work with real correctness risk, for a mode whose value
+  is watching new lines arrive. Everything else survives, including the
+  part that matters: **escape stripping applies to appended bytes**, so a
+  log line carrying a terminal escape is filtered exactly as in the normal
+  viewer (verified: an appended OSC 52 clipboard write renders as `ABC`).
+
+- **`tests/owl.fcyr` is a real fuzz harness**, not a reserved slot — the
+  1.4.6 audit's own recommendation. Five invariants over the escape
+  classifier, each A/B-verified against a deliberately broken build. See
+  §Security for what it found on its first run.
+
+- **`src/escape.cyr`** — the escape classifier, split out of `main.cyr`. It
+  was always a self-contained state machine over two globals; giving it a
+  file makes it directly includable by the harness, which is why the split
+  happened. No behaviour change in the move.
+
+### Security
+
+- **HIGH — the escape ceiling added in 1.4.6 could emit a raw ESC
+  (FINDING-013).** FINDING-006's fix bounded a stripped sequence and, at
+  either bound, "abandoned the sequence and emitted the byte that tripped
+  it". For the newline bound that is right — an LF is content. For the byte
+  ceiling it is not: the tripping byte can itself be `0x1B`, and owl then
+  wrote a raw ESC to the terminal and handed it the following bytes as a
+  fresh sequence. That re-opened the FINDING-001 injection the classifier
+  exists to close, *in the repair for FINDING-006*.
+
+  Reachable only when the ESC lands exactly on the ceiling byte — 254
+  padding bytes after `ESC [` at `ESC_MAX_LEN = 256`. One off-by-one either
+  way and the state-0 handler catches it correctly, which is why a
+  hand-written test file misses it and why this was found by fuzzing:
+
+  ```
+  1.4.6: ^[]52;c;cHduZWQ=^GTAIL   ← raw ESC + a complete OSC 52 clipboard write
+  1.4.7: TAIL                      ← 0 ESC bytes
+  ```
+
+  Fixed by starting a new sequence instead: an ESC is never content, so
+  there is no case where emitting one is correct.
+
+- **The harness needed two attempts before it proved anything, and that is
+  worth recording.** Two earlier drafts of the bounded-suppression
+  invariant **passed against a build with the ceiling deleted** — first
+  because the random byte distribution emitted newlines, which reset the
+  machine through the *other* bound; then, after that was fixed, because it
+  emitted ESCs, which legitimately restart the budget. Both read like
+  coverage and tested nothing. The invariant only acquired teeth once the
+  ceiling round was made deterministic — open with `ESC [`, then feed only
+  CSI parameter bytes, so nothing in the stream can terminate the sequence
+  or restart the budget. The harness now also asserts the ceiling actually
+  fired and fails loudly if it did not: a test that cannot prove it
+  exercised its own subject should say so rather than pass quietly.
+
+### Changed
+
+- **owl consumes sit's read-only fold, `dist/sit-read.cyr`** (available
+  since sit 1.3.0; sit's manifest names owl's gutter markers as the
+  motivating consumer). Same public API, with the signing module and the
+  entire network stack cut.
+
+  | | 1.4.6 | 1.4.7 |
+  |---|---|---|
+  | DCE binary | 3,589,048 | **2,953,112** (−17.7%) |
+  | `[deps].stdlib` | 38 entries | **22** |
+  | `undefined function` link warnings | 15 | **3** |
+
+  The three remaining are `load_signing_seed` / `sign_commit_body` /
+  `verify_commit_body`, which sit documents as deliberate dead-path
+  placeholders in the read fold. The other twelve were pure noise — a real
+  one could have hidden in them.
+
+  Dropped: `slice`, `fnptr`, `thread`, `thread_local`, `sync`, `bench`,
+  `net`, `mmap`, `dynlib`, `fdlopen`, `tls`, `tls_native`, `ws`, `http`,
+  `sandhi`, `sakshi`. **Kept, and not obvious:** `ct`, `keccak`, `bayan`,
+  `random` — the generated sidecar does not list them, exactly as sit's
+  manifest warns ("transitive stdlib resolution doesn't follow through enum
+  / constant references"). sigil's crypto primitives reach `u256_*` and
+  `ct_select` (`ct` + `bayan`, where the old bigint module was folded),
+  `_keccak_*` / `shake256`, and `random_bytes`. They were found by trimming
+  to the sidecar and reading the link errors, not by inspection — do the
+  same on the next bump.
+
+### Not shipped
+
+- **URL / remote-file support is written but parked**, in `src/fetch.cyr`,
+  not included in the build. Three independent reasons, any one sufficient:
+
+  1. **It cannot be verified here.** `sandhi_conn_open_fully_timed` returns
+     0 with `SANDHI_CONN_OPEN_TIMEOUT` for *every* target tried — a
+     known-good local `python3 -m http.server` by IP, the same by hostname,
+     and `127.0.0.1:22` — with the sandbox both on and off, while `curl`
+     reaches the same server fine. That is a transport failure below owl.
+     Shipping a network feature whose happy path has never once executed is
+     not something a file viewer should do.
+  2. **It costs 521,352 bytes** (measured: 2,948,696 → 3,470,048), giving
+     back 81% of the 640 KB the sit-read swap just won.
+  3. **It is new inbound network attack surface** — TLS, HTTP framing,
+     server-controlled headers — one release after the 1.4.6 audit. It
+     deserves its own audit pass, not a ride-along.
+
+  The module is complete and reviewable: two schemes only, no redirect
+  following (a 3xx reports its `Location` and exits non-zero), hard size
+  cap, explicit timeouts, nothing written to disk, no credentials ever
+  sent, non-2xx is an error rather than a rendered error page. Enabling it
+  is two changes, both listed in its header.
+
+- **Native AGNOS theming** stays blocked upstream until AGNOS ships its
+  system-wide theming primitive. owl's kind_name-keyed theme layer (1.3.0)
+  remains the prep; the swap is mechanical when it lands.
+
+### Fixed
+
+- One bug found while writing `fetch.cyr` and worth noting even though the
+  module is parked: `sandhi_url_scheme` returns an **enum**, not a string,
+  so the original `streq(scheme, "https")` would have dereferenced an
+  integer. Corrected to compare against `SANDHI_URL_HTTPS`.
+
+### Notes
+
+- **Two upstream filings written up**, in `docs/development/upstream/`:
+  the cyrius `getenv` 8 KB window (INFO-002 from the 1.4.6 audit — measured:
+  `NO_COLOR=1` honoured with a small environment, silently ignored with one
+  over 8 KB), and the `_stream_grow` collision between vyakarana and
+  sankoch, with everything owl already verified so neither project has to
+  re-derive it.
+- **Gates**: `cyrius test` 7 passed / 0 failed; `cyrius fuzz` 1 passed / 0
+  failed (5 invariants); `sh scripts/smoke.sh` green including the new
+  FINDING-013 gate; `cyrius lint src/*.cyr` clean on the two new modules;
+  host, `--agnos` and both DCE builds clean; plain mode byte-identical to
+  `cat`.
+
 ## [1.4.6] — 2026-08-22 — P(−1) audit: a 2-byte file prefix could hide the whole file
 
 A full audit, hardening and repair pass over all six `src/*.cyr` modules
