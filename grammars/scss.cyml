@@ -27,9 +27,6 @@
 #
 # Known gaps (not triggered by the stand-in):
 #   - Float numbers (same gap as css.cyml).
-#   - Sass placeholder selectors `%placeholder`. The `%`
-#     would need to be in `ident_start` or operators. Cosmetic;
-#     not in the stand-in.
 
 [grammar]
 name = "scss"
@@ -61,6 +58,11 @@ operators = [
     "&", "|", "~",
     "!", "?",
     "=",
+    # `%` is both a placeholder-selector sigil (`%btn`, `@extend
+    # %btn`) and the percent unit (`width: 50%`). `\` escapes a
+    # character in an identifier or selector (`.w-1\/2`).
+    # The `%` unit fix landed in css at 2.1.1; scss was missed.
+    "%", "\\",
 ]
 
 punctuation = [

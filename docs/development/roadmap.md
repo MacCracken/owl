@@ -19,6 +19,11 @@ forward-looking. Full prose in `CHANGELOG.md`.
 
 | Release | Date       | Headline                                                |
 |---------|------------|---------------------------------------------------------|
+| 1.4.5   | 2026-08-22 | cyrius 6.5.35 + deps to latest; the four object-store layers become stdlib leaves; `--agnos` target returns; 46 grammars (openqasm) |
+| 1.4.4   | 2026-07-07 | `--diff` discovers the file's own repo (walk-up), warns when outside |
+| 1.4.3   | 2026-07-06 | VCS gutter works on AGNOS (via the sit repo-root port)   |
+| 1.4.2   | 2026-06-22 | cyrius 6.2.37 (agnosys-retirement line); vendored `lib/` refresh |
+| 1.4.1   | 2026-06-19 | Toolchain + dep refresh; `random` stdlib declaration     |
 | 1.4.0   | 2026-06-14 | SIT dependency swap — VCS gutter via sit_diff_path (off git); cyrius 6.2.2 + vyakarana 2.2.3 |
 | 1.3.8   | 2026-06-09 | agnos `owl FILE` fix (top-level entry; cyrius 6.1.14)   |
 | 1.3.7   | 2026-06-09 | AGNOS target support — `owl --agnos`; cyrius 6.0.56     |
@@ -167,7 +172,8 @@ have to ship in order.
   → 1.2.6 lockstep cascade tracking vyakarana 1.2.x → 1.8.0
   and extended through 1.3.0 (cyml + llvm_ir) and 1.3.2–1.3.5
   (the 2.1.x batch — PowerShell, Crystal, Julia, Vue, Svelte,
-  Nix, Terraform). Bundled palette stands at **45 grammars**.
+  Nix, Terraform) and 1.4.5 (openqasm, from the 2.3.5 drop).
+  Bundled palette stands at **46 grammars**.
   Per-language wiring template stays valid for any future
   vyakarana grammar drop: a `lang_name` / `lang_exts` entry
   in `src/lang.cyr` + matching `_owl_load_grammar` calls in

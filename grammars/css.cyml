@@ -76,11 +76,15 @@ char_literal  = false
 operators = [
     "^=", "$=", "*=", "~=", "|=",
     "::",
-    "+", "-", "*", "/",
+    "+", "-", "*", "/", "%",
     "<", ">",
     "&", "|", "~",
     "!", "?",
     "=",
+    # `\` escapes a character in an identifier or selector —
+    # `.w-1\/2`, `.md\:flex` (utility-CSS generators emit these
+    # constantly).
+    "\\",
 ]
 
 punctuation = [

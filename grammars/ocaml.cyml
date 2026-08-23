@@ -29,9 +29,6 @@
 #     stand-in. Variable-length-delimiter form — same scanner-
 #     shape gap as Lua's `[==[…]==]`, Ruby/PHP heredocs, Swift
 #     raw strings.
-#   - Polymorphic variants `` `Foo `` (backtick prefix). Not
-#     in the stand-in. Treated as backtick + ident if a corpus
-#     surfaces them (need to add `` ` `` as operator).
 #   - Numeric underscores (`1_000_000`) — number scanner stops
 #     at `_`; cosmetic.
 
@@ -78,6 +75,10 @@ operators = [
     # tokenizes as a regular ident on the next iteration —
     # same fall-through pattern as Rust lifetimes (ADR 0010).
     "'",
+    # Backtick opens a polymorphic-variant tag (`` `Foo ``). `$`
+    # is a legal OCaml operator character — user-defined operators
+    # may be built from any of `! $ % & * + - . / : < = > ? @ ^ | ~`.
+    "`", "$",
 ]
 
 # Punctuation. `;` is statement separator; `;;` (REPL terminator)

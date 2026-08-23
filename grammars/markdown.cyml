@@ -45,6 +45,10 @@ number_0o      = false
 
 special_vars = false
 
+# UTF-8 in prose (em-dashes, smart quotes, accented characters)
+# coalesces into one ident instead of per-byte errors. See ADR 0009.
+unicode_ident = true
+
 # Operators in longest-match order. ATX-heading prefixes (1–6 `#`s),
 # setext-heading underlines (`===`/`---`), emphasis (`**`/`__`/
 # `*`/`_`), strikethrough (`~~`), horizontal rules, blockquote `>`,
@@ -55,23 +59,39 @@ operators = [
     "===", "---", "***", "___",
     "**", "__", "~~",
     "=", "*", "_", "~", "-", "+", "/", "\\",
-    "<", ">", "|", ":", "@", "%", "^", "&", "?", "!",
+    "<", ">", "|", ":", "@", "%", "^", "&", "?", "!", "$",
 ]
 
-# Structural punctuation for links, images, and inline groups.
+# Structural punctuation for links, images, and inline groups,
+# plus the prose characters that carry no markdown meaning.
+#
+# `"` and `'` are here because markdown has no string type — a
+# quote is literal text, exactly like the `,` `;` `.` above.
+# Through 2.3.0 they were in neither list and fell through to
+# TK_ERROR, so any prose containing a quotation mark or an
+# apostrophe (`It's`, `"hi"`) emitted error tokens and made `vyk`
+# exit 1. This repo's own README.md tripped it 8 times.
+# `tests/corpus/concept.md` happens to contain not one `"` or
+# `'`, which is why every gate stayed green. Fixed in 2.3.1.
 punctuation = [
     "[", "]", "(", ")", "{", "}",
     ",", ";", ".",
+    "\"", "'",
 ]
 
 
 # ── Rules ──────────────────────────────────────────────────────────
 
-# Fenced code (`` ``` ... ``` ``) must match before inline code so
-# the 3-byte start wins the longest-match.
+# Fenced code (`` ```<lang>\n...\n``` ``). 1.13.2+: routes the
+# body through the inner grammar named by `<lang>` per ADR 0016.
+# Falls back to one TK_STRING for the body when no tag is given
+# or the tag doesn't match a registered grammar (graceful
+# degradation; same shape as the prior 1.7.0 behaviour). The
+# scanner pipeline runs `compose_fenced` at step 0b, ahead of
+# step 2 pair rules — the 3-byte ` ``` ` start would otherwise be
+# eaten as three separate ` ` ` (inline code) opens.
 [[rules]]
-kind = "string"
-match = "pair"
+match = "compose_fenced"
 start = "```"
 end = "```"
 

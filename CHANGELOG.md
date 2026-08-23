@@ -4,6 +4,139 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+_No unreleased changes._
+
+## [1.4.5] — 2026-08-22 — toolchain `6.5.35`, deps to latest, and the AGNOS target returns
+
+A refresh with no change to owl's viewer/highlighter/VCS behaviour, but two
+structural corrections came with it: the four first-party layers stop being git
+deps, and the `--agnos` build lane comes back after five releases disabled. It is
+also the release that makes owl build again at all — the 1.4.4 pins do not compile
+on `6.5.35`.
+
+Supersedes the in-flight 1.4.4 fix that never shipped — the working tree carried
+an unreleased `sit 1.3.4` / `sigil 3.10.0` bump to repair `--agnos` arity errors.
+That shape does not build on `6.5.35` either (`_sandhi_conn_open_v6_fully_timed_a`
+expects 9 arguments, got 8); the dep refresh below is what actually closes it, so
+the entry is folded here rather than kept.
+
+### Changed
+
+- **Toolchain `6.2.37` → `6.5.35`.** Clears the manifest-vs-wrapper pin drift.
+  CI reads the version straight out of `cyrius.cyml`, so no workflow edit was
+  needed.
+- **vyakarana `2.2.3` → `2.4.0`.** The headline upstream change is **streaming
+  chunk-invariance**: 2.4.0 fixed five independent root causes that made a
+  chunk-fed tokenizer disagree with a whole-buffer one on 13 of 20 corpus files.
+  owl drives the streaming API (`tokenize_stream_new` / `_feed` / `_finish`), so
+  this lands directly on the highlight path — block comments no longer commit
+  early at a chunk boundary, longest-match operator runs no longer split, and pair
+  openers straddling a boundary (`<!--`, python triple-quotes) are no longer
+  mis-scanned.
+- **sit `1.3.4` → `1.6.1`**, tracking its 1.3.5–1.3.8 hardening arc (a `sit merge`
+  SIGSEGV, two memory-safety defects in the git packfile reader, an ssh:// argument
+  injection, and a sankoch >1 MiB object-corruption fix). owl reaches none of those
+  paths — its surface is `sit_repo_open` / `sit_diff_path` / `sit_repo_close` — but
+  the packfile reader **is** on owl's read path when the gutter opens a `.git/` repo.
+- **`sakshi` / `sankoch` / `sigil` / `patra` are no longer `[deps.<name>]` git
+  blocks.** All four are folded into the cyrius stdlib snapshot, so they moved to
+  `[deps].stdlib`; the toolchain pin is now the single version lever for them, and
+  `cyrius.lock` drops from 6 commit pins to 2 (vyakarana + sit). This tracks the
+  same correction sit made at its 1.3.6, and it is not cosmetic: a git pin does not
+  merely select a version for owl, it **overlays** the older file on top of the
+  snapshot for everything downstream, signalled only by an unnamed "N bundled
+  lib(s) differ" warning that `deps --verify` cannot catch (the lock is written
+  from disk, so it records the downgraded file's own hash).
+- **`[deps].stdlib` gains `thread_local`, `sync`, and the four folded layers**, and
+  now mirrors `dist/sit.deps` verbatim. `thread_local` is declaration hygiene of
+  the same class as `random` at 1.4.1 — sigil's crypto bank and patra's storage
+  slots call it on hot paths, and an undeclared module of this class fails as a
+  **runtime** SIGILL rather than a build error.
+- **46 bundled grammars (was 45).** `grammars/` re-synced wholesale from vyakarana
+  2.4.0 — this picked up `openqasm.cyml` (new upstream at 2.3.5) plus real rule
+  changes across 40 existing grammars that owl's copies had drifted behind: 21 new
+  `[[rules]]` blocks, 9 new `escape` declarations, and `unicode_ident = true` on 8
+  grammars. `openqasm` is wired into `src/lang.cyr` (`.qasm`) and both grammar
+  bootstrap lists in `src/main.cyr`, with a new `scripts/smoke.sh` gate
+  (`.qasm` header dispatch, `--language=openqasm` ANSI probe, plain-mode
+  byte-identity) proven non-vacuous by A/B — it fails against a build with the
+  wiring removed.
+
+### Fixed
+
+- **The `sandhi` / `sigil` arity errors that blocked every build.** On `6.5.35`
+  neither the released 1.4.4 pins nor the in-flight working tree compiles:
+  `_sandhi_conn_open_v6_fully_timed_a` expects 9 arguments and gets 8, and (on the
+  1.4.4 pins) `run_capture` expects 5 and gets 2. Both live in materialized `lib/`,
+  which is generated — nothing there was edited. Moving the four layers onto the
+  stdlib fold is what resolves them, because the fold is what stops a stale git pin
+  from overlaying an older file on top of the snapshot.
+
+### Notes on the `_stream_grow` collision
+
+vyakarana and sankoch both define a private `_stream_grow` with incompatible
+signatures **and** incompatible struct layouts — vyakarana's is `(s, needed)` over
+`buf@0 / len@8 / cap@16`, sankoch's is `(ctx)` over `buf@24 / cap@32 / len@40` —
+so the build emits a `duplicate fn` warning. **The direction flipped in this
+release**: under the git-dep ordering sankoch was the later definition, and under
+the stdlib fold vyakarana is. The warning text changes accordingly, which is worth
+knowing before reading it as a regression.
+
+It is inert in both directions, and this was checked directly rather than argued
+from the warning text. A build with sankoch's exact body re-inserted as the last
+definition — reproducing the pre-1.4.5 ordering against the current tree — produces
+**byte-identical** highlighted output to 1.4.5 at 2 KB / 4 KB / 8 KB / 40 KB
+(`VYK_STREAM_INIT_CAP` is 4096, so these span the grow threshold), and a probe that
+exits 42 the instant the winning definition is entered **never fires**: call sites
+inside `lib/vyakarana.cyr` bind to vyakarana's own definition regardless of which
+definition the warning names. Independently, sankoch's only caller of its own
+version (`stream_write`, its streaming-decompress entry) is not on owl's path at
+all — sit reaches sankoch exclusively through one-shot
+`zlib_decompress_with_ratio_cap` / `zlib_compress` — and is confirmed dead in the
+DCE map. This matches the assessment already recorded in `state.md` since 1.4.0.
+
+A repo-wide sweep for the *silent* half of this hazard class — colliding top-level
+globals and enum members, which produce no warning at all, the shape of the patra
+`TK_*` / vyakarana `TK_*` collision at 1.4.0 — found **none** across vyakarana
+against sankoch / sigil / patra / sakshi / sit / bayan / ct / keccak. The function
+collision remains worth an upstream namespacing fix, since inertness here is a
+property of owl's current call graph rather than a guarantee.
+
+### Added
+
+- **The `--agnos` build target is back**, disabled since 1.4.0. The blocker was
+  sit's transitive stdlib tail (`tls` / `net` / `mmap`) not being agnos-ported;
+  sit closed that over 1.3.3–1.3.6 (ssh spawn, then the FS syscall ABI, then the
+  stdlib fold). `cyrius build --agnos` and `CYRIUS_DCE=1 cyrius build --agnos` both
+  link clean and emit a valid ELF (3,565,168 bytes). Re-enabled in `ci.yml` (build
+  + ELF verify) and `release.yml` (build + packaged into the release tarball),
+  both of which carried a standing "re-enable when sit's agnos stdlib lands"
+  instruction. owl's own `#ifdef CYRIUS_TARGET_AGNOS` gates were never removed.
+
+### Notes
+
+- **Binary size ~2.70 MB → ~3.58 MB** (DCE, 3,584,920 bytes; agnos 3,565,168).
+  Compared against 1.4.1's 2,701,824 — the last release that recorded a number —
+  since neither the 1.4.4 release nor the in-flight working tree builds under
+  6.5.35, so no true 1.4.4 baseline binary exists to diff against. The growth is
+  toolchain and dep heft (the 6.2 → 6.5 stdlib arc, vyakarana's streaming rework,
+  sit's 1.3.5–1.3.8 hardening), not owl source — `src/` grew by 4 lines.
+- **Gates**: `cyrius test` 7 passed / 0 failed; `sh scripts/smoke.sh` OK (M0–M8);
+  `cyrius lint src/*.cyr` byte-identical to 1.4.4's findings (20 `exceeds 120
+  characters` on pre-existing comment lines + 2 tracked deferrals — zero new);
+  plain mode byte-identical to `cat`; `--diff` and the gutter verified against a
+  live working-tree change; and `--color=always` output stripped of ANSI verified
+  byte-identical to the input across six files up to 400 KB spanning cyrius, cyml
+  and markdown.
+- **`dist/sit-read.cyr` is the obvious next move and is deliberately not in this
+  release.** sit publishes a lean read-only bundle built for exactly this consumer
+  — its manifest names owl's gutter markers — with the same public API, the signing
+  and network stacks cut, and **16** stdlib leaves instead of 38. It would drop
+  owl's whole sit-only tail (`net` / `mmap` / `tls` / `tls_native` / `ws` / `http` /
+  `sandhi` / …) and silence the 15 `undefined function` link warnings the full
+  bundle emits for its unresolved `wire_ssh` / async transport symbols. It changes
+  what owl links, so it wants its own release rather than riding a dep refresh.
+
 ## [1.4.4] — 2026-07-07 — `--diff` discovers the file's own repo (walk-up), warns when outside
 
 `--diff` and the gutter now find a file's repo by walking **up** from the file's own path —

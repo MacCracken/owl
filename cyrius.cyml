@@ -5,11 +5,12 @@ description = "Observant Watcher of Lines — a file viewer for AGNOS / Cyrius"
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/owl"
 language = "cyrius"
-cyrius = "6.2.37"
+cyrius = "6.5.35"
 
 [build]
 entry = "src/main.cyr"
 output = "owl"
+
 
 # owl's own viewer surface:
 #   syscalls/alloc/fmt/io — required baseline
@@ -19,26 +20,45 @@ output = "owl"
 #   hashmap               — language + theme tables (M3, §5.1/§5.2)
 #   process               — pager spawn (M4, §7)
 #   assert                — tests/owl.tcyr
-# vyakarana — tokenizer library for token-level highlighting (45
-#   bundled grammars, all wired as of owl 1.3.5).
-# sit (+ patra/sigil/sankoch/sakshi) — VCS change-marker gutter via
-#   sit_diff_path (owl 1.4.0; replaced the git fork+execve scaffold).
+# vyakarana — tokenizer library for token-level highlighting (46
+#   bundled grammars, all wired as of owl 1.4.5).
+# sit — VCS change-marker gutter via sit_diff_path (owl 1.4.0;
+#   replaced the git fork+execve scaffold).
 [deps]
 # owl's own viewer surface needs only the first block (syscalls → assert).
-# The remainder (slice → sandhi) is sit's transitive stdlib footprint:
+# The remainder (slice → patra) is sit's transitive stdlib footprint:
 # dist/sit.cyr concatenates sit's full src (incl. the wire/serve/https
 # surface owl never calls), so every symbol it references must resolve at
 # compile time even though DCE strips the unused functions from the binary.
-# Mirrors sit's own [deps].stdlib list (sit 1.0.2). The later 6.x lib-
-# streamlining arc is expected to let owl drop the sit-only tail.
+# The list mirrors `dist/sit.deps` — the sidecar `cyrius distlib` emits
+# next to the bundle — verbatim; that sidecar IS the authority, so on a
+# sit bump diff it against this list rather than guessing.
 #
-# `random` was added at owl 1.4.1 alongside the sit 1.0.1 → 1.0.2 bump:
-# sigil 3.9.1 reworked ed25519 keypair generation to source entropy via
-# the cyrius stdlib `random_bytes` (lib/random.cyr) instead of calling
-# getrandom itself. owl never generates keys, but dist/sit.cyr's
-# concatenated bundle references the symbol, so it must resolve at compile
-# time (DCE strips it from owl's binary). Without it the link leaves
-# random_bytes undefined.
+# ── sakshi / sankoch / sigil / patra are stdlib leaves, not git deps ──
+# They moved here at owl 1.4.5, tracking sit 1.3.6. All four are folded
+# into the cyrius stdlib snapshot (`lib/<name>.cyr` ships in `lib sync
+# --full`), so the `[deps.<name>]` git blocks owl carried through 1.4.4
+# were wrong in the way sit documents at its own 1.3.6: a git pin does
+# not merely select a version for owl — `cyrius deps` overlays the git
+# resolution ON TOP of the snapshot on every build, so a stale pin pushes
+# the older file onto everything downstream of it. The only signal is an
+# unnamed "N bundled lib(s) differ" shadow warning, and `deps --verify`
+# cannot catch it because the lock is written FROM DISK — it records the
+# hash of the downgraded file. patra (1.13.0) and sigil (3.12.7) made the
+# same change upstream for the same reason.
+#
+# ⚠ Do NOT re-add these as `[deps.<name>]` git blocks. Pinning a version
+# for them means pinning the toolchain — the `cyrius` pin in [package] is
+# that lever, and the only one.
+#
+# `random` (added owl 1.4.1) and `thread_local` (added 1.4.5) are the two
+# entries that are load-bearing at RUNTIME rather than link time, so they
+# are declared explicitly rather than left to the transitive arc: sigil
+# sources ed25519 entropy through `random_bytes`, and both sigil's crypto
+# bank and patra's storage slots call `thread_local_alloc`/`_get`/`_set`.
+# owl reaches neither path, but an undeclared module of this class fails
+# as a SIGILL at runtime, not as a build error — the shape of the missing
+# `random` bug at owl 1.4.1.
 stdlib = [
     "syscalls",
     "alloc",
@@ -57,6 +77,8 @@ stdlib = [
     "chrono",
     "fnptr",
     "thread",
+    "thread_local",
+    "sync",
     "freelist",
     "bayan",
     "ct",
@@ -72,11 +94,15 @@ stdlib = [
     "ws",
     "http",
     "sandhi",
+    "sakshi",
+    "sankoch",
+    "sigil",
+    "patra",
 ]
 
 [deps.vyakarana]
 git = "https://github.com/MacCracken/vyakarana.git"
-tag = "2.2.3"
+tag = "2.4.0"
 modules = ["dist/vyakarana.cyr"]
 
 # sit — AGNOS-native VCS. owl consumes sit's library export (ADR 0009
@@ -86,28 +112,14 @@ modules = ["dist/vyakarana.cyr"]
 # a concatenated lib bundle; the diff path transitively reaches sit's
 # object-store stack (patra B+tree store, sigil hashing, sankoch
 # compression, sakshi) — DCE strips the unused serve/wire/http surface.
+#
+# sit also publishes a lean read-only profile, `dist/sit-read.cyr`, built
+# for exactly this consumer (its manifest names owl's gutter markers) —
+# same public API, network + signing stack cut, 16 stdlib leaves instead
+# of 38. Adopting it is a real simplification but it changes what owl
+# links, so it is deliberately NOT folded into this refresh; see
+# docs/development/state.md §Next up.
 [deps.sit]
 git = "https://github.com/MacCracken/sit.git"
-tag = "1.3.2"
+tag = "1.6.1"
 modules = ["dist/sit.cyr"]
-
-[deps.sakshi]
-git = "https://github.com/MacCracken/sakshi.git"
-tag = "2.4.0"
-modules = ["dist/sakshi.cyr"]
-
-[deps.sankoch]
-git = "https://github.com/MacCracken/sankoch.git"
-tag = "2.4.4"
-modules = ["dist/sankoch.cyr"]
-
-[deps.sigil]
-git = "https://github.com/MacCracken/sigil.git"
-tag = "3.9.1"
-modules = ["dist/sigil.cyr"]
-
-[deps.patra]
-git = "https://github.com/MacCracken/patra.git"
-tag = "1.12.9"
-modules = ["dist/patra.cyr"]
----

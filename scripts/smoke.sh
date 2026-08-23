@@ -251,13 +251,14 @@ echo "$tlist" | grep -q "^light$" || fail "--list-themes missing 'light'"
 # vyakarana 1.2.4 → 1.8.0; 1.3.0 added cyml + llvm_ir (vyakarana
 # 1.9.0); 1.3.2 added powershell + crystal + julia (vyakarana 2.1.0);
 # 1.3.3 added vue + svelte (vyakarana 2.1.1); 1.3.4 added nix
-# (vyakarana 2.1.2); 1.3.5 added terraform (vyakarana 2.1.3).
+# (vyakarana 2.1.2); 1.3.5 added terraform (vyakarana 2.1.3);
+# 1.4.5 added openqasm (vyakarana 2.3.5) — 46 grammars.
 llist=$("$BIN" --list-languages)
 for lang in plain shell python javascript typescript rust cyrius c toml json yaml go zig \
             asm_x86_64 asm_aarch64 java kotlin cpp csharp php ruby lua swift \
             elixir ocaml haskell sql graphql protobuf html xml css scss \
             dockerfile makefile ini cyml llvm_ir \
-            powershell crystal julia vue svelte nix terraform; do
+            powershell crystal julia vue svelte nix terraform openqasm; do
     echo "$llist" | grep -q "^$lang\$" || fail "--list-languages missing '$lang'"
 done
 
@@ -653,6 +654,28 @@ case "$out" in
     *$(printf '\033')*) ;;
     *) fail "stdin + --color=always + --language=terraform did not emit ANSI" ;;
 esac
+
+# 1.4.5 — OpenQASM (vyakarana 2.3.5, wired at owl 1.4.5). `.qasm`
+# ext dispatch + ANSI probe. The probe deliberately uses `measure
+# q -> c`: `->` must win longest-match over `-`, and `measure` /
+# `qreg` must colour as keywords while the stdlib gate names (`h`,
+# `cx`) stay idents — they come from qelib1.inc and are
+# user-redefinable, so `keyword` would be wrong (upstream ADR 0004,
+# same call as shell builtins).
+printf 'OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[2];\ncreg c[2];\nh q[0];\ncx q[0], q[1];\nmeasure q -> c;\n' > "$TMPDIR/t.qasm"
+out=$("$BIN" -n "$TMPDIR/t.qasm")
+case "$out" in
+    *"(openqasm)"*) ;;
+    *) fail "extension detection: .qasm should show (openqasm) in header" ;;
+esac
+out=$(printf 'measure q -> c;\n' | "$BIN" --color=always --paging=never --language=openqasm)
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "stdin + --color=always + --language=openqasm did not emit ANSI" ;;
+esac
+# Plain mode stays byte-identical for the new grammar too.
+out=$("$BIN" -p "$TMPDIR/t.qasm" | cmp -s - "$TMPDIR/t.qasm" && echo same || echo differ)
+[ "$out" = "same" ] || fail "plain mode must be byte-identical to cat for .qasm"
 
 # 1.3.6 — HIGHLIGHT_MAX lift. Pre-1.3.6 the cap was 128 KB total
 # input; files past that fell back to plain rendering with a
