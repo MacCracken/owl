@@ -165,12 +165,26 @@ its reasons written down.
 
 ### Notes
 
-- **Two upstream filings written up**, in `docs/development/upstream/`:
-  the cyrius `getenv` 8 KB window (INFO-002 from the 1.4.6 audit — measured:
-  `NO_COLOR=1` honoured with a small environment, silently ignored with one
-  over 8 KB), and the `_stream_grow` collision between vyakarana and
-  sankoch, with everything owl already verified so neither project has to
-  re-derive it.
+- **Two issues filed against cyrius**, in that repo's
+  `docs/development/issues/`, each with a standalone minimal repro:
+  - `2026-08-22-owl-getenv-8kb-environ-window.md` — INFO-002 from the 1.4.6
+    audit. `getenv` reads only the first 8 KB of `/proc/self/environ`, so the
+    same variable is found or not found purely by how many bytes precede it.
+  - `2026-08-22-owl-private-fns-still-collide-across-files.md` — **this one
+    replaces the `_stream_grow` framing carried in 1.4.6's notes, which was
+    wrong.** Cyrius has had `private` / `public` since 6.5.0, so the obvious
+    read was "neither vyakarana nor sankoch scopes its helper". Testing it
+    showed that is not the fix: a `private` fn still loses a `duplicate fn`
+    race to a same-named fn in another file, the private file's *own*
+    internal calls get rebound, declaring `private` in **both** files does
+    not help, and the override **bypasses the arity check that is otherwise
+    a hard error** (`_helper(1,2,3)` against a 1-arg winner compiles and
+    returns 201; the identical mismatch without a duplicate is
+    `error: 'only_one' expects 1 argument, got 3`). Neither library is doing
+    anything wrong, so neither is the right place to file. For scale: **0 of
+    292** first-party source files across vyakarana / sankoch / sigil /
+    patra / sakshi / sit / owl currently declare `private` — and until this
+    is fixed, adopting it would not buy collision safety anyway.
 - **Gates**: `cyrius test` 7 passed / 0 failed; `cyrius fuzz` 1 passed / 0
   failed (5 invariants); `sh scripts/smoke.sh` green including the new
   FINDING-013 gate; `cyrius lint src/*.cyr` clean on the two new modules;

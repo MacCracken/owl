@@ -484,9 +484,11 @@ complete; full owl attack surface audited and hardened.
   read fold, referenced only by commit's signing path the read API
   never calls.
 - The **`duplicate fn '_stream_grow'`** warning (vyakarana vs sankoch)
-  persists and remains inert — verified in both link orderings, see
-  the 1.4.6 notes and the upstream filing in
-  `docs/development/upstream/`.
+  persists and remains inert — verified in both link orderings. Filed
+  at 1.4.7 as a **cyrius** issue, not a library one: `private` exists
+  (6.5.0+) but does not scope symbol resolution, so neither library can
+  currently fix this on its own. See
+  `cyrius/docs/development/issues/2026-08-22-owl-private-fns-still-collide-across-files.md`.
 - Startup targets unchanged on the plain/highlight paths
   (`owl --version` 1–2 ms; grammars still load lazily on first
   highlight).
@@ -671,10 +673,10 @@ All green at 1.4.7 on cyrius `6.5.35`:
 
 Follow-ups opened by the 1.4.6 audit:
 
-~~**Report INFO-002 to cyrius**~~ — **written up at 1.4.7**, in
-[`upstream/2026-08-22-cyrius-getenv-8kb-window.md`](upstream/2026-08-22-cyrius-getenv-8kb-window.md),
-with the `NO_COLOR` measurement and three suggested fixes. Still needs
-filing against the cyrius repo.
+~~**Report INFO-002 to cyrius**~~ — **filed at 1.4.7** as
+`cyrius/docs/development/issues/2026-08-22-owl-getenv-8kb-environ-window.md`,
+with a standalone minimal repro (same variable found or not found purely
+by how many bytes precede it) plus the owl `NO_COLOR` measurement.
 
 ~~**Widen the audit corpus into a fuzz target**~~ — **done at 1.4.7.**
 `tests/owl.fcyr` covers the escape classifier with 5 invariants and
@@ -686,10 +688,19 @@ Follow-ups opened by the SIT swap:
 ~~**Adopt `dist/sit-read.cyr`**~~ — **done at 1.4.7.** −17.7% binary,
 38 → 22 stdlib entries, 15 → 3 link warnings.
 
-- **Upstream namespacing for `_stream_grow`** — written up at 1.4.7 in
-  [`upstream/2026-08-22-stream-grow-symbol-collision.md`](upstream/2026-08-22-stream-grow-symbol-collision.md),
-  including everything owl already verified so neither project has to
-  re-derive it. Still needs filing against vyakarana or sankoch.
+~~**Upstream namespacing for `_stream_grow`**~~ — **re-diagnosed and
+filed at 1.4.7, against cyrius, not against vyakarana or sankoch.**
+The earlier framing here was wrong. Cyrius has had `private` / `public`
+since **6.5.0**, so "neither library scopes its helper" looked like the
+answer — but it is not: a `private` fn still loses a `duplicate fn`
+race to a same-named fn in another file, the private file's *own*
+internal calls get rebound, declaring `private` in both files does not
+help, and the override **bypasses the arity check that is otherwise a
+hard error**. All four verified with a minimal repro; filed as
+`cyrius/docs/development/issues/2026-08-22-owl-private-fns-still-collide-across-files.md`.
+Renaming in either library is a workaround, not the fix, and neither
+library is doing anything wrong. owl continues to carry the warning,
+verified inert.
 
 Open, and the reason each is open:
 
