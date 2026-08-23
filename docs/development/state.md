@@ -6,6 +6,33 @@
 
 ## Version
 
+**1.4.6** — shipped 2026-08-22. **P(−1) audit, hardening and repair
+pass** over all six `src/*.cyr` modules. Seven findings, each with a
+repro before it was accepted and a `scripts/smoke.sh` gate after it was
+fixed; every gate proven non-vacuous against the 1.4.5 binary. No
+feature or interface change. Report:
+[`2026-08-22-audit.md`](../audit/2026-08-22-audit.md).
+
+The one that matters: **a 2-byte file prefix could hide the entire
+file.** The escape-strip classifier had no bound on sequence length, so
+a file opening `ESC [` whose bytes never contained a CSI final byte had
+*every* byte dropped — a 442-byte, 40-line file rendered as **0 content
+bytes**, exit 0, on the default `owl FILE` terminal path. Because a
+dropped byte also skips the line counter, a swallowed newline desynced
+the `-n` gutter from the file. Fixed by bounding a sequence at a newline
+(no escape form admits a raw LF) and at 256 bytes. FINDING-001's
+stripping guarantee re-verified afterwards — zero ESC bytes survive.
+
+Also repaired: a heap overflow building the config path from
+`$XDG_CONFIG_HOME` / `$HOME` (2017 bytes into a 1024-byte buffer,
+canary-confirmed); an unvalidated theme colour overrunning `ansi_fg`'s
+16-byte buffer (26-byte escape emitted) and `_u16_to_ascii`'s 8-byte
+buffer; the pager publishing an unterminated env entry to `execve`;
+unbounded `--tabs`; unchecked `alloc()` at the load-bearing sites; and
+an unbounded VCS marker allocation sized from a backend-supplied line
+number. `CLAUDE.md`'s pager security claim was the inverse of the code
+and is corrected.
+
 **1.4.5** — shipped 2026-08-22. **Toolchain `6.2.37` → `6.5.35`,
 deps to latest, and the `--agnos` target returns.** No `src/*.cyr`
 behaviour change (+4 lines, all of it wiring the new `openqasm`
@@ -407,14 +434,16 @@ complete; full owl attack surface audited and hardened.
 
 ## Binary
 
-- **~3.58 MB (3,584,920 bytes, `build/owl`, DCE) at 1.4.5** — up
+- **~3.59 MB (3,589,048 bytes, `build/owl`, DCE) at 1.4.6** — the
+  1.4.6 audit repairs cost 4,128 bytes over 1.4.5's 3,584,920. Up
   from 1.4.1's ~2.70 MB (2,701,824), the last release that
   recorded a number. There is no true 1.4.4 baseline to diff
   against: neither the released 1.4.4 pins nor the unreleased
   working-tree bump builds under 6.5.35. The growth is toolchain
   and dep heft (the 6.2 → 6.5 stdlib arc, vyakarana's streaming
-  rework, sit's 1.3.5–1.3.8 hardening) — owl's own `src/` grew by
-  4 lines. The agnos binary is 3,565,168 bytes.
+  rework, sit's 1.3.5–1.3.8 hardening), not owl source: `src/` grew
+  4 lines at 1.4.5 and 146 at 1.4.6, together under 0.2% of the
+  binary. The agnos binary is 3,565,200 bytes.
 - The 1.4.0 baseline jumped from 1.3.6's ~459 KB. That jump is the
   sit object-store link: `dist/sit.cyr` + patra (B+tree/WAL store)
   + sigil (hashing) + sankoch (zlib) + sakshi. DCE strips sit's
@@ -454,13 +483,13 @@ complete; full owl attack surface audited and hardened.
 
 ## Source
 
-- 3,906 lines across 6 modules (1.4.5 cut):
-  - `src/main.cyr` (2,145) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff, bat-style header frame (1.1.7), wrap-continuation gutter (1.1.8), `↪` wrap-arrow glyph (1.1.9), VCS-aware wrap budget (1.1.11), grammar bootstrap (1.1.12 → 1.4.5 covering 46 grammars), tokenize_source → streaming-API migration (1.3.1), per-chunk feed during slurp + HIGHLIGHT_MAX 128 KB → 16 MB (1.3.6), agnos `#ifdef` gates + bare-`_owl_entry()` top-level call (1.3.7/1.3.8), `--version --verbose` banner reports sit (1.4.0)
-  - `src/lang.cyr` (501) — extension/shebang/content detection + ext-override table + filename-shape detection (1.2.6); LANG_COUNT 46 (latest additions: openqasm 1.4.5, terraform 1.3.5, nix 1.3.4, vue/svelte 1.3.3, powershell/crystal/julia 1.3.2, cyml/llvm_ir 1.3.0)
-  - `src/theme.cyr` (439) — bundled themes, 10-kind palette, ANSI emission, user-theme loader (1.1.3); kind_name-keyed `theme_token_color` per vyakarana architecture note 004 (1.3.0)
-  - `src/vcs.cyr` (363) — **sit-backed VCS markers (1.4.0)** via `sit_repo_open`/`sit_diff_path`/`sit_repo_close`; LCS edit-script → ADD/MOD/DEL mapping; `--diff` bypass for piped output; agnos `#ifdef` no-op. Replaced the git fork+execve scaffold; public five-fn interface unchanged
-  - `src/config.cyr` (298) — `key = value` config parser (M7) + `ext.*` keys (1.1.1)
-  - `src/pager.cyr` (160) — pager spawn + SIGPIPE handling + env forward (1.1.5) + agnos `#ifdef` no-op (1.3.7)
+- 4,052 lines across 6 modules (1.4.6 cut):
+  - `src/main.cyr` (2,203) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff, bat-style header frame (1.1.7), wrap-continuation gutter (1.1.8), `↪` wrap-arrow glyph (1.1.9), VCS-aware wrap budget (1.1.11), grammar bootstrap (1.1.12 → 1.4.5 covering 46 grammars), tokenize_source → streaming-API migration (1.3.1), per-chunk feed during slurp + HIGHLIGHT_MAX 128 KB → 16 MB (1.3.6), agnos `#ifdef` gates + bare-`_owl_entry()` top-level call (1.3.7/1.3.8), `--version --verbose` banner reports sit (1.4.0)
+  - `src/lang.cyr` (505) — extension/shebang/content detection + ext-override table + filename-shape detection (1.2.6); LANG_COUNT 46 (latest additions: openqasm 1.4.5, terraform 1.3.5, nix 1.3.4, vue/svelte 1.3.3, powershell/crystal/julia 1.3.2, cyml/llvm_ir 1.3.0)
+  - `src/theme.cyr` (475) — bundled themes, 10-kind palette, ANSI emission, user-theme loader (1.1.3); kind_name-keyed `theme_token_color` per vyakarana architecture note 004 (1.3.0)
+  - `src/vcs.cyr` (376) — **sit-backed VCS markers (1.4.0)** via `sit_repo_open`/`sit_diff_path`/`sit_repo_close`; LCS edit-script → ADD/MOD/DEL mapping; `--diff` bypass for piped output; agnos `#ifdef` no-op. Replaced the git fork+execve scaffold; public five-fn interface unchanged
+  - `src/config.cyr` (319) — `key = value` config parser (M7) + `ext.*` keys (1.1.1)
+  - `src/pager.cyr` (174) — pager spawn + SIGPIPE handling + env forward (1.1.5) + agnos `#ifdef` no-op (1.3.7)
 
 ## Tests
 
@@ -537,32 +566,67 @@ with no `fork`/`execve` and no argv at all. FINDING-003 (shell
 injection) and FINDING-005 (path quoting) are now closed *by
 construction* on the VCS path, not just by careful argv handling.
 
+**1.4.6 audit** — [`docs/audit/2026-08-22-audit.md`](../audit/2026-08-22-audit.md),
+all findings closed in the same release:
+
+| Finding | Severity | Fix |
+|---------|----------|-----|
+| 006 | **HIGH**   | Escape-strip classifier was unbounded — an unterminated sequence dropped the rest of the file (442-byte file → 0 rendered bytes, exit 0) and desynced the `-n` gutter. Bounded at a newline (no escape form admits a raw LF) and at `ESC_MAX_LEN` = 256; the byte that trips either bound is emitted. Hidden-content class, cf. CVE-2021-42574 (Trojan Source) |
+| 007 | MEDIUM | `_config_resolve_path` appended `$XDG_CONFIG_HOME` / `$HOME` into a fixed `alloc(1024)`. Replaced with `_cfg_join`, sized from the operands, `alloc` checked, `PATH_MAX_SANE` (4096) refusal falling through to the next candidate |
+| 008 | MEDIUM | Theme colours were unvalidated and reached `ansi_fg`'s 16-byte buffer via `_u16_to_ascii`'s 8-byte buffer. Validated to `-1..255` at parse time, `-1` additionally rejected for header/lineno (their call sites never test it), and `_u16_to_ascii` clamps regardless of caller |
+| 009 | LOW    | Pager env forwarding handed `execve` a pointer to an entry left unterminated by the 16 KB `/proc/self/environ` read. Entries now accepted only if they terminate inside the buffer |
+| 010 | LOW    | `--tabs` / `tabs =` unbounded; a 20-digit value also overflowed `i64` inside `atoi`. Rejected above 3 digits *before* `atoi`, then bounded to 0–64 |
+| 011 | LOW    | `alloc()` return unchecked at ~27 sites. Load-bearing sites guarded, degrading into paths that already exist; `_user_ext_init` / `_user_theme_init` propagate failure to callers |
+| 012 | LOW    | VCS marker table sized from sit's `max_line` with no ceiling, on repos that may be cloned from anywhere. Fails closed above `VCS_MAX_LINES` (16,777,216) |
+
+Open informational items:
+
+- **INFO-002 (upstream, cyrius)** — the stdlib's `getenv` (`lib/io.cyr`)
+  reads `/proc/self/environ` into an 8 KB buffer, so any variable past
+  that window is invisible. Measured on owl: `NO_COLOR=1` gives 0 ESC
+  bytes with a small environment and **18** with one over 8 KB.
+  `OWL_PAGER` / `PAGER` / `HOME` / `XDG_CONFIG_HOME` / `OWL_CONFIG` are
+  affected identically. Not repaired locally — a private `getenv` would
+  diverge from every other cyrius consumer. **Does not weaken escape
+  stripping**: `_strip_active()` keys off `g_want_color`, which resolves
+  from TTY detection, so a truncated environment can only fail to
+  *enable* `NO_COLOR` — erring toward more decoration, never toward
+  passing file-origin escapes through.
+- **INFO-003 (accepted)** — 8-bit C1 controls (`0x9B` CSI, `0x9D` OSC,
+  `0x90` DCS) are not stripped. In UTF-8, the only mode in which owl's
+  box-drawing frame renders, `0x80–0x9F` are continuation bytes;
+  stripping them would corrupt every non-ASCII file. `less` and `bat`
+  make the same call. Revisit only if owl grows a non-UTF-8 mode.
+
 ## Verification
 
-All green at 1.4.5 on cyrius `6.5.35`:
+All green at 1.4.6 on cyrius `6.5.35`:
 
 - `cyrius build src/main.cyr build/owl` — clean
-- `cyrius build --agnos …` — clean, valid ELF (3,565,168 bytes);
-  target re-enabled at 1.4.5 after being disabled since 1.4.0
-- `CYRIUS_DCE=1 cyrius build` (host **and** `--agnos`) — clean;
-  ~3.58 MB (3,584,920 bytes)
+- `cyrius build --agnos …` — clean, valid ELF
+- `CYRIUS_DCE=1 cyrius build` (host **and** `--agnos`) — clean
 - `cyrius test` — 7 passed, 0 failed
-- `cyrius lint src/*.cyr` — 20 `exceeds 120 characters` on
-  pre-existing comment lines + 2 tracked deferrals, **byte-identical
-  to 1.4.4's findings**; zero new. (The 120-char rule on comment
-  dividers is the one tolerated warning per `ci.yml`.)
-- `sh scripts/smoke.sh` — all M0–M8 behavioral gates green; the M6
-  marker + `--diff` gates build a real sit repo fixture and assert
-  MOD/ADD markers via `sit_diff_path` (skip with a stderr NOTE, not a
-  silent pass, when no `sit` binary is found — set `OWL_SIT_BIN` in CI)
-- **Highlight round-trip** — `--color=always` output stripped of ANSI
-  is byte-identical to the input across six files up to 400 KB
-  spanning cyrius, cyml and markdown. This is the gate that covers the
-  `_stream_grow` co-link question (see §Binary): 400 KB against a
-  4096-byte initial stream cap exercises the grow path many times.
-- **Plain mode** — `owl -p` byte-identical to `cat`
-- **VCS gutter** — `--diff` verified against a live working-tree
-  change (reports exactly the changed lines)
+- `cyrius lint src/*.cyr` — unchanged from the 1.4.5 baseline: 20
+  `exceeds 120 characters` on pre-existing comment lines + 2 tracked
+  deferrals, zero new. (The 120-char rule on comment dividers is the one
+  tolerated warning per `ci.yml`.)
+- `sh scripts/smoke.sh` — all M0–M8 gates plus the five 1.4.6 audit
+  gates. **Every audit gate is proven non-vacuous** against the 1.4.5
+  binary: neutralising them in turn yields, in order, `FINDING-006:
+  unterminated CSI suppressed the file (0 of 442 bytes)` → `FINDING-006:
+  gutter desynced after a stripped escape` → `FINDING-007: oversized
+  XDG_CONFIG_HOME was not rejected` → `FINDING-008: theme colour
+  produced a 26-byte SGR (buffer is 16)`. FINDING-010's gate separates
+  the same way (`--tabs=65` exits 0 on 1.4.5, 2 on 1.4.6)
+- **Escape stripping (FINDING-001) re-verified after the 006 repair** —
+  OSC 52, CSI SGR, OSC 0 + ST, DCS and `ESC 7` all stripped, **zero**
+  ESC bytes surviving
+- **Highlight round-trip** — `--color=always` output stripped of ANSI is
+  byte-identical to the input across six files up to 400 KB spanning
+  cyrius, cyml and markdown
+- **Plain mode** — `owl -p` byte-identical to `cat` across the full
+  audit corpus, hostile inputs included
+- **VCS gutter** — `--diff` verified against a live working-tree change
 
 ## Next
 
@@ -582,6 +646,20 @@ All green at 1.4.5 on cyrius `6.5.35`:
 - **Native AGNOS theming** — wait until AGNOS ships its
   system-wide theming primitive; owl's kind_name-keyed theme
   layer (1.3.0) is the load-bearing prep, swap is mechanical.
+
+Follow-ups opened by the 1.4.6 audit:
+
+- **Report INFO-002 to cyrius** — the stdlib `getenv`'s 8 KB
+  `/proc/self/environ` window silently drops any variable past it, which
+  makes owl ignore `NO_COLOR` / `OWL_PAGER` / `HOME` /
+  `XDG_CONFIG_HOME` on a large environment. Root cause is
+  `lib/io.cyr`; owl must not carry a private `getenv`. See the audit
+  report for the measurement.
+- **Widen the audit corpus into a fuzz target.** `tests/owl.fcyr` is
+  still a reserved slot. The 1.4.6 findings were all reachable from
+  file content, config files or the environment — three inputs a fuzz
+  harness could drive directly, and the escape classifier in particular
+  is a state machine that wants one.
 
 Follow-ups opened by the SIT swap:
 

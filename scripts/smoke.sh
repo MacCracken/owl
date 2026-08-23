@@ -1480,4 +1480,84 @@ out=$("$BIN" --diff "$TMPDIR/elsewhere.md" 2>"$TMPDIR/err")
 [ -z "$out" ] || fail "--diff on non-tracked file should produce empty stdout, got: $out"
 grep -q "outside of repo" "$TMPDIR/err" || fail "--diff on non-tracked file should warn 'outside of repo', got: $(cat "$TMPDIR/err")"
 
-echo "smoke: OK ($v_long) — M0–M8 gates passing (security hardening FINDING-001/002/003/004 closed)"
+# ── 1.4.6 audit gates (docs/audit/2026-08-22-audit.md) ────────────────
+
+# FINDING-006 — an escape sequence must never swallow more than its own
+# line. Pre-1.4.6 a file opening with a bare CSI whose final byte
+# (0x40-0x7E) never arrived left the strip classifier latched forever, so
+# every following byte was dropped: `owl file` rendered an EMPTY file,
+# silently, exit 0. Payload here is digits + LF only, so no byte in the
+# file can ever terminate the CSI.
+printf '\033[' > "$TMPDIR/csi.txt"
+i=0
+while [ $i -lt 40 ]; do printf '1234567890\n' >> "$TMPDIR/csi.txt"; i=$((i+1)); done
+raw=$(/bin/cat "$TMPDIR/csi.txt" | wc -c)
+got=$("$BIN" --color=always --paging=never "$TMPDIR/csi.txt" | wc -c)
+[ "$got" -gt $((raw - 40)) ] \
+    || fail "FINDING-006 regression: unterminated CSI suppressed the file ($got of $raw bytes)"
+# ...and the line-number gutter must stay in step with the file. A
+# swallowed LF is a line the counter never sees, so every later number
+# would be wrong. Line 2 of the file is the first payload line.
+"$BIN" -n --color=always --paging=never "$TMPDIR/csi.txt" \
+    | sed 's/\x1b\[[0-9;]*m//g' | grep -qE '^ *2 .*1234567890' \
+    || fail "FINDING-006 regression: gutter desynced after a stripped escape"
+
+# FINDING-001 must still hold after the FINDING-006 bounds — every escape
+# class is stripped, nothing leaks to the terminal.
+printf 'a\033]52;c;ZXZpbA==\007b\033[31mc\033[0md\033]0;t\033\\e\033Pq\033\\f\0337g\n' \
+    > "$TMPDIR/allesc.txt"
+"$BIN" --color=always --paging=never "$TMPDIR/allesc.txt" | tr -dc '\033' | wc -c \
+    | grep -qx '0' || fail "FINDING-001 regression: an ESC survived stripping"
+
+# FINDING-007 — an oversized $XDG_CONFIG_HOME / $HOME must not be appended
+# into a fixed-size config-path buffer. Pre-1.4.6 both were copied into a
+# flat alloc(1024), so anything past ~1007 bytes wrote off the end.
+#
+# The overflow itself is not observable from outside the process (it lands
+# in unused bump arena, so the pre-fix binary exits 0 too) — the proof is
+# the canary PoC in the audit report. What IS observable, and what this
+# gate pins, is the fallback the fix introduces: a path that could never
+# name a real file is now REJECTED, so resolution falls through to the
+# next candidate instead of dead-ending on a 3 KB filename. A config under
+# $HOME therefore still loads. Pre-1.4.6 the huge XDG path won and the
+# HOME config was never read.
+# `env -i` keeps the environment small and fully controlled: the cyrius
+# stdlib's getenv reads /proc/self/environ into an 8 KB buffer, so a big
+# var plus an inherited environment can push HOME out of its window (see
+# the audit's INFO-002) and make this gate flap for an unrelated reason.
+big=$(awk 'BEGIN{while(i++<6000)printf "A"}')
+mkdir -p "$TMPDIR/h/.config/owl"
+printf 'definitely_not_a_key = 1\n' > "$TMPDIR/h/.config/owl/config.cyml"
+env -i PATH="$PATH" XDG_CONFIG_HOME="$big" HOME="$TMPDIR/h" \
+    "$BIN" -p "$TMPDIR/csi.txt" >/dev/null 2>"$TMPDIR/cfgerr"
+grep -q "unknown config key" "$TMPDIR/cfgerr" \
+    || fail "FINDING-007 regression: oversized XDG_CONFIG_HOME was not rejected (HOME config never read)"
+# A sane XDG_CONFIG_HOME must still win over HOME, unchanged.
+mkdir -p "$TMPDIR/x/owl"
+printf 'tabs = 3\n' > "$TMPDIR/x/owl/config.cyml"
+env -i PATH="$PATH" XDG_CONFIG_HOME="$TMPDIR/x" HOME="$TMPDIR/h" \
+    "$BIN" -p "$TMPDIR/csi.txt" >/dev/null 2>"$TMPDIR/cfgerr2"
+grep -q "unknown config key" "$TMPDIR/cfgerr2" \
+    && fail "FINDING-007 regression: a valid XDG config no longer takes precedence over HOME"
+
+# FINDING-008 — theme colours are validated to 0..255 (or -1 where the call
+# site guards it), so ansi_fg's 16-byte buffer can never be overrun. An
+# 18-digit value previously emitted a 26-byte escape out of that buffer.
+mkdir -p "$TMPDIR/th/owl/themes"
+printf 'lineno_color = 999999999999999999\nheader_color = 45\n' > "$TMPDIR/th/owl/themes/huge.cyml"
+longest=$(XDG_CONFIG_HOME="$TMPDIR/th" "$BIN" -n --color=always --paging=never \
+    --theme=huge "$TMPDIR/csi.txt" 2>/dev/null \
+    | grep -oaE "$(printf '\033')\[38;5;[0-9]+m" | awk '{if(length($0)>m)m=length($0)}END{print m+0}')
+[ "$longest" -le 12 ] \
+    || fail "FINDING-008 regression: theme colour produced a ${longest}-byte SGR (buffer is 16)"
+
+# FINDING-010 — tab width is bounded. An unbounded value made one TAB
+# expand into that many spaces.
+"$BIN" --tabs=8 "$TMPDIR/csi.txt" >/dev/null 2>&1 \
+    || fail "FINDING-010: --tabs=8 should be accepted"
+"$BIN" --tabs=65 "$TMPDIR/csi.txt" >/dev/null 2>&1 \
+    && fail "FINDING-010 regression: --tabs=65 should be rejected"
+"$BIN" --tabs=99999999999999999999 "$TMPDIR/csi.txt" >/dev/null 2>&1 \
+    && fail "FINDING-010 regression: --tabs with a 20-digit value should be rejected"
+
+echo "smoke: OK ($v_long) — M0–M8 gates passing (security hardening FINDING-001/002/003/004/006/007/008/010 closed)"

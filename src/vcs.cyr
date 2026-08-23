@@ -100,6 +100,8 @@ fn _vcs_mark(line, kind) {
 # First pass over the edit script: highest working-tree (new) line number
 # touched, so we size the marker array exactly. Keep and add ops carry a
 # new-side line; deletes carry 0.
+var VCS_MAX_LINES = 16777216;
+
 fn _max_new_line(ops) {
     var n = vec_len(ops);
     var i = 0;
@@ -345,8 +347,19 @@ fn vcs_compute_markers(path) {
 
     var max_line = _max_new_line(ops);
     if (max_line <= 0) { return 0; }
+    # Audit FINDING-012: max_line is a line number reported by the VCS
+    # backend, and the gutter sizes an allocation from it. sit reads
+    # `.git/` repos that may have been cloned from anywhere, so a corrupt
+    # or hostile object can hand back a nonsense line count. Fail closed
+    # above a ceiling no real file reaches rather than trying to allocate
+    # and zero it. VCS_MAX_LINES is one byte per line, so this caps the
+    # marker table at 16 MB for a 16-million-line file.
+    if (max_line > VCS_MAX_LINES) { return 0; }
 
     g_vcs_marks = alloc(max_line);
+    # alloc returns 0 on failure; without this the zeroing loop below
+    # writes through a null pointer.
+    if (g_vcs_marks == 0) { g_vcs_mark_cap = 0; return 0; }
     g_vcs_mark_cap = max_line;
     var z = 0;
     while (z < max_line) { store8(g_vcs_marks + z, 0); z = z + 1; }

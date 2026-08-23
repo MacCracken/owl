@@ -83,7 +83,7 @@ Include order in `main.cyr`: `lib/vyakarana.cyr` first, then owl modules. Runtim
 
 - Control-byte sanitization on any path/arg echoed to stderr (prevent ANSI injection via `owl $(printf '\x1b[2Jevil')`) — use `eprint_sanitized`
 - File-read bounds: `BUFSIZE` and `HIGHLIGHT_MAX` verified against allocation sizes
-- Pager spawn sanitizes environment: `OWL_PAGER` / `PAGER` values are passed as argv[0], never shelled-out
+- Pager spawn **does** use `/bin/sh -c` for the `OWL_PAGER` / `PAGER` value, so a flag-carrying value (`PAGER="less -R"`) works — the same contract `git` and `man` offer. This is safe because the variable is set by the user, who can already run commands; it is *not* a boundary owl defends. The invariant that IS load-bearing: **no path, filename, or other file-derived string is ever interpolated into that command** — the pager receives file content on stdin and nothing else. Do not "fix" this to argv-exec without checking `docs/audit/2026-08-22-audit.md` INFO-001, which is why this line reads the way it does
 - VCS markers are computed in-process via sit's `sit_diff_path` library (since 1.4.0) — no subprocess, no shell, no argv on the VCS path (closes the FINDING-003/005 injection class by construction). The pre-1.4.0 git scaffold used `fork` + `execve` with explicit argv — never `/bin/sh -c`; the no-subprocess rule supersedes it
 - Audit findings filed in `docs/audit/YYYY-MM-DD-audit.md`; closure status tracked in `state.md`
 

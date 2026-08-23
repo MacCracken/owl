@@ -10,7 +10,7 @@ include "src/config.cyr"
 
 # Keep OWL_VERSION in sync with the VERSION file.
 # A M8 CI check will enforce equality; for now, manual.
-var OWL_VERSION = "owl 1.4.5";
+var OWL_VERSION = "owl 1.4.6";
 
 var BUFSIZE = 65536;
 
@@ -127,6 +127,15 @@ var g_flag_raw_controls = 0;
 #   3  in OSC/DCS/APC/PM/SOS string, scanning for ST/BEL
 #   4  in string body, just saw ESC (next byte might be `\` → ST)
 var g_esc_state = 0;
+# Bytes consumed so far by the in-progress stripped sequence, and the
+# ceiling past which we stop believing it is one. Audit FINDING-006:
+# without a bound, a file opening with a CSI whose final byte (0x40-0x7E)
+# never arrives puts the classifier in state 2 forever and every
+# subsequent byte is dropped — owl renders an empty file, silently, exit
+# 0. 256 is far past any real sequence (a CSI is a handful of bytes; the
+# longest thing here is an OSC, which we drop wholesale anyway).
+var g_esc_len = 0;
+var ESC_MAX_LEN = 256;
 
 # Streaming render state, reset per input.
 var g_line_no       = 1;
@@ -870,6 +879,7 @@ fn _hex_dump_fd(fd, first_buf, first_n) {
     }
 
     var buf = alloc(BUFSIZE);
+    if (buf == 0) { return 0 - 1; }
     var done = 0;
     while (done == 0) {
         var n = file_read(fd, buf, BUFSIZE);
@@ -900,6 +910,7 @@ fn render_reset() {
     g_line_no = 1;
     g_at_line_start = 1;
     g_esc_state = 0;
+    g_esc_len = 0;
     g_render_done = 0;
     g_wrap_col = 0;
     return 0;
@@ -1026,9 +1037,25 @@ fn _strip_active() {
 # are filtered.
 fn _emit_file_byte(c) {
     if (g_esc_state == 0) {
-        if (c == 0x1B) { g_esc_state = 1; return 0; }
+        if (c == 0x1B) { g_esc_state = 1; g_esc_len = 1; return 0; }
         return 1;
     }
+
+    # ── Two bounds on how much a single sequence may swallow ──────────
+    # (audit FINDING-006). Both abandon the sequence and EMIT the byte
+    # that tripped them, so a malformed escape costs at most the bytes
+    # already consumed rather than the rest of the file.
+    #
+    # A newline can never appear inside a terminal escape sequence — no
+    # CSI, OSC, DCS, APC, PM or SOS form admits a raw LF, and terminals
+    # abandon the sequence on one. Treating it as a hard terminator
+    # bounds the damage to a single line AND keeps g_line_no in step
+    # with the file: a swallowed LF is a line the gutter never counts,
+    # so every subsequent line number would be wrong.
+    if (c == 10) { g_esc_state = 0; g_esc_len = 0; return 1; }
+    g_esc_len = g_esc_len + 1;
+    if (g_esc_len > ESC_MAX_LEN) { g_esc_state = 0; g_esc_len = 0; return 1; }
+
     if (g_esc_state == 1) {
         # Classify by introducer byte.
         if (c == 0x5B) { g_esc_state = 2; return 0; }   # [ → CSI
@@ -1470,7 +1497,13 @@ fn render_fd(fd, path_for_header) {
         return render_fd_loop(fd);
     }
     var tb = tokenbuf_new();
+    # Audit FINDING-011: alloc() returns 0 on failure and owl checked none
+    # of its ~27 call sites. This is the biggest request owl makes (16 MB);
+    # on failure the writes below would go through a null pointer. Fall back
+    # to the plain streaming path, which is what every other "cannot
+    # highlight" condition already does.
     var big = alloc(HIGHLIGHT_MAX + 1);
+    if (big == 0) { tokenize_stream_free(s); return render_fd_loop(fd); }
     var total = 0;
     while (total < HIGHLIGHT_MAX) {
         var got = file_read(fd, big + total, HIGHLIGHT_MAX - total);
@@ -1670,6 +1703,7 @@ fn render_path(path) {
             # Treat as not-highlightable; render the prefix + drain
             # the rest plainly.
             var big0 = alloc(BUFSIZE);
+            if (big0 == 0) { file_close(fd); return 0 - 1; }   # FINDING-011
             var k0 = 0;
             while (k0 < first_n) {
                 store8(big0 + k0, load8(first_buf + k0));
@@ -1683,6 +1717,16 @@ fn render_path(path) {
         }
         var tb = tokenbuf_new();
         var big = alloc(HIGHLIGHT_MAX + 1);
+        # FINDING-011 — fall back to plain streaming rather than writing
+        # the file through a null pointer.
+        if (big == 0) {
+            tokenize_stream_free(s);
+            render_chunk(first_buf, first_n);
+            var rcn = render_fd_loop(fd);
+            file_close(fd);
+            if (rcn < 0) { return 0 - 1; }
+            return 0;
+        }
         var j = 0;
         while (j < first_n) {
             store8(big + j, load8(first_buf + j));
@@ -1921,9 +1965,20 @@ fn set_strip_ansi(value) {
 }
 
 # Parse --tabs=N. Rejects negative values. Returns 0 OK, 1 on error.
+# Audit FINDING-010: this accepted any digit string. `--tabs=` or a
+# `tabs =` config line with a huge value made every literal TAB expand
+# into that many spaces — a wedged process (or an unbounded write when
+# stdout is a file) from a value that cannot mean anything useful. A tab
+# stop wider than a terminal is already nonsense; TABS_MAX is generous.
+var TABS_MAX = 64;
+
 fn set_tabs(value) {
     var vlen = strlen(value);
     if (vlen == 0) { return 1; }
+    # Reject before atoi() rather than after: a long digit run overflows
+    # i64 inside atoi and could wrap to something that passes a range
+    # check applied to the result.
+    if (vlen > 3) { return 1; }
     var p = 0;
     while (p < vlen) {
         var c = load8(value + p);
@@ -1931,7 +1986,10 @@ fn set_tabs(value) {
         if (c > 57) { return 1; }
         p = p + 1;
     }
-    g_flag_tabs = atoi(value);
+    var t = atoi(value);
+    if (t < 0)         { return 1; }
+    if (t > TABS_MAX)  { return 1; }
+    g_flag_tabs = t;
     return 0;
 }
 

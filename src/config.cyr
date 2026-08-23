@@ -62,33 +62,53 @@ fn _cfg_append_n(dst, off, src, n) {
     return off + n;
 }
 
+# Join `base` + `suffix` into a freshly allocated, NUL-terminated string
+# sized to the operands. Returns 0 if the allocation fails or the result
+# would exceed PATH_MAX_SANE — the caller then falls through to the next
+# candidate (or to "no config"), which is the correct degradation: a path
+# that long cannot name a real file anyway.
+var PATH_MAX_SANE = 4096;
+
+fn _cfg_join(base, suffix) {
+    var blen = strlen(base);
+    var slen = strlen(suffix);
+    if (blen < 0) { return 0; }
+    if (blen > PATH_MAX_SANE) { return 0; }
+    var total = blen + slen + 1;
+    var buf = alloc(total);
+    if (buf == 0) { return 0; }
+    var o = 0;
+    o = _cfg_append_n(buf, o, base, blen);
+    o = _cfg_append_n(buf, o, suffix, slen);
+    store8(buf + o, 0);
+    return buf;
+}
+
 # Returns pointer to a null-terminated path in the bump allocator, or
 # 0 if none of the candidates are available in the environment.
 fn _config_resolve_path() {
     var p = getenv("OWL_CONFIG");
     if (p != 0) { if (load8(p) != 0) { return p; } }
 
+    # Both branches size the buffer from the ACTUAL environment-variable
+    # length. Audit FINDING-007: these used a fixed `alloc(1024)` and then
+    # appended `$XDG_CONFIG_HOME` / `$HOME` unbounded, so an env var past
+    # ~1007 bytes wrote off the end of the allocation — a heap overflow
+    # with attacker-chosen length and content. The env is process input
+    # like any other; owl must not assume a bound it never checks.
     var xdg = getenv("XDG_CONFIG_HOME");
     if (xdg != 0) {
         if (load8(xdg) != 0) {
-            var buf = alloc(1024);
-            var o = 0;
-            o = _cfg_append_n(buf, o, xdg, strlen(xdg));
-            o = _cfg_append(buf, o, "/owl/config.cyml");
-            store8(buf + o, 0);
-            return buf;
+            var buf = _cfg_join(xdg, "/owl/config.cyml");
+            if (buf != 0) { return buf; }
         }
     }
 
     var home = getenv("HOME");
     if (home != 0) {
         if (load8(home) != 0) {
-            var buf = alloc(1024);
-            var o = 0;
-            o = _cfg_append_n(buf, o, home, strlen(home));
-            o = _cfg_append(buf, o, "/.config/owl/config.cyml");
-            store8(buf + o, 0);
-            return buf;
+            var buf = _cfg_join(home, "/.config/owl/config.cyml");
+            if (buf != 0) { return buf; }
         }
     }
 
@@ -271,6 +291,7 @@ fn config_load() {
     if (fd < 0) { return 0; }
 
     var buf = alloc(CONFIG_MAX);
+    if (buf == 0) { file_close(fd); return 0; }   # FINDING-011
     var total = 0;
     while (total < CONFIG_MAX) {
         var got = file_read(fd, buf + total, CONFIG_MAX - total);

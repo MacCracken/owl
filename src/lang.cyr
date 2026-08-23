@@ -258,6 +258,9 @@ fn _user_ext_init() {
     if (g_user_ext_keys == 0) {
         g_user_ext_keys  = alloc(USER_EXT_MAX * 8);
         g_user_ext_langs = alloc(USER_EXT_MAX * 8);
+        # FINDING-011 — lang_register_ext_override stores through both.
+        if (g_user_ext_keys == 0)  { return 1; }
+        if (g_user_ext_langs == 0) { g_user_ext_keys = 0; return 1; }
     }
     return 0;
 }
@@ -273,7 +276,7 @@ fn lang_register_ext_override(ext, lang) {
     var elen = strlen(ext);
     if (elen == 0) { return 2; }
 
-    _user_ext_init();
+    if (_user_ext_init() != 0) { return 1; }   # FINDING-011
 
     # Normalize: prepend a leading dot if the user didn't include one,
     # so _path_ends_with_lower behaves the same as for the built-in
@@ -281,6 +284,7 @@ fn lang_register_ext_override(ext, lang) {
     var dot = 0;
     if (load8(ext) != 46) { dot = 1; }
     var copy = alloc(elen + dot + 1);
+    if (copy == 0) { return 1; }   # FINDING-011
     var off = 0;
     if (dot == 1) {
         store8(copy + off, 46);

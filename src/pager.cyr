@@ -88,15 +88,29 @@ fn start_pager() {
             file_close(efd);
             if (nbytes < 0) { nbytes = 0; }
         }
+        # Only hand execve entries that are NUL-terminated INSIDE envbuf.
+        # Audit FINDING-009: /proc/self/environ is read into a fixed 16 KB
+        # buffer, so an environment larger than that truncates mid-entry —
+        # and the old loop still published a pointer to that final,
+        # unterminated entry. execve would then read past envbuf, copying
+        # adjacent memory into the child's environment. `last_nul` is the
+        # last byte we know terminates something; any entry starting at or
+        # before it is therefore terminated within the buffer.
+        var last_nul = 0 - 1;
+        var q = nbytes - 1;
+        while (q >= 0 && last_nul < 0) {
+            if (load8(&envbuf + q) == 0) { last_nul = q; }
+            q = q - 1;
+        }
         var slot = 0;
-        if (nbytes > 0) {
+        if (nbytes > 0 && last_nul >= 0) {
             if (load8(&envbuf) != 0) {
                 store64(&envp + 0, &envbuf);
                 slot = 1;
             }
             var pos = 0;
             while (pos < nbytes - 1) {
-                if (load8(&envbuf + pos) == 0 && (pos + 1) < nbytes && load8(&envbuf + pos + 1) != 0 && slot < 255) {
+                if (load8(&envbuf + pos) == 0 && (pos + 1) <= last_nul && load8(&envbuf + pos + 1) != 0 && slot < 255) {
                     store64(&envp + slot * 8, &envbuf + pos + 1);
                     slot = slot + 1;
                 }

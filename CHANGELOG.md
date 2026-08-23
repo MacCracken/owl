@@ -6,6 +6,131 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.4.6] — 2026-08-22 — P(−1) audit: a 2-byte file prefix could hide the whole file
+
+A full audit, hardening and repair pass over all six `src/*.cyr` modules
+(3,906 lines). Seven findings, every one carrying a repro before it was
+accepted and a `scripts/smoke.sh` gate after it was fixed — each gate proven
+non-vacuous against the 1.4.5 binary. Report:
+[`2026-08-22-audit.md`](docs/audit/2026-08-22-audit.md).
+
+No feature or interface change. Two candidates were investigated and
+discarded at the repro stage rather than filed; the report records why.
+
+### Security
+
+- **HIGH — an unterminated escape sequence silently suppressed the rest of
+  the file, and desynced the line-number gutter (FINDING-006).** The
+  escape-strip classifier added for FINDING-001 had no bound on how long a
+  sequence could run: once in the CSI state it stayed there until a byte in
+  `0x40–0x7E` arrived, dropping everything on the way. A file whose remaining
+  bytes never contain a terminator had **all** of them dropped. Measured: a
+  442-byte, 40-line file rendered as **0 content bytes** — header frame, one
+  empty gutter row, closing rule, **exit 0**, nothing indicating the file had
+  content. Reachable with a 2-byte prefix, on the default `owl FILE` path on
+  a terminal, no flag required (confirmed under a real PTY).
+
+  Separately, because a swallowed byte skips the `g_line_no` increment, a
+  swallowed newline was a line the gutter never counted — `-n` labelled file
+  line 2 as "1" and every later number was wrong.
+
+  This is the hidden-content class (cf. CVE-2021-42574 "Trojan Source"), and
+  it lands hardest here because owl's whole contract is *show me this file*
+  and README §Agent usage documents owl as what an agent reads source with: a
+  file carrying an unterminated CSI rendered empty to a reviewer while `cat`,
+  `git` and every editor showed the real bytes.
+
+  Fixed with two independent bounds, either of which abandons the sequence and
+  **emits** the byte that tripped it: a **newline terminates any in-progress
+  sequence** (no escape form admits a raw LF, and terminals abandon on one —
+  so this costs nothing in stripping fidelity, bounds suppression to one line,
+  and keeps the gutter in step with the file), plus a 256-byte ceiling for the
+  no-newline case. FINDING-001's guarantee re-verified after the change: OSC
+  52, CSI SGR, OSC 0 + ST, DCS and `ESC 7` all still stripped, **zero** ESC
+  bytes surviving.
+
+- **MEDIUM — heap overflow building the config path from the environment
+  (FINDING-007).** `_config_resolve_path` appended `$XDG_CONFIG_HOME` (or
+  `$HOME`) into a fixed `alloc(1024)` with no length check, so a variable past
+  ~1007 bytes wrote off the end with attacker-chosen length and content.
+  Confirmed with a canary program using the helpers verbatim: **2017 bytes
+  written into a 1024-byte buffer, all 64 canary bytes clobbered.** Now sized
+  from the operands, with the `alloc` checked and a `PATH_MAX_SANE` (4096)
+  refusal that falls through to the next candidate.
+
+- **MEDIUM — an unvalidated theme colour overran two fixed buffers
+  (FINDING-008).** `_theme_parse_int` accumulated digits with no range check
+  and `_theme_apply` stored the result straight into the colour globals, which
+  reach `ansi_fg` — a 16-byte buffer filled via `_u16_to_ascii`, an 8-byte
+  buffer indexed downward from 7. `lineno_color = 999999999999999999` emitted
+  a **26-byte** escape out of the 16-byte buffer and walked `_u16_to_ascii`'s
+  index 10 bytes below its own. Colours are now validated to `-1..255` at
+  parse time, `header_color` / `lineno_color` additionally reject `-1` (their
+  call sites never test for it), and `_u16_to_ascii` clamps regardless of
+  caller. Longest SGR any theme value can now produce: 12 bytes.
+
+- **LOW — the pager's env forwarding published a pointer to an unterminated
+  entry (FINDING-009).** `/proc/self/environ` is read into a fixed 16 KB
+  buffer; a larger environment truncates mid-entry, and the walk still handed
+  that entry to `execve`, which read past the buffer into adjacent globals.
+  Entries are now accepted only if they terminate inside the buffer — provably
+  a subset removal, and verified unchanged (46 entries, `PATH` present) on a
+  normal environment.
+
+- **LOW — unbounded tab width (FINDING-010).** `--tabs=` / `tabs =` accepted
+  any digit string, so one TAB could expand to an arbitrary number of spaces;
+  a 20-digit value also overflowed `i64` inside `atoi` before any check on the
+  result. Now rejected above 3 digits *before* `atoi`, then bounded to 0–64.
+
+- **LOW — `alloc()` return unchecked at all ~27 call sites (FINDING-011).**
+  Failure returns 0 and became a null-pointer write; the largest request is
+  16 MB, made twice per file. Load-bearing sites now degrade into paths that
+  already exist (highlight → plain streaming, config/theme → "none"), and
+  `_user_ext_init` / `_user_theme_init` propagate failure to callers that
+  previously discarded it. Same class vyakarana closed at its 2.3.4.
+
+- **LOW — VCS marker table sized from an unvalidated backend value
+  (FINDING-012).** `max_line` comes from sit's edit script, and sit reads
+  `.git/` repos that may have been cloned from anywhere — the threat model
+  sit's own 2026-08-17 audit names. Now fails closed above 16,777,216 lines,
+  with the `alloc` checked.
+
+### Fixed
+
+- **`CLAUDE.md` described the opposite of the pager's actual execution model**
+  (INFO-001). It claimed `OWL_PAGER` / `PAGER` values "are passed as argv[0],
+  never shelled-out"; `start_pager` has always run them through
+  `/bin/sh -c`, deliberately, so flag-carrying values work — the contract
+  `git` and `man` offer. The design is fine; a security document that
+  contradicts the code is not, since it invites a future reviewer to trust a
+  boundary that does not exist. Rewritten to describe what the code does, and
+  to state the invariant that *is* load-bearing: no path or other file-derived
+  string is ever interpolated into that command.
+
+### Notes
+
+- **`NO_COLOR` and every other environment input is silently ignored past
+  8 KB** (INFO-002) — the cyrius stdlib's `getenv` reads `/proc/self/environ`
+  into an 8 KB buffer and scans only that. Measured: `NO_COLOR=1` yields 0 ESC
+  bytes with a small environment and **18** with one over 8 KB. Not repaired
+  here — `lib/` is generated and owl must not carry a private `getenv` that
+  diverges from every other cyrius consumer; filed for the cyrius repo. It
+  does **not** weaken escape stripping: `_strip_active()` keys off
+  `g_want_color`, which resolves from TTY detection rather than the
+  environment, so a truncated environment can only fail to *enable*
+  `NO_COLOR` — erring toward more decoration, never toward passing
+  file-origin escapes through.
+- **8-bit C1 control bytes are still not stripped, deliberately** (INFO-003).
+  In UTF-8 — the only mode in which owl's box-drawing frame renders at all —
+  `0x80–0x9F` are continuation bytes, so stripping them would corrupt every
+  non-ASCII file owl displays. That is a certain harm against a risk needing a
+  non-UTF-8 8-bit terminal. `less` and `bat` make the same call.
+- **Gates**: `cyrius test` 7 passed / 0 failed; `sh scripts/smoke.sh` green
+  with five new audit gates; `cyrius lint src/*.cyr` unchanged from the 1.4.5
+  baseline; host, `--agnos` and both DCE builds clean; plain mode
+  byte-identical to `cat` across the full audit corpus, hostile inputs
+  included.
+
 ## [1.4.5] — 2026-08-22 — toolchain `6.5.35`, deps to latest, and the AGNOS target returns
 
 A refresh with no change to owl's viewer/highlighter/VCS behaviour, but two
