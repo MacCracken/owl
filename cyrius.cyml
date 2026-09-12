@@ -5,7 +5,7 @@ description = "Observant Watcher of Lines — a file viewer for AGNOS / Cyrius"
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/owl"
 language = "cyrius"
-cyrius = "6.5.35"
+cyrius = "6.6.2"
 
 [build]
 entry = "src/main.cyr"
@@ -92,7 +92,7 @@ stdlib = [
 
 [deps.vyakarana]
 git = "https://github.com/MacCracken/vyakarana.git"
-tag = "2.4.0"
+tag = "2.4.2"
 modules = ["dist/vyakarana.cyr"]
 
 # sit — AGNOS-native VCS. owl consumes sit's library export (ADR 0009

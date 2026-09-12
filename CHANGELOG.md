@@ -4,6 +4,29 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.4.8] - 2026-09-11
+
+### Changed
+
+- **Toolchain `6.5.35` → `6.6.2`**, and **vyakarana `2.4.0` → `2.4.2`**.
+
+  The toolchain bump alone left owl red on a collision it could not fix from here:
+
+      error:lib/vyakarana.cyr:3013:1: duplicate fn '_stream_grow' disagrees about
+      arity: this one takes 2, the one in lib/sankoch.cyr takes 1
+
+  Both are *private* helpers in two unrelated libraries — vyakarana's takes
+  `(s, needed)`, sankoch's takes `(ctx)` — and they never met until owl vendored
+  both bundles. Same-name/different-arity has been a hard error since cyrius
+  6.5.37. Fixed upstream in vyakarana 2.4.2 (renamed to `_vyk_stream_grow`),
+  because sankoch is a folded stdlib; owl just moves the pin.
+
+- **`tests/owl.bcyr` now includes `bench` and `fnptr` itself.** They are deliberately
+  NOT in `[deps].stdlib`, because that list is auto-prepended to every surface and
+  would link the benchmark harness into the shipped `owl` binary. Including them in
+  the harness keeps them on the bench surface only.
+
+
 _No unreleased changes._
 
 ## [1.4.7] — 2026-08-22 — sit's read-only fold, `--format=ndjson`, `--follow`, and a fuzz harness that found a hole in 1.4.6's fix
