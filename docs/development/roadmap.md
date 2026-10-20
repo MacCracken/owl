@@ -222,3 +222,108 @@ See [`../adr/README.md`](../adr/README.md) for the full index.
 | Vyakarana grammar changes break owl's token palette | Palette is frozen at 10 kinds; kind names are the stable contract per [vyakarana architecture note 004](https://github.com/MacCracken/vyakarana/blob/main/docs/architecture/004-theme-palette-contract.md); owl dispatches via `kind_name(k)` since 1.3.0. Pin vyakarana tag in `cyrius.cyml` |
 | `HIGHLIGHT_MAX` surprises a user with a >16 MB source file | Stderr notice on fallback in place; cap was lifted from 128 KB to 16 MB at 1.3.6. Files past 16 MB still drop to plain rendering with a clear notice — true streaming-render-and-discard is filed as a future-when-needed item |
 | ~~SIT takes longer than expected to ship~~ | **Resolved 1.4.0** — sit 1.0.1 shipped the library export; owl swapped off git. New tracked risk: owl now links sit's full object-store bundle (~2.6 MB binary) — mitigated by DCE today, to be trimmed by the cyrius 6.x lib-streamlining arc |
+
+---
+
+## Adopting cmdit (CLI parsing)
+
+Demand-gated, not a forced sweep. owl is a Tier-3 ("rich / edge") candidate in
+the 2026-06-25 ecosystem CLI review, which summarises it as "5 enums + `=value`"
+(`agnosticos/docs/development/planning/cmdit.md`). Nothing is broken today. The
+gain is moderate, and it grows if the migration lands together with the parked
+**shell completion scripts** item above: `cmdit_completions` writes
+bash/zsh/fish completions from the registered flags.
+
+**What is hand-rolled** (checked site by site, `lib/` excluded):
+
+- `main()` (`src/main.cyr:2185-2381`) parses and acts in a single loop over
+  `args_init`/`argc`/`argv`, using `streq` and `match_eq_flag` (`:1955-1960`).
+  Value flags accept **only** `--name=value`, so `--color always` is reported
+  as `unknown option`. There is no `--`.
+- **Files are rendered inside the loop** (`:2340-2360`), so `owl a.txt --bogus`
+  prints `a.txt` before exiting 2. `resolve_mode()` runs only at the first file
+  (`:2341`, `:2355`), so mode flags placed after it are never re-resolved.
+- `-V`/`--version` return at once after a look-ahead for `-v`/`--verbose`
+  (`:2201-2220`), and so do `-h`/`--help` and `--list-themes`/`--list-languages`
+  (`:2221-2225`). Nine switches follow (`:2227-2243`). `-n` and `-N` share
+  `g_flag_numbers` (default -1, `:49`), and whichever comes last wins.
+- Validators. `set_color` (`:1962`), `set_paging` (`src/pager.cyr:169`) and
+  `set_style` (`src/vcs.cyr:72`) store -1/1/0. `set_wrap` (`:1972`) and
+  `set_strip_ansi` (`:2034`) store 0/1/2 in choice order. `set_format` (`:2043`)
+  has an undocumented `auto` alias. `set_tabs` (`:2151`) takes 0..`TABS_MAX`=64.
+  `set_line_range` (`:1982`) parses `A:B`. `theme_index` (`src/theme.cyr:129`)
+  falls through to user themes (`:223`), and `lang_is_valid`
+  (`src/lang.cyr:241`) knows 46 grammars.
+- Help (`:1909-1951`) and version (`:1893-1907`) go to **stdout**. Errors go to
+  stderr as `owl: <whole arg>: <reason>` through `report_error` (`:467-474`),
+  except `--format`, which has its own error at `:2296-2297`. Exit codes are
+  0/1/2/4 (`:39-42`).
+
+**Site → cmdit.**
+
+- [ ] `cmdit_new("owl")`. Its automatic `-h`/`--help` and `-V`/`--version` use
+      owl's own letters. Register one `cmdit_bool` per switch and per `--list-*`.
+      Read `cmdit_get_bool(f_verbose)` after the parse instead of the look-ahead,
+      which makes the order independence that `scripts/smoke.sh:86-88` checks
+      hold by construction.
+- [ ] Register the CLI-only enums with `cmdit_enum`: `--strip-ansi` (the index
+      is the stored value), `--color` (map the index to -1/1/0), and `--format`
+      (`"text|auto|ndjson"`, with `cmdit_metavar` keeping `auto` out of help).
+- [ ] `--paging`/`--style`/`--wrap`/`--tabs`/`--theme` are also config keys,
+      parsed in `src/config.cyr:166-184` by the same `set_*`/`theme_index`
+      functions. Register them as `cmdit_str` and keep that single validator. A
+      `cmdit_enum` choice string would be a second copy of the list that drifts.
+- [ ] Files: loop over `cmdit_positional` in argv order. A lone `-` stays a
+      positional (`smoke.sh:127`). Call `config_load()` first, then apply only
+      the flags `cmdit_seen` reports, so the CLI still overrides the config.
+
+**Gaps.** All of these stay on owl's side, and none blocks adoption.
+
+- `--theme` and `--language` are dynamic or large enums, and `--line-range` is a
+  structured value. All three are outside ADR-0001 scope, so they stay
+  `cmdit_str` + the existing check.
+- `NO_COLOR` (`:196-201`) only counts when non-empty, and `--color=always`
+  overrides it. It is not a fallback for a flag. `OWL_PAGER`→`PAGER`
+  (`src/pager.cyr:21-23`) and `OWL_CONFIG`→`XDG_CONFIG_HOME`→`HOME`
+  (`src/config.cyr:90-107`) are env-only cascades. None of them is a
+  `cmdit_env`.
+- Two independent bools cannot tell which of `-n`/`-N` came last. Pick a fixed
+  precedence, scan `cmdit_raw_argv`, or wait for the v2-backlog `--no-foo`
+  negation, for which owl is a real use case.
+- Four behaviour changes to decide and record. A bad flag is now rejected before
+  anything renders. Every flag applies to every file (no smoke case puts a flag
+  after a file). `--help --bogus` becomes an error. `--color always` and `--`
+  are accepted, which is additive and makes files named `-x` reachable.
+
+**Output identity.** `cmdit_help_flags` writes to **stderr**, but
+`smoke.sh:74-78` reads `--help` from stdout. Its row format
+(`--color <auto|always|never>`, then a tab, one line per flag) also differs from
+owl's. Keep `print_help` and `print_version` as they are. `cmdit_print_error`
+leaves out the offending token (it prints just `owl: unknown flag`). So keep
+`report_error`, branch on `cmdit_error(h)` + `cmdit_err_flag(h)`, and recover
+the argument to echo from `cmdit_raw_argv`, because cmdit does not store it.
+
+**Manifest.** There is no stdlib `flags` to drop, and `"args"` and `"io"` stay. Add:
+
+    [deps.cmdit]
+    git = "https://github.com/MacCracken/cmdit.git"
+    tag = "1.3.0"
+    modules = ["dist/cmdit.cyr"]
+
+**Tests.** `tests/owl.tcyr` has no parser tests: `:12-13` only check `streq` on
+`"-V"`/`"-h"`. `tests/owl.fcyr` covers `src/escape.cyr`. The bar is
+`scripts/smoke.sh`: version/help (`:63-90`), rejected values with their exit
+code and stderr text (`:213-229`, `:268-278`, `:976`, `:986`, `:1004`, `:1361`,
+`:1366-1406`), and the list flags (`:245-262`).
+
+- [ ] Byte-compare stdout, stderr and exit before and after, for every smoke
+      invocation plus `--bogus`, `-np`, `--color` (no value) and
+      `a.txt --bogus`. The smoke suite must stay green.
+
+Noticed while surveying, for a separate fix: the `--verbose` version pins
+(`:1901-1903`: vyakarana 2.2.3, sit 1.0.2, cyrius 6.2.25) no longer match
+`cyrius.cyml` (2.4.2 / 1.6.1 / 6.6.2), and an identity bar would lock them in.
+
+See cmdit's `README.md`, `docs/adr/0001-flag-modifiers.md` and
+`docs/development/roadmap.md` (v2 backlog). Worked examples: kii, anuenue (its
+own help framing), dig (Tier-3).
