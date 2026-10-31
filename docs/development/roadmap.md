@@ -2,13 +2,16 @@
 
 Forward-looking planning surface. Latest release and prior history
 live in `CHANGELOG.md`; this file tracks what's *next*. Current
-release is **1.4.0** — the **1.4.x feature line** is open and its
-headline item (the **SIT dependency swap**) has shipped: owl's VCS
-gutter now reads markers from sit's `sit_diff_path` library instead
-of forking `git`. The 1.3.x catchup window closed earlier (all 2.1.x
-grammars wired, vyakarana 2.x migration, HIGHLIGHT_MAX lift), and
-1.3.7/1.3.8 added the AGNOS target. Remaining 1.4.x items each have a
-sketch below; none gate on toolchain or grammar work.
+release is **1.5.0**, which moved owl onto cyrius's 6.7 language line
+with no behaviour change. The 1.4.x feature line is closed:
+- the **SIT dependency swap** shipped at 1.4.0;
+- `--format=ndjson` and `--follow` shipped at 1.4.7;
+- URL support is written but parked (see `state.md` §Next).
+
+Native AGNOS theming is still waiting on AGNOS. The open candidates
+below carry forward into 1.5.x. The 1.3.x catchup window closed
+earlier (all 2.1.x grammars wired, vyakarana 2.x migration,
+HIGHLIGHT_MAX lift), and 1.3.7/1.3.8 added the AGNOS target.
 
 ---
 
@@ -19,6 +22,7 @@ forward-looking. Full prose in `CHANGELOG.md`.
 
 | Release | Date       | Headline                                                |
 |---------|------------|---------------------------------------------------------|
+| 1.5.0   | 2026-10-31 | cyrius 6.7.9 (language minor) + vyakarana 2.5.0 + sit 1.7.0; source audited against the 6.7 migration notes; output byte-identical to 1.4.9 |
 | 1.4.9   | 2026-10-31 | cyrius 6.6.20 + vyakarana 2.4.3 + sit 1.6.4 (audit read-path fixes); release binary −49.9% from toolchain DCE; stdlib 22 → 17 |
 | 1.4.8   | 2026-09-11 | cyrius 6.6.2 + vyakarana 2.4.2 (`_stream_grow` collision retired) |
 | 1.4.7   | 2026-08-22 | sit read-only fold (−17.7% binary); `--format=ndjson`; `--follow`; fuzz harness finds FINDING-013 |
@@ -106,14 +110,13 @@ _Empty — last item closed in 1.1.11 (exact-gutter wrap math)._
 
 ---
 
-## 1.4.x roadmap (feature line)
+## 1.4.x roadmap (feature line) — closed; open items carry into 1.5.x
 
 The 1.x line continues — 2.0.0 isn't on the table until either a
 genuine breaking-change need surfaces or AGNOS itself reaches a
-ship boundary that justifies coordinated major bumps. The
-following items are 1.4.x candidates; ordering is rough
-priority, not commitment. Each is independent — they don't
-have to ship in order.
+ship boundary that justifies coordinated major bumps. These were
+the 1.4.x candidates. Each is independent, and the ones not struck
+through remain open for 1.5.x.
 
 - ~~**SIT dependency swap.**~~ **Shipped in 1.4.0** (2026-06-14).
   `src/vcs.cyr` was rewritten from `execve("git", "diff", …)` to
@@ -127,7 +130,9 @@ have to ship in order.
   links sit's full bundle — pending the 6.x lib-streamlining arc)
   and sit repo-root discovery (markers need owl run from the
   `.sit/` root, as sit 1.0.1 has no upward search).
-- **NDJSON output mode (`--format=ndjson`).** Emit tokens as
+- ~~**NDJSON output mode (`--format=ndjson`).**~~ **Shipped in 1.4.7**
+  (2026-08-22), as vyakarana's `kind`/`start`/`len` shape plus owl's
+  `line` and `text`. Original sketch: Emit tokens as
   one JSON object per line for downstream tooling
   (editor LSP-style consumers, code analyzers, indexing). The
   shape mirrors vyakarana's existing NDJSON debug output:
@@ -135,15 +140,20 @@ have to ship in order.
   token. Builds directly on the streaming-tokenizer primitive
   owl already drives at 1.3.6 — drain after each feed, emit
   per-token JSON, no buffer-resident render loop.
-- **`--follow` / `-f` (tail-style live highlighting).**
-  inotify-watch the file; on each modify event re-tokenize
+- ~~**`--follow` / `-f` (tail-style live highlighting).**~~
+  **Shipped in 1.4.7**, deliberately without token colour (escape
+  stripping still applies to appended bytes); colourised follow is
+  an open item in `state.md` §Next. Original sketch: inotify-watch the file; on each modify event re-tokenize
   the changed region and emit ANSI for the new bytes. Mirrors
   `tail -f` semantics. Needs a re-tokenize strategy that
   doesn't reset the user's scroll position; vyakarana's 2.0.1
   rolling-buffer scanner makes the per-event cost cheap, but
   owl-side rendering needs a "append-only ANSI" path that's
   distinct from the current full-rerender shape.
-- **URL / remote-file support (`owl https://…`).** Fetch a
+- **URL / remote-file support (`owl https://…`).** *Written at
+  1.4.7 (`src/fetch.cyr`) but parked, not built: the sandhi
+  transport could not be verified, it costs ~521 KB, and it needs
+  its own audit; see `state.md` §Next.* Fetch a
   remote document via HTTP and render it like a local file.
   Out of scope for v1 per design-spec §1; revisitable now
   that sandhi (Cyrius's HTTP/TLS stack) is mature enough to

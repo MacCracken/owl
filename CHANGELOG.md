@@ -6,6 +6,84 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.5.0] - 2026-10-31
+
+**Toolchain onto cyrius's 6.7 language line.** This is a minor release
+because 6.6 → 6.7 is a language minor, not because owl changed: there is no
+flag, output or exit-code change, and owl's output is byte-identical to 1.4.9
+(see §Verified).
+
+### Changed
+
+- **Toolchain `6.6.20` → `6.7.9`, vyakarana `2.4.3` → `2.5.0`, sit `1.6.4` →
+  `1.7.0`.** vyakarana 2.5.0 and sit 1.7.0 are the only tags of each pinned to
+  6.7.9. `lib/` re-cut from a clean tree; apart from the two dep bundles it is
+  identical to `~/.cyrius/versions/6.7.9/lib`, and the new `cyrius deps --locked`
+  reports `lib/` and `cyrius.lock` exactly as the tags resolve.
+
+  - **vyakarana 2.5.0 has no source, grammar, token-kind or API change.** It
+    re-pins the toolchain and nothing more. `grammars/` is byte-identical to the
+    2.5.0 tag, so there was nothing to re-sync.
+  - **sit 1.7.0 changes nothing owl reaches.** Its read fold grows by 169 lines,
+    all CLI code: conflict recording (`conflicts_*`), `cmd_status`'s *Unmerged
+    paths*, and `cmd_reset` clearing the record. None of it is on the
+    `sit_diff_path` call graph, which is why the unreachable-fn count rose by 10.
+    Its headline change binds bearer tokens to remotes (ADR 0014), which is on
+    the network path outside the read fold.
+  - **The folded layers move with the pin**: patra 1.15.2 → 1.16.0, sigil
+    3.13.10 → 3.13.11 (the `sha256` / `sha384` one-shots wipe their state),
+    sankoch 2.8.1 → 2.8.3. sit A/B-tested patra 1.16.0's on-disk format in both
+    directions (27/27). sit notes that patra 1.16.1 / 1.16.2 (lost acknowledged
+    rows, fdatasync errors) only fold at cyrius 6.7.11. owl's gutter only
+    *reads* a repo, so that is a write-path item for the next pin, not an owl
+    exposure.
+
+- **owl's source was audited against the 6.7.0–6.7.9 migration notes before the
+  bump.** Several 6.7 changes alter what *already-compiling* code computes, so a
+  green build alone proves nothing for them. Each was searched for in `src/` and
+  `tests/` (string literals and comments blanked), and each pattern was checked
+  to match a planted positive:
+  - no lone `!` (6.7.3: before it, `!x` compiled as `x`);
+  - no `~`, and no unary `-` on a name ahead of an operator (6.7.9 changed how
+    these bind);
+  - no typed pointers or narrow `*T` dereferences (6.7.8 / 6.7.9);
+  - no reserved word (`trait` `const` `true` `false` `do` `dyn`) as a name.
+
+  The one `println(<name>)` is `println(OWL_VERSION)` (6.7.6), still pinned by
+  smoke's version gates. The pager spawns with raw `sys_fork` / `sys_execve` and
+  owl never ignores SIGPIPE, so 6.7.9's signal reset for exec-family children
+  doesn't apply.
+
+- **CI install step unchanged.** 6.7.7 changed how cyrius packs release
+  tarballs, so the 6.7.9 tarball was listed before relying on it. It still
+  unpacks to the single top-level `cyrius-<v>-x86_64-linux/{bin,lib}` that
+  `ci.yml` / `release.yml` expect.
+
+- **`owl --version --verbose`** prints `vyakarana 2.5.0` / `sit 1.7.0` /
+  `cyrius 6.7.9`.
+
+- **Release binary 1,328,168 → 1,332,120 bytes (+3,952)** with `CYRIUS_DCE=1`
+  (`--agnos` DCE: 1,325,264 → 1,325,136). The plain build is 2,946,088 →
+  2,958,232. There are 3,621 unreachable fns, still under DCE's 4,096-run
+  removal cap.
+
+### Verified
+
+- `cyrius build` host / DCE / `--agnos` / DCE `--agnos` / `--aarch64`: all clean
+  on the first build. No source change was needed. The only link warnings are
+  sit's three documented dead-path `sign` placeholders.
+- `cyrius test`: 7/7. `cyrius fuzz`: 1 passed (5 invariants).
+  `tests/owl.bcyr` builds and runs.
+- `sh scripts/smoke.sh`: green against both the plain and the DCE binary,
+  including the native-sit-repo gutter gates.
+- `cyrius lint src/*.cyr`: 0 warnings. The two existing untracked deferrals
+  remain.
+- **Output A/B against the 1.4.9 binary**: identical in all 288 runs (48
+  vyakarana 2.5.0 corpus files × highlight, `-p`, decorated `-n`,
+  `--format=ndjson`, `--theme=light`, `-x`). `--diff` and the TTY gutter are
+  byte-identical on two modified files; the gutter shows the 3 `~` markers on
+  the 3 changed manifest lines in both.
+
 ## [1.4.9] - 2026-10-31
 
 ### Changed

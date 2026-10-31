@@ -116,6 +116,8 @@ Include order in `main.cyr`: `lib/vyakarana.cyr` first, then `src/escape.cyr` (n
 - `&&` / `||` short-circuit; mixed in one expression requires parens: `a && (b || c)`. Prefer nested `if` when in doubt
 - No closures — use named functions
 - No negative literals — write `(0 - N)`, not `-N`
+- Since cyrius 6.7: `trait` `const` `true` `false` `do` `dyn` are reserved words, and `!` is a real operator (before 6.7.3 a lone `!` was silently dropped, so `!x` compiled as `x`)
+- On every pin bump, read cyrius `docs/development/ecosystem-migration.md` from the old pin up. For each entry that changes what *already-compiling* code computes, grep `src/` and `tests/` with strings and comments blanked, and prove the grep matches a planted positive — a green build does not cover these
 - `break` in `while` loops with `var` declarations is unreliable — use flag + `continue`
 - Cyrius string literals do NOT parse `\x??` hex escapes — `"\x1b"` emits literal `\x1b` bytes. Build ANSI escapes via `store8(&buf + i, 0x1B)` instead (see `ansi_reset` in `src/theme.cyr`)
 - Test exit pattern: `syscall(60, assert_summary())`

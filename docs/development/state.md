@@ -6,6 +6,21 @@
 
 ## Version
 
+**1.5.0** — shipped 2026-10-31. **Toolchain `6.6.20` → `6.7.9`,
+cyrius's 6.7 language line; vyakarana `2.4.3` → `2.5.0`, sit
+`1.6.4` → `1.7.0`.** It is a minor release because cyrius moved a
+language minor; owl itself did not change. No flag, output or
+exit-code change: 288 corpus runs, `--diff` and the TTY gutter are
+byte-identical to 1.4.9. Both dep tags are the only ones pinned to
+6.7.9, and neither changes anything owl reaches.
+
+Because several 6.7 changes alter what *already-compiling* code
+computes (a lone `!`, unary `-`/`~` binding, narrow `*T` dereferences,
+`println` of an untyped name), owl's source was audited against the
+6.7.0–6.7.9 migration notes before the build. It is clean on every
+item, and every grep pattern was checked against a planted positive.
+The release binary is 1,332,120 bytes (+3,952).
+
 **1.4.9** — shipped 2026-10-31. **Toolchain `6.6.2` → `6.6.20`;
 vyakarana `2.4.2` → `2.4.3`, sit `1.6.1` → `1.6.4`.** These are the last
 tags of each dep line pinned to 6.6.20; the next ones move to 6.7.x. No
@@ -448,8 +463,15 @@ complete; full owl attack surface audited and hardened.
 
 ## Toolchain
 
-- **Cyrius pin**: `6.6.20` (in `cyrius.cyml [package].cyrius`)
-  — bumped from `6.6.2` at 1.4.9, which was bumped from `6.5.35`
+- **Cyrius pin**: `6.7.9` (in `cyrius.cyml [package].cyrius`) —
+  bumped from `6.6.20` at 1.5.0. 6.7 is a language minor: new
+  reserved words (`trait` `const` `true` `false` `do` `dyn`), `!` as a
+  real operator, forward calls arity-checked, and several binding and
+  pointer-arithmetic changes that alter compiling code. The authority
+  on what changes at a pin bump is cyrius
+  `docs/development/ecosystem-migration.md`; read it before every
+  bump. From 6.7.6, `cyrius deps --locked` checks `lib/` and the lock
+  without writing. 6.6.20 came in at 1.4.9, bumped from 6.6.2, which was bumped from `6.5.35`
   at 1.4.8. At 6.6.20, `distlib` bundles and folded stdlib modules
   open with a compile-checked `# Requires` include block, `cyrius
   deps` writes `cyrius.lock` for stdlib entries too, and DCE now
@@ -460,8 +482,10 @@ complete; full owl attack surface audited and hardened.
   `5.10.10`→`6.0.56` (1.3.7, agnos target), `6.0.56`→`6.1.14`
   (1.3.8). CI and the release workflow both read this value out
   of `cyrius.cyml`, so a bump needs no workflow edit.
-- **vyakarana pin**: `2.4.3` (in `cyrius.cyml [deps.vyakarana].tag`)
-  — 2.4.3 at 1.4.9 is a toolchain re-pin with no source or grammar
+- **vyakarana pin**: `2.5.0` (in `cyrius.cyml [deps.vyakarana].tag`)
+  — 2.5.0 at 1.5.0 moves onto the 6.7 line with no source, grammar,
+  token-kind or API change (its minor marks the language minor, as
+  owl's does). 2.4.3 at 1.4.9 is a toolchain re-pin with no source or grammar
   change, and it cuts `dist/vyakarana.deps` from 11 leaves to 4.
   2.4.2 at 1.4.8 renamed `_stream_grow` → `_vyk_stream_grow`.
   Bumped from `2.2.3` to `2.4.0` at 1.4.5. 2.4.0's substance is **streaming
@@ -476,8 +500,17 @@ complete; full owl attack surface audited and hardened.
   history: API broke at 2.0.0 (`tokenize_source` → push-based
   streaming primitive per [ADR 0017](https://github.com/MacCracken/vyakarana/blob/main/docs/adr/0017-streaming-api.md));
   owl migrated at 1.3.1 (one-shot feed) + 1.3.6 (per-chunk feed).
-- **sit pin**: `1.6.4` (in `cyrius.cyml [deps.sit].tag`) — bumped
-  from `1.6.1` at 1.4.9. 1.6.3 re-pinned to 6.6.20. 1.6.4 is a P(−1)
+- **sit pin**: `1.7.0` (in `cyrius.cyml [deps.sit].tag`) — bumped
+  from `1.6.4` at 1.5.0. Nothing on owl's path changed: the read fold
+  gains 169 lines of conflict-recording CLI code (`conflicts_*`,
+  `cmd_status`, `cmd_reset`), none of it reachable from `sit_diff_path`.
+  Its bearer-token binding (ADR 0014) is network-side, outside the
+  fold. The folded layers moved with the pin, notably patra
+  1.15.2 → 1.16.0 (on-disk format A/B'd by sit, no change). ⚠ sit
+  flags patra 1.16.1 / 1.16.2 (write-path data-loss fixes) as folding
+  only at cyrius 6.7.11. owl's gutter is read-only, but that pin is
+  where they land.
+  1.6.4 came in at 1.4.9, bumped from `1.6.1`. 1.6.3 re-pinned to 6.6.20. 1.6.4 is a P(−1)
   audit release ([sit `docs/audit/2026-10-19-audit.md`](https://github.com/MacCracken/sit/blob/main/docs/audit/2026-10-19-audit.md));
   confirmed present in `lib/sit-read.cyr` are:
   - D3: pack indexes cached, not re-read on every lookup;
@@ -520,6 +553,10 @@ complete; full owl attack surface audited and hardened.
 
 ## Binary
 
+- **1,332,120 bytes (`CYRIUS_DCE=1`) at 1.5.0**, +3,952 over 1.4.9.
+  `--agnos` DCE is 1,325,136; the plain build is 2,958,232.
+  Unreachable fns went 3,611 → 3,621, the extra ten from sit 1.7.0's
+  CLI code. That is still under the 4,096-run removal cap below.
 - **~1.33 MB (1,328,168 bytes, `CYRIUS_DCE=1`) at 1.4.9**, down from
   2,650,688 at 1.4.8 (−49.9%); `--agnos` DCE is 1,325,264. This is
   the toolchain, not owl. At 6.6.20, DCE removes the 3,611
@@ -589,7 +626,8 @@ complete; full owl attack surface audited and hardened.
 
 ## Dependencies
 
-- **Cyrius stdlib** — **17 entries at 1.4.9** (22 at 1.4.7–1.4.8,
+- **Cyrius stdlib** — **17 entries since 1.4.9** (unchanged at 1.5.0:
+  both sidecars list the same leaves at 2.5.0 / 1.7.0) (22 at 1.4.7–1.4.8,
   38 before that). owl's own viewer surface needs `syscalls`,
   `alloc`, `fmt`, `io`, `fs`, `str`, `string`, `vec`, `args`,
   `hashmap`, `process`, `assert`; sit-read's diff path adds
@@ -612,12 +650,12 @@ complete; full owl attack surface audited and hardened.
   because the lock is written from disk and records the
   downgraded file's own hash. patra (1.13.0) and sigil (3.12.7)
   made the same change upstream for the same reason.
-- **vyakarana** 2.4.3 — tokenizer + **46** bundled grammars
+- **vyakarana** 2.5.0 — tokenizer + **46** bundled grammars
   (git-tag pinned in `[deps.vyakarana]`). 11 → 46 grammars across
   the 1.2.x/1.3.x cascade and 2.3.5's `openqasm`; 2.0.0
   streaming-API break migrated at 1.3.1/1.3.6; 2.4.0 made that
   streaming path chunk-invariant.
-- **sit** 1.6.4 — AGNOS-native VCS (added 1.4.0). owl consumes its
+- **sit** 1.7.0 — AGNOS-native VCS (added 1.4.0). owl consumes its
   ADR-0009 library surface (`sit_repo_open` / `sit_diff_path` /
   `sit_repo_close` + `ann_*` accessors) for the VCS change-marker
   gutter, replacing the git fork+execve scaffold. Reaching it
@@ -699,7 +737,25 @@ Open informational items:
 
 ## Verification
 
-All green at 1.4.9 on cyrius `6.6.20`:
+All green at 1.5.0 on cyrius `6.7.9`, on the first build with no
+source change:
+
+- `cyrius build` host / DCE / `--agnos` / DCE `--agnos` /
+  `--aarch64`: all clean. The only warnings are sit's three
+  dead-path `sign` placeholders.
+- `cyrius test`: 7/7. `cyrius fuzz`: 1 passed (5 invariants).
+  `tests/owl.bcyr` builds and runs.
+- `sh scripts/smoke.sh`: green against the plain and the DCE binary,
+  including the native-sit-repo gutter gates.
+- `cyrius lint src/*.cyr`: 0 warnings, the same two deferrals.
+  `cyrius deps --locked`: exact.
+- **6.7 migration audit of owl's source**: clean (see §Version).
+- **A/B against the 1.4.9 binary**: identical in 288 runs (48 corpus
+  files × highlight / `-p` / decorated `-n` / ndjson / `--theme=light`
+  / `-x`). `--diff` and the TTY gutter are byte-identical, with the
+  3 `~` markers on the 3 changed lines.
+
+At 1.4.9 on cyrius `6.6.20`:
 
 - `cyrius build` host / DCE / `--agnos` / DCE `--agnos`: all clean.
   The only warnings are sit's three documented dead-path `sign`

@@ -5,7 +5,7 @@ description = "Observant Watcher of Lines — a file viewer for AGNOS / Cyrius"
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/owl"
 language = "cyrius"
-cyrius = "6.6.20"
+cyrius = "6.7.9"
 
 [build]
 entry = "src/main.cyr"
@@ -51,8 +51,8 @@ output = "owl"
 # function, so the old runtime-SIGILL failure mode is now a build error.)
 #
 # Procedure on a bump, unchanged: start from the union of the two generated
-# sidecars — `dist/sit-read.deps` (15 at sit 1.6.4) and `dist/vyakarana.deps`
-# (4 at vyakarana 2.4.3) — plus owl's own surface, then add back whatever
+# sidecars — `dist/sit-read.deps` (15 at sit 1.6.4–1.7.0) and `dist/vyakarana.deps`
+# (4 at vyakarana 2.4.3–2.5.0) — plus owl's own surface, then add back whatever
 # the link reports undefined. Do NOT trust either list alone.
 # `thread_local` is NOT needed here (patra's storage slots and sigil's
 # crypto bank reach it only from write paths the read fold omits) — it was
@@ -91,7 +91,7 @@ stdlib = [
 
 [deps.vyakarana]
 git = "https://github.com/MacCracken/vyakarana.git"
-tag = "2.4.3"
+tag = "2.5.0"
 modules = ["dist/vyakarana.cyr"]
 
 # sit — AGNOS-native VCS. owl consumes sit's library export (ADR 0009
@@ -124,5 +124,5 @@ modules = ["dist/vyakarana.cyr"]
 # design upstream, not a missing dep.
 [deps.sit]
 git = "https://github.com/MacCracken/sit.git"
-tag = "1.6.4"
+tag = "1.7.0"
 modules = ["dist/sit-read.cyr"]
