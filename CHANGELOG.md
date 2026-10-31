@@ -6,6 +6,37 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.5.2] - 2026-10-31
+
+### Fixed
+
+- **Markdown files are recognised by extension.** owl has bundled
+  vyakarana's markdown grammar since 1.0.0, and loaded it in both
+  bootstrap lists, but the language table had no row for it. As a result:
+  - `.md` and `.markdown` reached the grammar only when the file's first
+    non-blank line was a `# ` heading (the content sniff), so a README that
+    opens with prose, a badge or front matter rendered plain;
+  - `--language=markdown` exited 2 with "unknown language";
+  - `markdown` was missing from `--list-languages`;
+  - an `ext.<x> = markdown` config override was rejected.
+
+  All four now work. `.md` cannot shadow `.mdx` (matching is by suffix), and
+  `.mdx` still routes to `mdx`. New smoke gates use a `.md` / `.markdown` file
+  that opens with prose, so the content sniff cannot be what passes them. They
+  cover the header, `--language=markdown` through stdin, plain mode
+  byte-identical to `cat`, and `.mdx` staying `mdx`, and they fail against
+  1.5.1.
+
+### Verified
+
+- `cyrius build` host / DCE / `--agnos` / DCE `--agnos` / `--aarch64`: clean,
+  with the same link warnings as 1.5.1. Release binary 1,405,840 bytes
+  (+8).
+- `cyrius test` 7/7, `cyrius fuzz` 1 passed, `cyrius lint` 0 warnings.
+- The `ext.<x> = markdown` override was checked on both builds: 1.5.1
+  answers `bad value`, 1.5.2 routes the file to markdown.
+- `sh scripts/smoke.sh`: green against both the plain and the DCE binary.
+
 ## [1.5.1] - 2026-10-31
 
 **Toolchain to cyrius 6.7.18; vyakarana and sit to their latest releases.**

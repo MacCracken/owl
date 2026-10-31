@@ -22,7 +22,7 @@
 # Extensions and shebang hints are space-separated lowercase tokens.
 # Order matters: "cyrius" precedes "c" so *.cyr doesn't match *.c.
 
-var LANG_COUNT = 49;
+var LANG_COUNT = 50;
 
 # Indexed 0..LANG_COUNT-1
 fn lang_name(i) {
@@ -75,6 +75,7 @@ fn lang_name(i) {
     if (i == 46) { return "nasm"; }
     if (i == 47) { return "mdx"; }
     if (i == 48) { return "lean"; }
+    if (i == 49) { return "markdown"; }
     return "plain";
 }
 
@@ -137,6 +138,11 @@ fn lang_exts(i) {
     if (i == 46) { return ".nasm"; }
     if (i == 47) { return ".mdx"; }
     if (i == 48) { return ".lean"; }
+    # markdown's grammar has shipped since 1.0.0 and is in both bootstrap
+    # lists, but it had no row here until 1.5.2, so `.md` routed only via
+    # the "# " content sniff below and `--language=markdown` was refused.
+    # `.md` cannot shadow `.mdx` (index 47): matching is on the suffix.
+    if (i == 49) { return ".md .markdown"; }
     return "";
 }
 

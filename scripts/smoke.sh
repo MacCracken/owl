@@ -253,14 +253,15 @@ echo "$tlist" | grep -q "^light$" || fail "--list-themes missing 'light'"
 # 1.3.3 added vue + svelte (vyakarana 2.1.1); 1.3.4 added nix
 # (vyakarana 2.1.2); 1.3.5 added terraform (vyakarana 2.1.3);
 # 1.4.5 added openqasm (vyakarana 2.3.5); 1.5.1 added nasm + mdx +
-# lean (vyakarana 2.9.9) — 49 grammars.
+# lean (vyakarana 2.9.9) — 49 grammars. 1.5.2 listed markdown, whose
+# grammar had shipped since 1.0.0 without a language-table row.
 llist=$("$BIN" --list-languages)
 for lang in plain shell python javascript typescript rust cyrius c toml json yaml go zig \
             asm_x86_64 asm_aarch64 java kotlin cpp csharp php ruby lua swift \
             elixir ocaml haskell sql graphql protobuf html xml css scss \
             dockerfile makefile ini cyml llvm_ir \
             powershell crystal julia vue svelte nix terraform openqasm \
-            nasm mdx lean; do
+            nasm mdx lean markdown; do
     echo "$llist" | grep -q "^$lang\$" || fail "--list-languages missing '$lang'"
 done
 
@@ -709,6 +710,35 @@ out=$("$BIN" -n "$TMPDIR/t.asm")
 case "$out" in
     *"(asm_x86_64)"*) ;;
     *) fail "extension detection: .asm should stay (asm_x86_64), got: $out" ;;
+esac
+
+# 1.5.2 — markdown routes by extension. Through 1.5.1 it had no
+# language-table row: `.md` reached the grammar only when the file's
+# first line was a `# ` heading (the content sniff), and
+# `--language=markdown` exited 2. The probe deliberately opens with
+# prose, so the content sniff cannot be what passes it.
+printf 'Intro text, no heading.\n\n- item `code`\n\n## Later\n' > "$TMPDIR/notes.md"
+cp "$TMPDIR/notes.md" "$TMPDIR/notes.markdown"
+for f in notes.md notes.markdown; do
+    out=$("$BIN" -n "$TMPDIR/$f")
+    case "$out" in
+        *"(markdown)"*) ;;
+        *) fail "extension detection: $f should show (markdown) in header" ;;
+    esac
+    out=$("$BIN" -p "$TMPDIR/$f" | cmp -s - "$TMPDIR/$f" && echo same || echo differ)
+    [ "$out" = "same" ] || fail "plain mode must be byte-identical to cat for $f"
+done
+out=$(printf -- '- item `code`\n' | "$BIN" --color=always --paging=never --language=markdown) \
+    || fail "--language=markdown exited non-zero"
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "stdin + --color=always + --language=markdown did not emit ANSI" ;;
+esac
+# `.md` must not shadow `.mdx` (suffix match, but check it).
+out=$("$BIN" -n "$TMPDIR/t.mdx")
+case "$out" in
+    *"(mdx)"*) ;;
+    *) fail "extension detection: .mdx must stay (mdx) now that .md is listed" ;;
 esac
 
 # 1.3.6 — HIGHLIGHT_MAX lift. Pre-1.3.6 the cap was 128 KB total

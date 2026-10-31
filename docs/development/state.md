@@ -6,6 +6,18 @@
 
 ## Version
 
+**1.5.2** — shipped 2026-10-31. **Markdown is routed by extension.** Its
+grammar has shipped since 1.0.0, but the language table had no row
+for it. Before this release:
+- `.md` and `.markdown` highlighted only when the first line was a
+  `# ` heading;
+- `--language=markdown` exited 2;
+- markdown was missing from `--list-languages`.
+
+It now has a row (`LANG_COUNT` 50: `plain` plus 49 grammars), and
+smoke gates pin it. Pins and toolchain are unchanged from 1.5.1. The
+release binary is 1,405,840 bytes (+8).
+
 **1.5.1** — shipped 2026-10-31. **Toolchain `6.7.9` → `6.7.18`;
 vyakarana `2.5.0` → `2.10.0`, sit `1.7.0` → `1.13.0`**, the latest
 tag of each. Three new grammars (`nasm`, `mdx`, `lean`; 49 in all),
@@ -677,7 +689,7 @@ complete; full owl attack surface audited and hardened.
 - 4685 lines across 8 modules (1.4.7 cut) — `escape.cyr` split out of
   `main.cyr`, `fetch.cyr` added but NOT built (see §Next):
   - `src/main.cyr` (2395) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff, bat-style header frame (1.1.7), wrap-continuation gutter (1.1.8), `↪` wrap-arrow glyph (1.1.9), VCS-aware wrap budget (1.1.11), grammar bootstrap (1.1.12 → 1.4.5 covering 46 grammars), tokenize_source → streaming-API migration (1.3.1), per-chunk feed during slurp + HIGHLIGHT_MAX 128 KB → 16 MB (1.3.6), agnos `#ifdef` gates + bare-`_owl_entry()` top-level call (1.3.7/1.3.8), `--version --verbose` banner reports sit (1.4.0)
-  - `src/lang.cyr` (505) — extension/shebang/content detection + ext-override table + filename-shape detection (1.2.6); LANG_COUNT 49 (latest additions: nasm/mdx/lean 1.5.1, openqasm 1.4.5, terraform 1.3.5, nix 1.3.4, vue/svelte 1.3.3, powershell/crystal/julia 1.3.2, cyml/llvm_ir 1.3.0)
+  - `src/lang.cyr` (505) — extension/shebang/content detection + ext-override table + filename-shape detection (1.2.6); LANG_COUNT 50 (latest additions: markdown row 1.5.2, nasm/mdx/lean 1.5.1, openqasm 1.4.5, terraform 1.3.5, nix 1.3.4, vue/svelte 1.3.3, powershell/crystal/julia 1.3.2, cyml/llvm_ir 1.3.0)
   - `src/theme.cyr` (475) — bundled themes, 10-kind palette, ANSI emission, user-theme loader (1.1.3); kind_name-keyed `theme_token_color` per vyakarana architecture note 004 (1.3.0)
   - `src/vcs.cyr` (376) — **sit-backed VCS markers (1.4.0)** via `sit_repo_open`/`sit_diff_path`/`sit_repo_close`; LCS edit-script → ADD/MOD/DEL mapping; `--diff` bypass for piped output; agnos `#ifdef` no-op. Replaced the git fork+execve scaffold; public five-fn interface unchanged
   - `src/config.cyr` (319) — `key = value` config parser (M7) + `ext.*` keys (1.1.1)
@@ -812,7 +824,9 @@ Open informational items:
 
 ## Verification
 
-All green at 1.5.1 on cyrius `6.7.18`, from a clean `lib/`:
+All green at 1.5.2 on cyrius `6.7.18` (build, test, fuzz, lint, smoke
+on plain + DCE; the markdown gates fail against 1.5.1). The 1.5.1
+run, from a clean `lib/`:
 
 - `cyrius build` host / DCE / `--agnos` / DCE `--agnos` /
   `--aarch64`: clean. The link warnings are sit's three `sign`
