@@ -19,6 +19,8 @@ forward-looking. Full prose in `CHANGELOG.md`.
 
 | Release | Date       | Headline                                                |
 |---------|------------|---------------------------------------------------------|
+| 1.4.9   | 2026-10-31 | cyrius 6.6.20 + vyakarana 2.4.3 + sit 1.6.4 (audit read-path fixes); release binary −49.9% from toolchain DCE; stdlib 22 → 17 |
+| 1.4.8   | 2026-09-11 | cyrius 6.6.2 + vyakarana 2.4.2 (`_stream_grow` collision retired) |
 | 1.4.7   | 2026-08-22 | sit read-only fold (−17.7% binary); `--format=ndjson`; `--follow`; fuzz harness finds FINDING-013 |
 | 1.4.6   | 2026-08-22 | P(−1) audit — 7 findings; an unterminated escape could hide a whole file |
 | 1.4.5   | 2026-08-22 | cyrius 6.5.35 + deps to latest; the four object-store layers become stdlib leaves; `--agnos` target returns; 46 grammars (openqasm) |
@@ -320,9 +322,11 @@ code and stderr text (`:213-229`, `:268-278`, `:976`, `:986`, `:1004`, `:1361`,
       invocation plus `--bogus`, `-np`, `--color` (no value) and
       `a.txt --bogus`. The smoke suite must stay green.
 
-Noticed while surveying, for a separate fix: the `--verbose` version pins
+~~Noticed while surveying, for a separate fix: the `--verbose` version pins
 (`:1901-1903`: vyakarana 2.2.3, sit 1.0.2, cyrius 6.2.25) no longer match
-`cyrius.cyml` (2.4.2 / 1.6.1 / 6.6.2), and an identity bar would lock them in.
+`cyrius.cyml` (2.4.2 / 1.6.1 / 6.6.2), and an identity bar would lock them in.~~
+**Fixed at 1.4.9**: the banner now prints 2.4.3 / 1.6.4 / 6.6.20. They are
+still hand-kept, so the identity bar above should compare them with the manifest.
 
 See cmdit's `README.md`, `docs/adr/0001-flag-modifiers.md` and
 `docs/development/roadmap.md` (v2 backlog). Worked examples: kii, anuenue (its

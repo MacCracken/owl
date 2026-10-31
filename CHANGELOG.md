@@ -4,6 +4,85 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+_No unreleased changes._
+
+## [1.4.9] - 2026-10-31
+
+### Changed
+
+- **Toolchain `6.6.2` → `6.6.20`, vyakarana `2.4.2` → `2.4.3`, sit `1.6.1` → `1.6.4`.**
+  The two dep tags are the last of each line pinned to 6.6.20; the next tag of
+  each (vyakarana 2.5.0, sit 1.7.0) moves to cyrius 6.7.x. The four folded
+  object-store layers move with the toolchain pin, as they have since 1.4.5.
+  `lib/` re-cut from a clean tree; apart from the two dep bundles it is
+  identical to `~/.cyrius/versions/6.6.20/lib`.
+
+  - **vyakarana 2.4.3 has no source change**: it re-pins the toolchain and
+    regenerates the bundle. No grammar changed, so `grammars/` is not re-synced.
+  - **sit 1.6.4 is a P(−1) audit release.** None of its 16 HIGH findings
+    concern owl's API surface, but several fixes sit inside the read fold owl
+    links, on the path the gutter takes when it opens a `.git/` repo:
+    - pack indexes are cached instead of re-read on every object lookup
+      (D3, which sit's report names as hitting owl's process);
+    - object ids are hex-checked before they reach the git backend, so a
+      crafted `tree` value can no longer open a file outside `.git/objects`
+      (D8);
+    - delta base size and the 16 MiB result ceiling are checked (D10, D5);
+    - the inflate ratio cap is raised above what deflate can produce, so
+      highly compressible blobs read back (D1);
+    - `parse_tree` rejects out-of-order and duplicate entries (X1).
+
+- **`[deps].stdlib` 22 → 17 entries.** `tagged`, `ct`, `keccak`, `bayan` and
+  `random` are gone. 1.4.7 had to list the last four by hand because the sit
+  sidecar under-reported sigil's crypto follow-throughs. At 6.6.20 each folded
+  stdlib module opens with its own compile-checked `# Requires` block, and
+  `lib/sigil.cyr` includes all five itself. The usual procedure (trim to the
+  union of `dist/sit-read.deps` and `dist/vyakarana.deps`, then read the link
+  errors) now finds nothing missing. The trimmed build compiles **the same
+  function set** as the full one (3,611 unreachable fns / 1,619,537 bytes in
+  both; only layout order differs), and `cyrius deps` still materializes all 58
+  `lib/` files from a clean tree.
+
+- **`owl --version --verbose` reports the real pins.** It had printed
+  `vyakarana 2.2.3` / `sit 1.0.2` / `cyrius 6.2.25` since 1.4.1, three bumps out
+  of date. The roadmap's cmdit survey flagged this.
+
+- **Release binary 2,650,688 → 1,328,168 bytes (−49.9%)** with `CYRIUS_DCE=1`
+  (`--agnos` DCE: 1,325,264). This comes from the toolchain, not from owl. At
+  6.6.2, DCE replaced unreachable functions with NOPs in place, so the DCE and
+  plain builds were the same 2,650,688 bytes. At 6.6.20 it removes them. The
+  plain build grew 2,650,688 → 2,946,088 from the larger stdlib snapshot.
+  ⚠ Removal has a cap: past 4,096 dead-code runs the compiler skips it and says
+  so (`tests/owl.tcyr` already exceeds it). The `owl` binary is below the cap
+  today. If it crosses, the release binary roughly doubles with no failure.
+
+### Security
+
+- **INFO-002 is closed upstream.** The stdlib `getenv` read only the first 8 KB
+  of `/proc/self/environ`, so `NO_COLOR` / `OWL_PAGER` / `HOME` / `XDG_CONFIG_HOME`
+  were silently ignored in a large environment. cyrius **6.5.36** fixed it
+  ("`getenv` saw only the first 8 KB of the environment"), so it has been in
+  effect since 1.4.8 without being recorded. Measured at this release with a
+  12 KB variable ahead of `NO_COLOR`: 0 ESC bytes, against 207 without
+  `NO_COLOR`.
+
+### Verified
+
+- `cyrius build` host / DCE / `--agnos` / DCE `--agnos`: all clean, with only
+  sit's three documented dead-path `sign` placeholders. vyakarana 2.4.2
+  already cleared the `_stream_grow` duplicate.
+- `cyrius test`: 7/7. The fuzz harness: OK, 5 invariants. `tests/owl.bcyr`
+  builds and runs.
+- `sh scripts/smoke.sh`: green against both the plain build and the DCE build.
+  The native-sit-repo gutter gates ran, using a fixture built by sit 1.13.0.
+- `cyrius lint src/*.cyr`: 0 warnings. The old baseline of 20 `exceeds 120
+  characters` warnings is no longer reported at this toolchain. The two
+  existing untracked deferrals at `src/main.cyr:13` / `:61` remain.
+- **Output A/B against the 1.4.8 binary**: identical in all 192 runs (48
+  vyakarana corpus files × highlight, `-p`, decorated `-n`, `--format=ndjson`).
+  Also byte-identical: `--diff` and the TTY gutter on two modified files
+  (15 KB and 11 KB of decorated output).
+
 ## [1.4.8] - 2026-09-11
 
 ### Changed
@@ -25,9 +104,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   NOT in `[deps].stdlib`, because that list is auto-prepended to every surface and
   would link the benchmark harness into the shipped `owl` binary. Including them in
   the harness keeps them on the bench surface only.
-
-
-_No unreleased changes._
 
 ## [1.4.7] — 2026-08-22 — sit's read-only fold, `--format=ndjson`, `--follow`, and a fuzz harness that found a hole in 1.4.6's fix
 

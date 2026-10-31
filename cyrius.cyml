@@ -5,7 +5,7 @@ description = "Observant Watcher of Lines — a file viewer for AGNOS / Cyrius"
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/owl"
 language = "cyrius"
-cyrius = "6.6.2"
+cyrius = "6.6.20"
 
 [build]
 entry = "src/main.cyr"
@@ -37,22 +37,26 @@ output = "owl"
 # Every one was there for sit's network / signing / threading code, none of
 # which the read fold contains.
 #
-# KEPT, and not obvious: `ct`, `keccak`, `bayan`, `random`. The generated
-# sidecar does NOT list them — it under-reports, exactly as sit's own
-# manifest warns ("transitive stdlib resolution doesn't follow through
-# enum / constant references"). sigil's crypto primitives reach `u256_*`
-# and `ct_select` (ct + bayan, which is where the old bigint module was
-# folded at 6.1.24), `_keccak_*` / `shake256` (keccak), and `random_bytes`
-# (random). They were found the only reliable way — by trimming to the
-# sidecar and reading the link errors — not by inspection. Do the same on
-# the next bump rather than trusting either list alone.
+# Dropped at 1.4.9 (5): tagged, ct, keccak, bayan, random. 1.4.7 kept the
+# last four by hand because the sidecar under-reported sigil's crypto
+# follow-throughs (`u256_*` / `ct_select`, `_keccak_*` / `shake256`,
+# `random_bytes`). From cyrius 6.6.20, `distlib` output and the folded stdlib
+# modules open with a compile-verified `# Requires` block: `lib/sigil.cyr`
+# itself includes ct / bayan / random / keccak / tagged, and `cyrius deps`
+# materializes them from a clean `lib/` (58 files either way). Verified, not
+# assumed: the 17-entry build compiles the identical function set as the
+# 22-entry one (3611 unreachable fns / 1,619,537 bytes in both), links with
+# only sit's three documented `sign` placeholders, and passes test / smoke /
+# fuzz. (6.6.9+ also refuses to emit a binary with a reachable undefined
+# function, so the old runtime-SIGILL failure mode is now a build error.)
 #
-# Start from the union of the two generated sidecars — `dist/sit-read.deps`
-# (16) and `dist/vyakarana.deps` (11); owl's own surface is already a subset
-# of them. Then add back whatever the link reports undefined, per the note
-# above. `thread_local` is NOT needed here (patra's storage slots and
-# sigil's crypto bank reach it only from write paths the read fold omits) —
-# it was required through 1.4.6 and dropping it is safe only for this fold.
+# Procedure on a bump, unchanged: start from the union of the two generated
+# sidecars — `dist/sit-read.deps` (15 at sit 1.6.4) and `dist/vyakarana.deps`
+# (4 at vyakarana 2.4.3) — plus owl's own surface, then add back whatever
+# the link reports undefined. Do NOT trust either list alone.
+# `thread_local` is NOT needed here (patra's storage slots and sigil's
+# crypto bank reach it only from write paths the read fold omits) — it was
+# required through 1.4.6 and dropping it is safe only for this fold.
 #
 #   owl's own viewer surface
 #     syscalls/alloc/fmt/io — required baseline
@@ -63,7 +67,7 @@ output = "owl"
 #     process               — pager spawn (M4, §7)
 #     assert                — tests/owl.tcyr
 #   reached through sit-read's diff path
-#     chrono/tagged/freelist + sankoch (zlib), sigil (hashing),
+#     chrono/freelist + sankoch (zlib), sigil (hashing),
 #     patra (B+tree object store)
 stdlib = [
     "syscalls",
@@ -77,22 +81,17 @@ stdlib = [
     "args",
     "hashmap",
     "process",
-    "tagged",
     "assert",
     "chrono",
     "freelist",
     "sankoch",
     "sigil",
     "patra",
-    "ct",
-    "keccak",
-    "bayan",
-    "random",
 ]
 
 [deps.vyakarana]
 git = "https://github.com/MacCracken/vyakarana.git"
-tag = "2.4.2"
+tag = "2.4.3"
 modules = ["dist/vyakarana.cyr"]
 
 # sit — AGNOS-native VCS. owl consumes sit's library export (ADR 0009
@@ -125,5 +124,5 @@ modules = ["dist/vyakarana.cyr"]
 # design upstream, not a missing dep.
 [deps.sit]
 git = "https://github.com/MacCracken/sit.git"
-tag = "1.6.1"
+tag = "1.6.4"
 modules = ["dist/sit-read.cyr"]

@@ -6,6 +6,34 @@
 
 ## Version
 
+**1.4.9** — shipped 2026-10-31. **Toolchain `6.6.2` → `6.6.20`;
+vyakarana `2.4.2` → `2.4.3`, sit `1.6.1` → `1.6.4`.** These are the last
+tags of each dep line pinned to 6.6.20; the next ones move to 6.7.x. No
+behaviour change: owl's output is byte-identical to 1.4.8 in all 192
+runs of the corpus A/B, and in the `--diff` and TTY gutter A/B.
+
+Three things came with the bump:
+
+- **The release binary halved, 2,650,688 → 1,328,168 bytes.** At 6.6.20,
+  DCE removes dead code; at 6.6.2 it only replaced it with NOPs.
+- **`[deps].stdlib` dropped 22 → 17 entries.** The 6.6.20 folded modules
+  include their own requires, so the hand-kept sigil follow-throughs
+  are no longer needed.
+- **INFO-002 (the 8 KB `getenv` window) is confirmed closed upstream**,
+  fixed in cyrius 6.5.36 and in effect since 1.4.8.
+
+sit 1.6.4's audit puts several read-path fixes (D1/D3/D5/D8/D10/X1)
+inside the fold owl links. `--version --verbose` now prints the real
+pins; it had been stale since 1.4.1.
+
+**1.4.8** — shipped 2026-09-11. **Toolchain `6.5.35` → `6.6.2`;
+vyakarana `2.4.0` → `2.4.2`.** The toolchain made the long-tolerated
+`_stream_grow` collision (vyakarana vs sankoch, different arity) a hard
+error. vyakarana 2.4.2 renamed its copy, which retired the warning.
+`tests/owl.bcyr` started including `bench` / `fnptr` itself, which
+keeps them out of the shipped binary. This file was not refreshed at
+that tag; the 1.4.9 entry covers it.
+
 **1.4.7** — shipped 2026-08-22. **Closes the 1.4.x follow-up list.**
 Two items landed as planned, one landed and immediately paid for
 itself, one is parked with its reasons written down.
@@ -420,15 +448,23 @@ complete; full owl attack surface audited and hardened.
 
 ## Toolchain
 
-- **Cyrius pin**: `6.5.35` (in `cyrius.cyml [package].cyrius`)
-  — bumped from `6.2.37` at 1.4.5, which also cleared a
-  manifest-vs-wrapper pin drift. Prior moves: `6.2.2`→`6.2.25`
+- **Cyrius pin**: `6.6.20` (in `cyrius.cyml [package].cyrius`)
+  — bumped from `6.6.2` at 1.4.9, which was bumped from `6.5.35`
+  at 1.4.8. At 6.6.20, `distlib` bundles and folded stdlib modules
+  open with a compile-checked `# Requires` include block, `cyrius
+  deps` writes `cyrius.lock` for stdlib entries too, and DCE now
+  removes dead code where it used to NOP-fill it. `6.2.37`→`6.5.35`
+  was 1.4.5, which also cleared a manifest-vs-wrapper pin drift.
+  Prior moves: `6.2.2`→`6.2.25`
   (1.4.1), `6.1.14`→`6.2.2` (1.4.0), `5.9.43`→`5.10.10` (1.3.1),
   `5.10.10`→`6.0.56` (1.3.7, agnos target), `6.0.56`→`6.1.14`
   (1.3.8). CI and the release workflow both read this value out
   of `cyrius.cyml`, so a bump needs no workflow edit.
-- **vyakarana pin**: `2.4.0` (in `cyrius.cyml [deps.vyakarana].tag`)
-  — bumped from `2.2.3` at 1.4.5. 2.4.0's substance is **streaming
+- **vyakarana pin**: `2.4.3` (in `cyrius.cyml [deps.vyakarana].tag`)
+  — 2.4.3 at 1.4.9 is a toolchain re-pin with no source or grammar
+  change, and it cuts `dist/vyakarana.deps` from 11 leaves to 4.
+  2.4.2 at 1.4.8 renamed `_stream_grow` → `_vyk_stream_grow`.
+  Bumped from `2.2.3` to `2.4.0` at 1.4.5. 2.4.0's substance is **streaming
   chunk-invariance**: a chunk-fed tokenizer now produces the same
   tokens as a whole-buffer one on 15 of 20 corpora (was 7), fixing
   early-committed block comments, split longest-match operator
@@ -440,8 +476,18 @@ complete; full owl attack surface audited and hardened.
   history: API broke at 2.0.0 (`tokenize_source` → push-based
   streaming primitive per [ADR 0017](https://github.com/MacCracken/vyakarana/blob/main/docs/adr/0017-streaming-api.md));
   owl migrated at 1.3.1 (one-shot feed) + 1.3.6 (per-chunk feed).
-- **sit pin**: `1.6.1` (in `cyrius.cyml [deps.sit].tag`) — bumped
-  from `1.3.4` at 1.4.5. owl's consumed surface
+- **sit pin**: `1.6.4` (in `cyrius.cyml [deps.sit].tag`) — bumped
+  from `1.6.1` at 1.4.9. 1.6.3 re-pinned to 6.6.20. 1.6.4 is a P(−1)
+  audit release ([sit `docs/audit/2026-10-19-audit.md`](https://github.com/MacCracken/sit/blob/main/docs/audit/2026-10-19-audit.md));
+  confirmed present in `lib/sit-read.cyr` are:
+  - D3: pack indexes cached, not re-read on every lookup;
+  - D8: object ids hex-checked before they reach the git backend;
+  - D10 / D5: delta base size and the 16 MiB result ceiling checked;
+  - D1: inflate ratio cap raised to 1100;
+  - X1: `parse_tree` requires strict order.
+
+  The sidecar `dist/sit-read.deps` dropped `tagged` (16 → 15 leaves).
+  Bumped from `1.3.4` to `1.6.1` at 1.4.5. owl's consumed surface
   (`sit_repo_open` / `sit_diff_path` / `sit_repo_close` + `ann_*`)
   is unchanged across the whole range. What owl inherits is the
   1.3.5–1.3.8 hardening arc: a `three_way_line_merge` SIGSEGV, an
@@ -461,7 +507,12 @@ complete; full owl attack surface audited and hardened.
     patra's storage slots calling `thread_local_*`), so they are
     declared explicitly rather than left to the transitive arc —
     an undeclared module of this class fails as a SIGILL, not a
-    build error.
+    build error. **Superseded at 1.4.9:** `thread_local` / `sync`
+    left with the sit-read move (1.4.7), and `random` left at 1.4.9.
+    At 6.6.20 `lib/sigil.cyr` includes `random` itself, and since
+    6.6.9 a reachable undefined function refuses to link rather
+    than trapping at runtime. The trimmed build was checked to
+    compile the identical function set before the entry was dropped.
   - At 1.4.0, patra moved 1.11.1 → 1.11.2 — an upstream fix owl
     drove: patra's SQL `enum TokType` collided with vyakarana's
     `TK_IDENT`/`TK_COUNT` token-kind constants under co-link;
@@ -469,6 +520,22 @@ complete; full owl attack surface audited and hardened.
 
 ## Binary
 
+- **~1.33 MB (1,328,168 bytes, `CYRIUS_DCE=1`) at 1.4.9**, down from
+  2,650,688 at 1.4.8 (−49.9%); `--agnos` DCE is 1,325,264. This is
+  the toolchain, not owl. At 6.6.20, DCE removes the 3,611
+  unreachable functions (1,619,537 bytes), where 6.6.2 NOP-filled
+  them in place. That is why 1.4.8's DCE and plain builds were the
+  same size. The plain (non-DCE) build is 2,946,088 at 1.4.9, up
+  from 2,650,688 because the 6.6.20 stdlib snapshot is larger.
+  `release.yml` builds with `CYRIUS_DCE: '1'`, so 1.33 MB is what
+  ships.
+- ⚠ **Watch item: dead-code removal is capped at 4,096 dead-code
+  runs.** Past that, the compiler NOP-fills instead and only prints
+  a note (`no compaction on x86_64 ELF: more than 4096 dead-code
+  runs, the repair registry cap`). `tests/owl.tcyr` already exceeds
+  it (4,193 unreachable fns). `owl` has at most 3,611 runs. If a dep
+  bump pushes it over, the release binary roughly doubles and
+  nothing fails, so check the size on every bump.
 - **~2.95 MB (2,953,112 bytes, `build/owl`, DCE) at 1.4.7** — down
   **635,936 bytes (−17.7%)** from 1.4.6's 3,589,048, entirely from
   adopting sit's read-only fold. This reverses the growth trend since
@@ -484,7 +551,9 @@ complete; full owl attack surface audited and hardened.
   read fold, referenced only by commit's signing path the read API
   never calls.
 - The **`duplicate fn '_stream_grow'`** warning (vyakarana vs sankoch)
-  persists and remains inert — verified in both link orderings. Filed
+  is **gone since 1.4.8**. cyrius 6.5.37 made the arity mismatch a hard
+  error, and vyakarana 2.4.2 renamed its copy. The history below is
+  kept for the upstream filing. *(1.4.7:)* persisted and remained inert — verified in both link orderings. Filed
   at 1.4.7 as a **cyrius** issue, not a library one: `private` exists
   (6.5.0+) but does not scope symbol resolution, so neither library can
   currently fix this on its own. See
@@ -520,16 +589,18 @@ complete; full owl attack surface audited and hardened.
 
 ## Dependencies
 
-- **Cyrius stdlib** — owl's own viewer surface needs `syscalls`,
+- **Cyrius stdlib** — **17 entries at 1.4.9** (22 at 1.4.7–1.4.8,
+  38 before that). owl's own viewer surface needs `syscalls`,
   `alloc`, `fmt`, `io`, `fs`, `str`, `string`, `vec`, `args`,
-  `hashmap`, `process`, `tagged`, `assert`. Everything after that
-  in `[deps].stdlib` is sit's transitive footprint: `dist/sit.cyr`
-  concatenates sit's full `src/` (including the wire/serve/https
-  surface owl never calls), so every symbol it references must
-  resolve at compile time even though DCE strips the unused
-  functions. **The list mirrors `dist/sit.deps` verbatim** — that
-  sidecar, emitted by `cyrius distlib` next to the bundle, is the
-  authority; on a sit bump, diff against it rather than guessing.
+  `hashmap`, `process`, `assert`; sit-read's diff path adds
+  `chrono`, `freelist`, `sankoch`, `sigil`, `patra`. The list is
+  the union of `dist/sit-read.deps` (15) and `dist/vyakarana.deps`
+  (4) plus owl's own surface, checked against the link. At 6.6.20
+  the folded modules include their own requires: `sigil.cyr`
+  brings `ct` / `bayan` / `random` / `keccak` / `tagged`, and
+  `cyrius deps` materializes all 58 `lib/` files from a clean tree.
+  The reasoning and the bump procedure are in `cyrius.cyml`'s
+  `[deps]` comment.
 - **`sakshi` / `sankoch` / `sigil` / `patra` are stdlib leaves,
   not git deps** (since 1.4.5, tracking sit 1.3.6). All four ship
   in the cyrius stdlib snapshot, so the `cyrius` pin in
@@ -541,12 +612,12 @@ complete; full owl attack surface audited and hardened.
   because the lock is written from disk and records the
   downgraded file's own hash. patra (1.13.0) and sigil (3.12.7)
   made the same change upstream for the same reason.
-- **vyakarana** 2.4.0 — tokenizer + **46** bundled grammars
+- **vyakarana** 2.4.3 — tokenizer + **46** bundled grammars
   (git-tag pinned in `[deps.vyakarana]`). 11 → 46 grammars across
   the 1.2.x/1.3.x cascade and 2.3.5's `openqasm`; 2.0.0
   streaming-API break migrated at 1.3.1/1.3.6; 2.4.0 made that
   streaming path chunk-invariant.
-- **sit** 1.6.1 — AGNOS-native VCS (added 1.4.0). owl consumes its
+- **sit** 1.6.4 — AGNOS-native VCS (added 1.4.0). owl consumes its
   ADR-0009 library surface (`sit_repo_open` / `sit_diff_path` /
   `sit_repo_close` + `ann_*` accessors) for the VCS change-marker
   gutter, replacing the git fork+execve scaffold. Reaching it
@@ -603,7 +674,13 @@ the audit asked for, and closed in 1.4.7:
 
 Open informational items:
 
-- **INFO-002 (upstream, cyrius)** — the stdlib's `getenv` (`lib/io.cyr`)
+- ~~**INFO-002 (upstream, cyrius)**~~ — **closed upstream in cyrius
+  6.5.36** ("`getenv` saw only the first 8 KB of the environment"), so
+  it has been in effect since 1.4.8 (6.6.2), confirmed at 1.4.9. The
+  stdlib now loads the whole environment block once and caches it
+  (`_env_load`). Re-measured at 1.4.9 with a 12 KB variable ahead of
+  `NO_COLOR`: 0 ESC bytes, against 207 without `NO_COLOR`. Original
+  text: the stdlib's `getenv` (`lib/io.cyr`)
   reads `/proc/self/environ` into an 8 KB buffer, so any variable past
   that window is invisible. Measured on owl: `NO_COLOR=1` gives 0 ESC
   bytes with a small environment and **18** with one over 8 KB.
@@ -622,7 +699,26 @@ Open informational items:
 
 ## Verification
 
-All green at 1.4.7 on cyrius `6.5.35`:
+All green at 1.4.9 on cyrius `6.6.20`:
+
+- `cyrius build` host / DCE / `--agnos` / DCE `--agnos`: all clean.
+  The only warnings are sit's three documented dead-path `sign`
+  placeholders; there is no duplicate-fn warning.
+- `cyrius test`: 7 passed, 0 failed. Fuzz: OK, 5 invariants.
+  `tests/owl.bcyr` builds and runs.
+- `sh scripts/smoke.sh`: green against both the plain and the DCE
+  binary. The native-sit-repo gutter gates ran with sit 1.13.0's
+  CLI building the fixture.
+- `cyrius lint src/*.cyr`: 0 warnings. The 20-line long-comment
+  baseline is no longer reported. The two existing untracked
+  deferrals at `src/main.cyr:13` / `:61` remain.
+- **A/B against the 1.4.8 binary**: identical in all 192 runs (48
+  vyakarana corpus files × highlight, `-p`, decorated `-n`,
+  `--format=ndjson`). `--diff` and the TTY gutter (`~` markers) are
+  byte-identical on two modified files.
+- **INFO-002 re-measured closed** (see §Security).
+
+At 1.4.7 on cyrius `6.5.35`:
 
 - `cyrius build` host / `--agnos` / DCE / DCE `--agnos` — all clean
 - `cyrius test` — 7 passed, 0 failed
@@ -677,6 +773,7 @@ Follow-ups opened by the 1.4.6 audit:
 `cyrius/docs/development/issues/2026-08-22-owl-getenv-8kb-environ-window.md`,
 with a standalone minimal repro (same variable found or not found purely
 by how many bytes precede it) plus the owl `NO_COLOR` measurement.
+**Fixed upstream in 6.5.36**; re-verified at 1.4.9.
 
 ~~**Widen the audit corpus into a fuzz target**~~ — **done at 1.4.7.**
 `tests/owl.fcyr` covers the escape classifier with 5 invariants and
