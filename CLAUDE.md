@@ -68,7 +68,7 @@ Include order in `main.cyr`: `lib/vyakarana.cyr` first, then `src/escape.cyr` (n
 - **Highlight ceiling** — `HIGHLIGHT_MAX` caps the highlight path against the bump allocator (full file + tokenbuf + ANSI-inflated output ≈ 4× resident). Oversized files fall back to plain streaming. Raising the cap needs a freeing allocator or vyakarana 2.x streaming tokenizer
 - **Grammar files ship with owl** — `grammars/*.cyml` are runtime data, not source. They must be installed alongside the binary
 - **`[deps].stdlib` is what owl REACHES** — since 1.4.7 owl consumes sit's read-only fold (`dist/sit-read.cyr`), not the full bundle. On a dep bump, start from the union of `dist/sit-read.deps` and `dist/vyakarana.deps` plus owl's own surface, then add back whatever the link reports undefined. Do NOT trust either list alone. Through cyrius 6.6.2 the sidecars under-reported sigil's crypto follow-throughs (`ct` / `keccak` / `bayan` / `random`). From 6.6.20 the folded modules include their own requires, so the link is clean without them. A clean link is necessary but not sufficient: also confirm the trimmed build compiles the same function set (the `unreachable fns` note) and that smoke passes
-- **Check the DCE release size on every bump** — DCE stops removing dead code past 4,096 dead-code runs and only prints a note. The binary roughly doubles and nothing fails
+- **Check the DCE release size on every bump** — it is the shipped binary. (Cyrius 6.6.20–6.7.13 stopped removing dead code past 4,096 dead-code runs and only printed a note; 6.7.14 removed that cap.)
 - **An escape sequence may never swallow more than its own line** — the classifier is bounded at a newline and at `ESC_MAX_LEN`, and an ESC at either bound starts a new sequence rather than being emitted. Three audit findings (006, 013) came from getting this wrong; `tests/owl.fcyr` pins all of it
 - **File-origin escapes are stripped by default** — `-r` / `--raw-control-chars` is the opt-in for trusted-ANSI passthrough. The default must stay safe
 
@@ -119,7 +119,7 @@ Include order in `main.cyr`: `lib/vyakarana.cyr` first, then `src/escape.cyr` (n
 - Since cyrius 6.7: `trait` `const` `true` `false` `do` `dyn` are reserved words, and `!` is a real operator (before 6.7.3 a lone `!` was silently dropped, so `!x` compiled as `x`)
 - On every pin bump, read cyrius `docs/development/ecosystem-migration.md` from the old pin up. For each entry that changes what *already-compiling* code computes, grep `src/` and `tests/` with strings and comments blanked, and prove the grep matches a planted positive — a green build does not cover these
 - `break` in `while` loops with `var` declarations is unreliable — use flag + `continue`
-- Cyrius string literals do NOT parse `\x??` hex escapes — `"\x1b"` emits literal `\x1b` bytes. Build ANSI escapes via `store8(&buf + i, 0x1B)` instead (see `ansi_reset` in `src/theme.cyr`)
+- Build ANSI escapes via `store8(&buf + i, 0x1B)` (see `ansi_reset` in `src/theme.cyr`), not a `"\x1b…"` literal. Through cyrius 6.7.10 string literals did not parse `\x??` (the literal emitted the characters `\x1b`); 6.7.11+ does, but owl keeps the explicit form so escape bytes are made in one visible place
 - Test exit pattern: `syscall(60, assert_summary())`
 - All struct fields are 8-byte slots unless explicitly packed (vyakarana's 12-byte Token is the exception)
 - Max limits per compilation unit: 4,096 variables, 1,024 functions, 4,096 initialized globals

@@ -32,8 +32,7 @@
 #
 # Known gaps (not triggered by the stand-in):
 #   - **Here-strings** `@'...'@` and `@"..."@`. Multi-line
-#     pair markers; same scanner-shape limitation as Lua's
-#     `[==[...]==]` long brackets and Ruby heredocs.
+#     pair markers, the closer at a line start; not declared.
 #   - **String interpolation** in `"..."` — the `$var` /
 #     `$(expr)` forms inside strings tokenize as the string
 #     wrapping them; the renderer doesn't see the inner
@@ -59,6 +58,8 @@ number_decimal = true
 number_0x      = true
 number_0b      = false
 number_0o      = false
+number_float   = true      # `1.5`, `1e5`, `2.5e-3` as one number (ADR 0026)
+number_lead_dot = true    # `.5` (ADR 0026, 2.9.7)
 
 # `$` lives in `ident_start` so `$args`, `$var`, `$_` all
 # tokenize as one ident. Disabling `special_vars` because the
@@ -90,7 +91,7 @@ operators = [
     "-band", "-bor", "-bxor", "-bnot",
     "-shl", "-shr",
     "-and", "-or", "-not", "-xor",
-    "-is", "-isnot", "-as",
+    "-isnot", "-is", "-as",   # `-isnot` first — first match wins (2.5.2 audit P2-7)
     "-f",
     "+=", "-=", "*=", "/=", "%=",
     "==", "!=", "<=", ">=",

@@ -2,8 +2,8 @@
 #
 # Rule scheme per ADR 0005. TypeScript is JavaScript syntax plus a
 # type-annotation layer; at the token level they're near-identical
-# (see also grammars/javascript.cyml — same defaults, smaller
-# keyword list).
+# (see also grammars/javascript.cyml — same defaults but `shebang`,
+# smaller keyword list).
 #
 # Corpus: tests/corpus/typescript.ts (vidya-backed).
 #
@@ -15,7 +15,7 @@
 #   - Regex literals `/pat/flags`. Context-sensitive vs. division.
 #     The vidya sample has zero regex; not blocking.
 #   - JSX / TSX elements (`.tsx`). Not included in extension mapping;
-#     a JSX rule set is a future grammar, not this one.
+#     no bundled grammar covers them.
 
 [grammar]
 name = "typescript"
@@ -37,6 +37,12 @@ number_decimal = true
 number_0x      = true
 number_0b      = true
 number_0o      = true
+number_float   = true      # `1.5`, `1e5`, `2.5e-3` as one number (ADR 0026)
+number_lead_dot = true    # `.5` (ADR 0026, 2.9.7)
+number_trail_dot = true   # `1.`, `1.e5`; `1..2` and `1.max` stay split (2.9.7)
+# Type suffixes join the literal: BigInt `10n` (2.9.7).
+number_suffixes = ["n"]
+number_separator = "_"    # `1_000` (ADR 0026)
 
 special_vars = false
 
@@ -55,6 +61,10 @@ operators = [
     "+=", "-=", "*=", "/=", "%=",
     "&=", "|=", "^=",
     "=>",
+    # `\/` — a regex's escaped slash (the regex literal itself is not a
+    # token, ADR 0003): through 2.9.11 `/^\/*|\/*$/` opened a `/*` comment
+    # at its `/*` and `\//` a line comment (2.9.12 audit, reviewer A).
+    "\\/",
     "=", "+", "-", "*", "/", "%",
     "!", "~", "&", "|", "^",
     "<", ">",
@@ -77,6 +87,16 @@ punctuation = [
 kind = "comment"
 match = "line"
 start = "//"
+
+
+# Block comments `/* … */`, JSDoc's `/** … */` among them (2.9.3).
+# ECMAScript's do not nest, so the pair rule's close at the first `*/`
+# is the spec's.
+[[rules]]
+kind = "comment"
+match = "pair"
+start = "/*"
+end = "*/"
 
 
 # Template literals `` `...` ``. Backslash-aware.

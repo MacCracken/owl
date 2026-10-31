@@ -31,22 +31,23 @@
 # Known gaps:
 #   - **Nested block comments** `#= a #= b =# c =#`. Spec says
 #     they nest; our pair scanner is greedy and closes at the
-#     first `=#`. Outer `c =#` becomes stray tokens. Same
-#     scanner-shape limitation as Lua's `[==[...]==]` long
-#     brackets. Documented; revisit if a corpus surfaces real
+#     first `=#`. Outer `c =#` becomes stray tokens. haskell,
+#     ocaml, rust, swift and lean document the same nesting
+#     limit. Documented; revisit if a corpus surfaces real
 #     nesting.
 #   - **Unicode operators** like `≠`, `≤`, `≥`, `∈`, `∪`. Tokenize
 #     as TK_IDENT (since unicode_ident=true). Theme can re-pair
 #     by token text.
 #   - **String interpolation** `$var` / `$(expr)` — body
 #     tokenizes as part of the surrounding string.
-#   - **Raw strings** `raw"..."` — the `raw` prefix tokenizes
-#     as a separate ident; the string itself tokenizes
-#     normally without the no-escape semantics.
+#   - **String macros** beyond Base's `raw` / `r` / `b` / `v` (which
+#     join their string since 2.9.3) — `html"…"`, `L"…"` and the like
+#     tokenize as ident + string.
 
 [grammar]
 name = "julia"
 extensions = [".jl"]
+shebangs = ["julia"]
 
 [defaults]
 shebang = true
@@ -61,16 +62,27 @@ number_decimal = true
 number_0x      = true
 number_0b      = true
 number_0o      = true
+number_float   = true      # `1.5`, `1e5`, `2.5e-3` as one number (ADR 0026)
+number_lead_dot = true    # `.5` (ADR 0026, 2.9.7)
+number_separator = "_"    # `1_000` (ADR 0026)
 
 special_vars = false
 
 unicode_ident = true
 char_literal  = true
 
+# Non-standard string literals — `raw"…"`, `r"…"` (regex), `b"…"` (bytes),
+# `v"…"` (version) — are one string token with their prefix (2.9.3, ADR
+# 0027). Plain prefixes, not raw ones: in all of them `\"` is an escaped
+# quote (the manual's "quotation marks still must be escaped"), which is
+# how the pair rule's escape already ends them. Any identifier touching
+# a `"` calls a string macro in Julia; only Base's are declared.
+string_prefixes = ["b", "r", "raw", "v"]
+
 operators = [
     "===", "!==",
     "==", "!=", "<=", ">=",
-    "<<", ">>", ">>>",
+    ">>>", "<<", ">>",   # `>>>` first — first match wins (2.5.2 audit P2-7)
     "&&", "||",
     "|>", "<|",
     "->", "=>",

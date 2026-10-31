@@ -6,6 +6,32 @@
 
 ## Version
 
+**1.5.1** — shipped 2026-10-31. **Toolchain `6.7.9` → `6.7.18`;
+vyakarana `2.5.0` → `2.10.0`, sit `1.7.0` → `1.13.0`**, the latest
+tag of each. Three new grammars (`nasm`, `mdx`, `lean`; 49 in all),
+and a gutter fix that matters in practice: through 1.5.0, a one-line
+edit to an **executable** file in a git repository marked every line
+as added. That covered every shell script in a git checkout. sit
+1.12.0 fixed how git tree modes are read, and a smoke gate now pins
+it.
+
+Highlighting changes where vyakarana deliberately moved token
+boundaries (number literals, shell, prefixes, heredocs, chunked
+compose streams). Nothing else changes: colour-stripped output is
+byte-identical to 1.5.0, and highlighted output reproduces every
+corpus file exactly.
+
+sit's 1.7.6 and 1.12.2 audits harden the in-process read path owl's
+gutter runs on: no retained blobs, no diffing of unchanged files, no
+reads through symlinked directories. owl can now read `sit gc`'d
+(packed) repositories.
+
+The 6.7.10–6.7.18 migration notes (about 6,700 lines) were audited
+against owl's source before the bump. Nothing reached owl's code.
+`\x??` string escapes and the end of the 4,096-run DCE cap were
+corrected in CLAUDE.md. The release binary is 1,405,832 bytes
+(+73,712).
+
 **1.5.0** — shipped 2026-10-31. **Toolchain `6.6.20` → `6.7.9`,
 cyrius's 6.7 language line; vyakarana `2.4.3` → `2.5.0`, sit
 `1.6.4` → `1.7.0`.** It is a minor release because cyrius moved a
@@ -463,8 +489,16 @@ complete; full owl attack surface audited and hardened.
 
 ## Toolchain
 
-- **Cyrius pin**: `6.7.9` (in `cyrius.cyml [package].cyrius`) —
-  bumped from `6.6.20` at 1.5.0. 6.7 is a language minor: new
+- **Cyrius pin**: `6.7.18` (in `cyrius.cyml [package].cyrius`) —
+  bumped from `6.7.9` at 1.5.1. The 6.7.10–6.7.18 migration notes
+  changed nothing in owl's code, but four things changed around it:
+  - string literals parse `\x??` (6.7.11);
+  - DCE compacts past 4,096 dead-code runs (6.7.14);
+  - a pin bump re-locks only through `cyrius deps` (6.7.13);
+  - every resolve names each stale `cyrius.lock` commit row
+    (6.7.12).
+
+  `6.7.9` came in at 1.5.0, bumped from `6.6.20`. 6.7 is a language minor: new
   reserved words (`trait` `const` `true` `false` `do` `dyn`), `!` as a
   real operator, forward calls arity-checked, and several binding and
   pointer-arithmetic changes that alter compiling code. The authority
@@ -482,8 +516,23 @@ complete; full owl attack surface audited and hardened.
   `5.10.10`→`6.0.56` (1.3.7, agnos target), `6.0.56`→`6.1.14`
   (1.3.8). CI and the release workflow both read this value out
   of `cyrius.cyml`, so a bump needs no workflow edit.
-- **vyakarana pin**: `2.5.0` (in `cyrius.cyml [deps.vyakarana].tag`)
-  — 2.5.0 at 1.5.0 moves onto the 6.7 line with no source, grammar,
+- **vyakarana pin**: `2.10.0` (in `cyrius.cyml [deps.vyakarana].tag`)
+  — bumped from 2.5.0 at 1.5.1. No token kind, `Token` layout or
+  public-API change across the range. Every function owl calls is
+  present with the same arity, and `_grammars_bootstrapped`, the one
+  internal owl writes, keeps its meaning. What arrives:
+  - three grammars (2.9.9);
+  - deliberate token-boundary changes (2.6.0 shell, 2.7.0 / 2.9.7
+    numbers, 2.7.1 / 2.9.6 prefixes, 2.9.5 delimiters);
+  - chunk-invariant streaming of compose grammars (2.8.0 –
+    2.9.12);
+  - compacted grammar blobs (2.9.0).
+
+  `grammar_load` still matches embedded blobs only on the exact
+  relative path `grammars/<name>.cyml`, so owl's absolute bundled
+  paths and its user overlay still read from disk. Not adopted yet:
+  `detect_language_registered` (2.9.8) and documents and incremental
+  retokenization (2.9.11). 2.5.0 at 1.5.0 moved onto the 6.7 line with no source, grammar,
   token-kind or API change (its minor marks the language minor, as
   owl's does). 2.4.3 at 1.4.9 is a toolchain re-pin with no source or grammar
   change, and it cuts `dist/vyakarana.deps` from 11 leaves to 4.
@@ -500,8 +549,27 @@ complete; full owl attack surface audited and hardened.
   history: API broke at 2.0.0 (`tokenize_source` → push-based
   streaming primitive per [ADR 0017](https://github.com/MacCracken/vyakarana/blob/main/docs/adr/0017-streaming-api.md));
   owl migrated at 1.3.1 (one-shot feed) + 1.3.6 (per-chunk feed).
-- **sit pin**: `1.7.0` (in `cyrius.cyml [deps.sit].tag`) — bumped
-  from `1.6.4` at 1.5.0. Nothing on owl's path changed: the read fold
+- **sit pin**: `1.13.0` (in `cyrius.cyml [deps.sit].tag`) — bumped
+  from `1.7.0` at 1.5.1. The ADR 0009 surface owl calls is unchanged;
+  it was amended at 1.11.0 for what `sit_repo_open` drops and for the
+  per-call store lock. On owl's path:
+  - git tree modes are read as git wrote them (1.12.0); this fixed
+    owl's executable-file gutter;
+  - `sit_diff_path` no longer retains blobs (R1) or diffs unchanged
+    files (R9);
+  - no reads through symlinked directories (G1);
+  - packs are mapped read-only, which is why `mmap` is a stdlib entry
+    again (1.7.4);
+  - `sit gc` packs are readable (1.10.0);
+  - the final newline is part of the last line (1.7.2).
+
+  Locking: the read API takes `.sit/objects.flock` **shared, per
+  call**. A running `sit` command never blocks owl; the gutter waits
+  only while `sit gc` / `fsck --prune` hold it exclusively. ⚠ The read
+  bundle carries a fourth unresolved symbol, `commit_tree_hex` (since
+  sit 1.7.6), which ADR 0013 does not list. It is unreachable from
+  owl, so this is an upstream gap. 1.7.0 came in at 1.5.0, bumped
+  from `1.6.4`. Nothing on owl's path changed: the read fold
   gains 169 lines of conflict-recording CLI code (`conflicts_*`,
   `cmd_status`, `cmd_reset`), none of it reachable from `sit_diff_path`.
   Its bearer-token binding (ADR 0014) is network-side, outside the
@@ -553,6 +621,12 @@ complete; full owl attack surface audited and hardened.
 
 ## Binary
 
+- **1,405,832 bytes (`CYRIUS_DCE=1`) at 1.5.1**, +73,712 over 1.5.0.
+  `--agnos` DCE is 1,402,992 and the plain build 3,474,312;
+  unreachable fns went 3,621 → 4,376. The growth is the deps'
+  reachable code: sit's read path (packs, git read parity, audit
+  fixes) and three grammar blobs, partly offset by vyakarana 2.9.0's
+  blob compaction.
 - **1,332,120 bytes (`CYRIUS_DCE=1`) at 1.5.0**, +3,952 over 1.4.9.
   `--agnos` DCE is 1,325,136; the plain build is 2,958,232.
   Unreachable fns went 3,611 → 3,621, the extra ten from sit 1.7.0's
@@ -566,13 +640,12 @@ complete; full owl attack surface audited and hardened.
   from 2,650,688 because the 6.6.20 stdlib snapshot is larger.
   `release.yml` builds with `CYRIUS_DCE: '1'`, so 1.33 MB is what
   ships.
-- ⚠ **Watch item: dead-code removal is capped at 4,096 dead-code
-  runs.** Past that, the compiler NOP-fills instead and only prints
-  a note (`no compaction on x86_64 ELF: more than 4096 dead-code
-  runs, the repair registry cap`). `tests/owl.tcyr` already exceeds
-  it (4,193 unreachable fns). `owl` has at most 3,611 runs. If a dep
-  bump pushes it over, the release binary roughly doubles and
-  nothing fails, so check the size on every bump.
+- ~~**Watch item: dead-code removal is capped at 4,096 dead-code
+  runs.**~~ **Retired at 1.5.1: cyrius 6.7.14 removed the cap.**
+  `tests/owl.tcyr` (5,199 unreachable fns) now compacts to 872 KB
+  under `CYRIUS_DCE=1`, and owl's 4,376 compact as before. For
+  6.6.20–6.7.13 the compiler NOP-filled past the cap and only printed
+  a note, so the release binary could double without failing.
 - **~2.95 MB (2,953,112 bytes, `build/owl`, DCE) at 1.4.7** — down
   **635,936 bytes (−17.7%)** from 1.4.6's 3,589,048, entirely from
   adopting sit's read-only fold. This reverses the growth trend since
@@ -604,7 +677,7 @@ complete; full owl attack surface audited and hardened.
 - 4685 lines across 8 modules (1.4.7 cut) — `escape.cyr` split out of
   `main.cyr`, `fetch.cyr` added but NOT built (see §Next):
   - `src/main.cyr` (2395) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff, bat-style header frame (1.1.7), wrap-continuation gutter (1.1.8), `↪` wrap-arrow glyph (1.1.9), VCS-aware wrap budget (1.1.11), grammar bootstrap (1.1.12 → 1.4.5 covering 46 grammars), tokenize_source → streaming-API migration (1.3.1), per-chunk feed during slurp + HIGHLIGHT_MAX 128 KB → 16 MB (1.3.6), agnos `#ifdef` gates + bare-`_owl_entry()` top-level call (1.3.7/1.3.8), `--version --verbose` banner reports sit (1.4.0)
-  - `src/lang.cyr` (505) — extension/shebang/content detection + ext-override table + filename-shape detection (1.2.6); LANG_COUNT 46 (latest additions: openqasm 1.4.5, terraform 1.3.5, nix 1.3.4, vue/svelte 1.3.3, powershell/crystal/julia 1.3.2, cyml/llvm_ir 1.3.0)
+  - `src/lang.cyr` (505) — extension/shebang/content detection + ext-override table + filename-shape detection (1.2.6); LANG_COUNT 49 (latest additions: nasm/mdx/lean 1.5.1, openqasm 1.4.5, terraform 1.3.5, nix 1.3.4, vue/svelte 1.3.3, powershell/crystal/julia 1.3.2, cyml/llvm_ir 1.3.0)
   - `src/theme.cyr` (475) — bundled themes, 10-kind palette, ANSI emission, user-theme loader (1.1.3); kind_name-keyed `theme_token_color` per vyakarana architecture note 004 (1.3.0)
   - `src/vcs.cyr` (376) — **sit-backed VCS markers (1.4.0)** via `sit_repo_open`/`sit_diff_path`/`sit_repo_close`; LCS edit-script → ADD/MOD/DEL mapping; `--diff` bypass for piped output; agnos `#ifdef` no-op. Replaced the git fork+execve scaffold; public five-fn interface unchanged
   - `src/config.cyr` (319) — `key = value` config parser (M7) + `ext.*` keys (1.1.1)
@@ -626,8 +699,10 @@ complete; full owl attack surface audited and hardened.
 
 ## Dependencies
 
-- **Cyrius stdlib** — **17 entries since 1.4.9** (unchanged at 1.5.0:
-  both sidecars list the same leaves at 2.5.0 / 1.7.0) (22 at 1.4.7–1.4.8,
+- **Cyrius stdlib** — **18 entries at 1.5.1**: `mmap` re-added, because
+  sit 1.7.4+ maps git packs read-only. `cyrius deps` also vendors
+  `lib/cmdit.cyr` (sit's CLI dep), which no bundle includes. (17 at
+  1.4.9–1.5.0; 22 at 1.4.7–1.4.8,
   38 before that). owl's own viewer surface needs `syscalls`,
   `alloc`, `fmt`, `io`, `fs`, `str`, `string`, `vec`, `args`,
   `hashmap`, `process`, `assert`; sit-read's diff path adds
@@ -650,12 +725,12 @@ complete; full owl attack surface audited and hardened.
   because the lock is written from disk and records the
   downgraded file's own hash. patra (1.13.0) and sigil (3.12.7)
   made the same change upstream for the same reason.
-- **vyakarana** 2.5.0 — tokenizer + **46** bundled grammars
+- **vyakarana** 2.10.0 — tokenizer + **49** bundled grammars (nasm, mdx, lean at 1.5.1)
   (git-tag pinned in `[deps.vyakarana]`). 11 → 46 grammars across
   the 1.2.x/1.3.x cascade and 2.3.5's `openqasm`; 2.0.0
   streaming-API break migrated at 1.3.1/1.3.6; 2.4.0 made that
   streaming path chunk-invariant.
-- **sit** 1.7.0 — AGNOS-native VCS (added 1.4.0). owl consumes its
+- **sit** 1.13.0 — AGNOS-native VCS (added 1.4.0). owl consumes its
   ADR-0009 library surface (`sit_repo_open` / `sit_diff_path` /
   `sit_repo_close` + `ann_*` accessors) for the VCS change-marker
   gutter, replacing the git fork+execve scaffold. Reaching it
@@ -737,7 +812,31 @@ Open informational items:
 
 ## Verification
 
-All green at 1.5.0 on cyrius `6.7.9`, on the first build with no
+All green at 1.5.1 on cyrius `6.7.18`, from a clean `lib/`:
+
+- `cyrius build` host / DCE / `--agnos` / DCE `--agnos` /
+  `--aarch64`: clean. The link warnings are sit's three `sign`
+  placeholders plus `commit_tree_hex` (see §Toolchain).
+- `cyrius test`: 7/7. `cyrius fuzz`: 1 passed (5 invariants).
+  `tests/owl.bcyr` builds and runs. `cyrius deps --locked` and
+  `--verify` (67/67) are clean.
+- `sh scripts/smoke.sh`: green against the plain and the DCE binary.
+  The new grammar gates and the git executable-file gate each fail
+  against 1.5.0.
+- `cyrius lint src/*.cyr`: 0 warnings, the same two deferrals.
+- **Invariants over vyakarana 2.10.0's 52 corpus files:**
+  - `-p` equals `cat`, 52/52;
+  - colour-stripped highlighted output equals the file, 52/52
+    (`--tabs=0`);
+  - every `--format=ndjson` line parses.
+- **Against 1.5.0, on the 49 files 1.5.0 can route:** `-p`, `-x` and
+  colour-stripped decorated `-n` are identical; colour changed in 18,
+  all deliberate vyakarana token-boundary changes.
+- **VCS:** identical to 1.5.0 except where 1.5.0 was wrong (executable
+  files in git repos; final-newline changes). Agrees with git on a
+  20,000-line change/insert/delete.
+
+At 1.5.0 on cyrius `6.7.9`, on the first build with no
 source change:
 
 - `cyrius build` host / DCE / `--agnos` / DCE `--agnos` /

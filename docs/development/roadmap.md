@@ -2,8 +2,9 @@
 
 Forward-looking planning surface. Latest release and prior history
 live in `CHANGELOG.md`; this file tracks what's *next*. Current
-release is **1.5.0**, which moved owl onto cyrius's 6.7 language line
-with no behaviour change. The 1.4.x feature line is closed:
+release is **1.5.1**: cyrius 6.7.18, vyakarana 2.10.0 (49 grammars)
+and sit 1.13.0. 1.5.0 moved owl onto cyrius's 6.7 language line. The
+1.4.x feature line is closed:
 - the **SIT dependency swap** shipped at 1.4.0;
 - `--format=ndjson` and `--follow` shipped at 1.4.7;
 - URL support is written but parked (see `state.md` §Next).
@@ -22,6 +23,7 @@ forward-looking. Full prose in `CHANGELOG.md`.
 
 | Release | Date       | Headline                                                |
 |---------|------------|---------------------------------------------------------|
+| 1.5.1   | 2026-10-31 | cyrius 6.7.18 + vyakarana 2.10.0 (nasm, mdx, lean; 49 grammars) + sit 1.13.0; gutter fixed for executable files in git repos |
 | 1.5.0   | 2026-10-31 | cyrius 6.7.9 (language minor) + vyakarana 2.5.0 + sit 1.7.0; source audited against the 6.7 migration notes; output byte-identical to 1.4.9 |
 | 1.4.9   | 2026-10-31 | cyrius 6.6.20 + vyakarana 2.4.3 + sit 1.6.4 (audit read-path fixes); release binary −49.9% from toolchain DCE; stdlib 22 → 17 |
 | 1.4.8   | 2026-09-11 | cyrius 6.6.2 + vyakarana 2.4.2 (`_stream_grow` collision retired) |

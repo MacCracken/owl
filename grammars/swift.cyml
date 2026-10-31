@@ -18,18 +18,20 @@
 # [ADR 0008](../docs/adr/0008-toml-triple-quoted-strings.md) for
 # TOML).
 #
+# Attributes (`@available`, `@objc`, `@MainActor`): `@` is in
+# `ident_start`, so each tokenizes as one ident.
+#
 # Known gaps (not triggered by the stand-in):
 #   - String interpolation `\(expr)` stays inside the string-pair
 #     span per [ADR 0003](../docs/adr/0003-string-expansion-not-retokenized.md).
 #     Theme can post-process.
-#   - Raw strings `#"…"#`, `##"…"##` (variable-length delimiter).
-#     Same scanner-shape gap as Lua's `[==[…]==]`, Ruby's
-#     heredocs, PHP's heredocs — track collectively.
+#   - Extended delimiters `#"…"#`, `##"…"##`, `#"""…"""#` are one
+#     string since 2.9.5 (ADR 0030), but their `\#"` escape is not
+#     read: `#"\#"#"#` closes at the first `"#`.
 #   - Nestable block comments (Swift's `/* */` is technically
 #     nestable per the spec; the pair rule closes at the first
-#     `*/`). Same gap as Rust.
-#   - Attribute syntax (`@available`, `@objc`). `@` is in
-#     `ident_start` so `@available` tokenizes as one ident.
+#     `*/`, so after a nested comment the rest of the outer one
+#     tokenizes as code).
 
 [grammar]
 name = "swift"
@@ -49,6 +51,12 @@ number_decimal = true
 number_0x      = true
 number_0b      = true
 number_0o      = true
+number_float   = true      # `1.5`, `1e5`, `2.5e-3` as one number (ADR 0026)
+number_separator = "_"    # `1_000` (ADR 0026)
+# Tuple indexes: `t.0.1` is `t . 0 . 1`, as Swift's own lexer reads it —
+# a number right after a lone `.` takes no fraction (2.9.3). `0.0...1.5`
+# keeps its floats: a `.` that ends `...` is not lone.
+number_tuple_index = true
 
 special_vars = false
 unicode_ident = true
@@ -90,6 +98,26 @@ punctuation = [
 
 
 # ── Rules ──────────────────────────────────────────────────────────
+
+# Extended string delimiters — `#"…"#`, `##"…"##`, multi-line
+# `#"""…"""#` — end at a quote followed by as many `#` as opened them
+# (ADR 0030, 2.9.5). The `"""` form first, so it wins at its opener.
+[[rules]]
+kind = "string"
+match = "heredoc"
+body = "inline"
+repeat = "#"
+open = "\"\"\""
+close = "\"\"\""
+
+[[rules]]
+kind = "string"
+match = "heredoc"
+body = "inline"
+repeat = "#"
+open = "\""
+close = "\""
+
 
 [[rules]]
 kind = "comment"
@@ -155,8 +183,6 @@ words = [
     # Type / generics
     "any", "some", "Any", "Type",
     "inout",
-    # Misc
-    "import", "associatedtype",
 ]
 
 # Backtick-escaped identifier — ``let `default` = 1`` lets a reserved

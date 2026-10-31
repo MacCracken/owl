@@ -43,7 +43,8 @@
 #     `<{` and `}>` aren't in operators; would tokenize as
 #     `<` op + `{` punct + body + `}` punct + `>` op. Cosmetic.
 #   - Vector types `<4 x i32>` use `<` `x` `>`. Tokenizes as
-#     op + ident + ident + op + op. Cosmetic.
+#     `<` op + `4` number + `x` ident + `i32` keyword + `>` op.
+#     Cosmetic.
 
 [grammar]
 name = "llvm_ir"
@@ -63,6 +64,7 @@ number_decimal = true
 number_0x      = true
 number_0b      = false
 number_0o      = false
+number_float   = true      # `1.5`, `1e5`, `2.5e-3` as one number (ADR 0026)
 
 special_vars = false
 unicode_ident = true
@@ -73,6 +75,9 @@ char_literal  = false
 # instruction names that tokenize as ident (then promoted to
 # keyword via the words rule below).
 operators = [
+    # `!=` never fires: `!` is in `ident_start` (metadata), and the
+    # ident step (6) runs before operators (8), so `!=` comes back
+    # ident `!` + `=`. Unreachable but harmless.
     "==", "!=",
     "=", "+", "-", "*",
     "<", ">",
@@ -82,6 +87,8 @@ operators = [
 
 punctuation = [
     "(", ")", "{", "}", "[", "]",
+    # `;` never fires: the `;` line-comment rule (step 2) claims
+    # every `;` first. Unreachable but harmless.
     ";", ",", ":",
 ]
 
@@ -142,7 +149,7 @@ words = [
     "noinline", "noredzone", "noreturn",
     "optimize", "optsize", "speculatable",
     "ssp", "sspreq", "sspstrong",
-    "strictfp", "uwtable",
+    "strictfp",
     # Types (frequent enough to keyword)
     "void", "ptr", "label", "token", "metadata",
     "i1", "i8", "i16", "i32", "i64", "i128",

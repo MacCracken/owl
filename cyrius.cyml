@@ -5,7 +5,7 @@ description = "Observant Watcher of Lines — a file viewer for AGNOS / Cyrius"
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/owl"
 language = "cyrius"
-cyrius = "6.7.9"
+cyrius = "6.7.18"
 
 [build]
 entry = "src/main.cyr"
@@ -50,10 +50,16 @@ output = "owl"
 # fuzz. (6.6.9+ also refuses to emit a binary with a reachable undefined
 # function, so the old runtime-SIGILL failure mode is now a build error.)
 #
+# Re-added at 1.5.1 (1): mmap. From sit 1.7.4 the read fold maps each `.idx` /
+# `.pack` read-only (`mmap_file_ro`) instead of reading it onto the never-freed
+# heap, and `dist/sit-read.deps` names `mmap` from that tag on.
+#
 # Procedure on a bump, unchanged: start from the union of the two generated
-# sidecars — `dist/sit-read.deps` (15 at sit 1.6.4–1.7.0) and `dist/vyakarana.deps`
-# (4 at vyakarana 2.4.3–2.5.0) — plus owl's own surface, then add back whatever
-# the link reports undefined. Do NOT trust either list alone.
+# sidecars — `dist/sit-read.deps` (11 at sit 1.13.0; it stopped listing the
+# alloc / string / io / args / vec leaves once `distlib` attributed them to
+# sit's cmdit dep, and owl names those itself) and `dist/vyakarana.deps` (4 at
+# 2.10.0) — plus owl's own surface, then add back whatever the link reports
+# undefined. Do NOT trust either list alone.
 # `thread_local` is NOT needed here (patra's storage slots and sigil's
 # crypto bank reach it only from write paths the read fold omits) — it was
 # required through 1.4.6 and dropping it is safe only for this fold.
@@ -68,7 +74,7 @@ output = "owl"
 #     assert                — tests/owl.tcyr
 #   reached through sit-read's diff path
 #     chrono/freelist + sankoch (zlib), sigil (hashing),
-#     patra (B+tree object store)
+#     patra (B+tree object store), mmap (read-only pack mappings)
 stdlib = [
     "syscalls",
     "alloc",
@@ -87,11 +93,12 @@ stdlib = [
     "sankoch",
     "sigil",
     "patra",
+    "mmap",
 ]
 
 [deps.vyakarana]
 git = "https://github.com/MacCracken/vyakarana.git"
-tag = "2.5.0"
+tag = "2.10.0"
 modules = ["dist/vyakarana.cyr"]
 
 # sit — AGNOS-native VCS. owl consumes sit's library export (ADR 0009
@@ -121,8 +128,13 @@ modules = ["dist/vyakarana.cyr"]
 # commit object into a tree; ref resolution consults the reflog). Three
 # `sign` symbols stay unresolved as dead-path placeholders, referenced only
 # by commit's signing path which the read API never calls — that is by
-# design upstream, not a missing dep.
+# design upstream, not a missing dep. A fourth, `commit_tree_hex`, has
+# dangled since sit 1.7.6 and is NOT in sit's documented list (ADR 0013):
+# `cmd_show` (a CLI command compiled into the read fold) calls it, but it is
+# defined in `src/history.cyr`, which `[lib.read]` omits. Unreachable from
+# owl — the compiler refuses a binary with a reachable undefined fn — so it
+# is an upstream bundle-closure gap, not an owl defect.
 [deps.sit]
 git = "https://github.com/MacCracken/sit.git"
-tag = "1.7.0"
+tag = "1.13.0"
 modules = ["dist/sit-read.cyr"]

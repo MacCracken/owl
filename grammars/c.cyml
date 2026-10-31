@@ -18,7 +18,7 @@
 #     `<` + ident + `.` + ident + `>`. Coverage and no-error bars
 #     hold. A unified `preprocessor` kind would need an ADR and a
 #     token-kind decision; deliberately still open, and not blocking
-#     any consumer — see CHANGELOG 2.3.4 §Notes.
+#     any consumer.
 
 [grammar]
 name = "c"
@@ -35,6 +35,13 @@ number_decimal = true
 number_0x      = true
 number_0b      = false
 number_0o      = false
+number_float   = true      # `1.5`, `1e5`, `2.5e-3` as one number (ADR 0026)
+number_lead_dot = true    # `.5` (ADR 0026, 2.9.7)
+number_trail_dot = true   # `1.`, `1.e5`; `1..2` and `1.max` stay split (2.9.7)
+# Type suffixes join the literal: `10u`, `10UL`, `1.5f` — C's integer and float suffixes (2.9.7).
+number_suffixes = ["u", "U", "l", "L", "ll", "LL", "ul", "lu", "uL", "Lu", "ull", "llu", "uLL", "LLu", "Ul", "lU", "UL", "LU", "Ull", "llU", "ULL", "LLU", "f", "F"]
+# `L"wide"`, `u8"…"`, `u'x'` join their prefix (2.7.1, ADR 0027).
+string_prefixes = ["L", "u", "U", "u8"]
 
 special_vars = false
 
@@ -43,13 +50,15 @@ special_vars = false
 unicode_ident = true
 
 # `'C'` / `'\C'` / `'\xHH'` tokenize as a single TK_STRING
-# instead of fragmenting into op/body/op. See ADR 0010.
+# instead of fragmenting into op/body/op — and since 2.5.2 so do
+# longer escapes like `'\033'`. See ADR 0010.
 char_literal = true
 
 # Operators in longest-match order. C-specific: `->` (struct deref),
 # `++` / `--` (increment), compound assignment, `&&`/`||`,
-# comparison, bit shifts, `?` for ternary, `'` for char-lit (splits
-# into 3 tokens — see grammar header). `#` for preprocessor.
+# comparison, bit shifts, `?` for ternary, `'` as a fallback for a
+# quote that doesn't close a char literal (`char_literal` above
+# claims every one that does). `#` for preprocessor.
 operators = [
     "<<=", ">>=",
     "<<", ">>",

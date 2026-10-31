@@ -252,13 +252,15 @@ echo "$tlist" | grep -q "^light$" || fail "--list-themes missing 'light'"
 # 1.9.0); 1.3.2 added powershell + crystal + julia (vyakarana 2.1.0);
 # 1.3.3 added vue + svelte (vyakarana 2.1.1); 1.3.4 added nix
 # (vyakarana 2.1.2); 1.3.5 added terraform (vyakarana 2.1.3);
-# 1.4.5 added openqasm (vyakarana 2.3.5) — 46 grammars.
+# 1.4.5 added openqasm (vyakarana 2.3.5); 1.5.1 added nasm + mdx +
+# lean (vyakarana 2.9.9) — 49 grammars.
 llist=$("$BIN" --list-languages)
 for lang in plain shell python javascript typescript rust cyrius c toml json yaml go zig \
             asm_x86_64 asm_aarch64 java kotlin cpp csharp php ruby lua swift \
             elixir ocaml haskell sql graphql protobuf html xml css scss \
             dockerfile makefile ini cyml llvm_ir \
-            powershell crystal julia vue svelte nix terraform openqasm; do
+            powershell crystal julia vue svelte nix terraform openqasm \
+            nasm mdx lean; do
     echo "$llist" | grep -q "^$lang\$" || fail "--list-languages missing '$lang'"
 done
 
@@ -677,6 +679,38 @@ esac
 out=$("$BIN" -p "$TMPDIR/t.qasm" | cmp -s - "$TMPDIR/t.qasm" && echo same || echo differ)
 [ "$out" = "same" ] || fail "plain mode must be byte-identical to cat for .qasm"
 
+# 1.5.1 — NASM, MDX and Lean (vyakarana 2.9.9, wired at owl 1.5.1).
+# Each: extension dispatch in the header, an ANSI probe through
+# stdin + --language, and plain mode byte-identical to cat.
+printf 'section .text\nglobal _start\n%%define N 1\n_start: mov rax, 60 ; exit\n' > "$TMPDIR/t.nasm"
+printf 'import {X} from "./x.js"\n\n# Title\n\n<X n={1} />\n' > "$TMPDIR/t.mdx"
+printf -- '-- comment\ntheorem t : 1 + 1 = 2 := by rfl\n#eval 2.5\n' > "$TMPDIR/t.lean"
+for pair in nasm:nasm mdx:mdx lean:lean; do
+    ext=${pair%%:*}; lang=${pair#*:}
+    out=$("$BIN" -n "$TMPDIR/t.$ext")
+    case "$out" in
+        *"($lang)"*) ;;
+        *) fail "extension detection: .$ext should show ($lang) in header" ;;
+    esac
+    out=$("$BIN" --color=always --paging=never --language="$lang" < "$TMPDIR/t.$ext")
+    case "$out" in
+        *$(printf '\033')*) ;;
+        *) fail "stdin + --color=always + --language=$lang did not emit ANSI" ;;
+    esac
+    out=$("$BIN" -p "$TMPDIR/t.$ext" | cmp -s - "$TMPDIR/t.$ext" && echo same || echo differ)
+    [ "$out" = "same" ] || fail "plain mode must be byte-identical to cat for .$ext"
+done
+# `.asm` stays asm_x86_64 on purpose: vyakarana routes it to nasm and
+# relies on a content vote to send GNU-as files back, which owl's
+# extension-only routing does not have (src/lang.cyr). Pin the choice
+# so it cannot drift silently.
+printf 'mov rax, 60\n' > "$TMPDIR/t.asm"
+out=$("$BIN" -n "$TMPDIR/t.asm")
+case "$out" in
+    *"(asm_x86_64)"*) ;;
+    *) fail "extension detection: .asm should stay (asm_x86_64), got: $out" ;;
+esac
+
 # 1.3.6 — HIGHLIGHT_MAX lift. Pre-1.3.6 the cap was 128 KB total
 # input; files past that fell back to plain rendering with a
 # stderr "too large for highlighting (> 128 KB)" notice. 1.3.6
@@ -1030,6 +1064,42 @@ if [ -n "$SIT_BIN" ]; then
     esac
 else
     echo "smoke: NOTE — sit binary not found (set OWL_SIT_BIN); skipping VCS marker + --diff gates" >&2
+fi
+
+# 1.5.1 — git read mode, executable file. Through 1.5.0 (sit 1.7.0) a
+# one-line edit to a mode-100755 file in a `.git/` repo marked EVERY
+# line as added; a mode-100644 file was right. sit 1.12.0 reads git
+# tree modes as git wrote them. Needs the git CLI for the fixture
+# (isolated from the user's config, so signing or hooks can't break
+# it); NOTE-skips without one, like the sit gates above.
+if command -v git >/dev/null 2>&1; then
+    grepo="$TMPDIR/gitexec"
+    mkdir -p "$grepo"
+    (
+        cd "$grepo" || exit 1
+        export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+        git init -q . || exit 1
+        i=0; : > x.sh
+        while [ $i -lt 20 ]; do echo "echo $i" >> x.sh; i=$((i + 1)); done
+        chmod +x x.sh
+        git add x.sh || exit 1
+        git -c user.name=owl -c user.email=owl@smoke commit -qm base || exit 1
+        # Rewrite through the existing inode so the mode stays 100755.
+        i=0; : > x.sh
+        while [ $i -lt 20 ]; do
+            if [ $i -eq 10 ]; then echo "echo TEN" >> x.sh; else echo "echo $i" >> x.sh; fi
+            i=$((i + 1))
+        done
+    ) || fail "could not build git fixture (git init/add/commit failed)"
+    gout=$( cd "$grepo" && "$BIN_ABS" -n --color=never --style=changes --paging=never x.sh 2>/dev/null )
+    # `|| true`: grep -c prints 0 but exits 1 on no match, which set -e
+    # would turn into a silent exit — and 0 ADD is the passing case.
+    nmod=$(printf '%s\n' "$gout" | grep -cE '^ *[0-9]+ ~ ' || true)
+    nadd=$(printf '%s\n' "$gout" | grep -cE '^ *[0-9]+ \+ ' || true)
+    [ "$nmod" = "1" ] && [ "$nadd" = "0" ] \
+        || fail "git read mode: a one-line edit to an executable file should mark 1 MOD / 0 ADD, got $nmod MOD / $nadd ADD"
+else
+    echo "smoke: NOTE — git not found; skipping the git-read-mode executable-file gate" >&2
 fi
 
 # ============================================================

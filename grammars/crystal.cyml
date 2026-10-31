@@ -22,16 +22,16 @@
 #     `{{ ... }}` for ECR-style metaprogramming. `{%` and
 #     `{{` markers are short pair rules; we don't model them
 #     yet (would need pair rules).  Documented limitation.
-#   - Instance / class vars: `@var`, `@@var`, `@@@const`.
-#     `@` is in ident_start so `@var` tokenizes as one ident.
+#   - Instance / class vars: `@var`, `@@var` are one ident each
+#     (`@` in ident_start and, since 2.7.1, ident_cont).
 #
 # Stand-in corpus per [ADR 0006](../docs/adr/0006-standin-corpus-policy.md):
 # `tests/corpus/concept.cr` exercises classes, modules,
 # generics, blocks, control flow, all literal forms.
 #
 # Known gaps:
-#   - **Heredocs** `<<-EOF ... EOF`. Variable terminator,
-#     same scanner-shape gap as Lua / Ruby / PHP.
+#   - **Heredocs** `<<-EOF ... EOF`. Not declared here;
+#     ruby.cyml's heredoc rule (ADR 0030) is the model.
 #   - **String interpolation** `#{expr}` — body tokenizes as
 #     part of the surrounding string. Same trade-off as JS
 #     template literals.
@@ -45,16 +45,20 @@ extensions = [".cr"]
 shebang = false
 whitespace = true
 
-# `@` in ident_start: instance vars (`@x`, `@@y`).
+# `@` in ident_start and ident_cont: `@x`, `@@y` (2.7.1).
 # `?` and `!` in ident_cont: method-name suffixes
 # (`is_a?`, `push!`).
 ident_start = "A-Za-z_@"
-ident_cont  = "A-Za-z0-9_?!"
+ident_cont  = "A-Za-z0-9_?!@"
 
 number_decimal = true
 number_0x      = true
 number_0b      = true
 number_0o      = true
+number_float   = true      # `1.5`, `1e5`, `2.5e-3` as one number (ADR 0026)
+# Type suffixes join the literal: `1_i32`, `1u8`, `2.5f32` (2.9.7).
+number_suffixes = ["i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "f32", "f64"]
+number_separator = "_"    # `1_000` (ADR 0026)
 
 special_vars = false
 
@@ -64,10 +68,14 @@ char_literal  = true
 operators = [
     "<=>", "===",
     "==", "!=", "=~", "!~",
+    # The compound assignments on the `**=` line below shadowed
+    # nothing until 2.5.2 moved them here: `<<` / `>>` / `&&` / `||`
+    # matched first and `<<=` came out `<<` + `=` (audit P2-7).
+    "<<=", ">>=", "&&=", "||=",
     "<=", ">=", "<<", ">>",
     "&&", "||",
     "+=", "-=", "*=", "/=", "%=",
-    "**=", "<<=", ">>=", "&&=", "||=",
+    "**=",
     "**",
     "->", "=>",
     "...", "..",

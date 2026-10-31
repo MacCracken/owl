@@ -3,8 +3,9 @@
 # Rule scheme per ADR 0005. JavaScript is TypeScript minus the
 # type-declaration layer (interface / type / enum / namespace /
 # visibility modifiers). Shares the defaults: same ident class,
-# same operators, same three string types. The only real
-# difference from typescript.cyml is the keyword list.
+# same operators, same three string types. The differences from
+# typescript.cyml are the keyword list and the `#!` line: javascript
+# routes `node` scripts and reads a leading `#!` as one token (2.6.2).
 #
 # Corpus: tests/corpus/concept.js (hand-rolled stand-in per
 # ADR 0006 — vidya doesn't yet ship a JS reference sample).
@@ -14,14 +15,18 @@
 #   - Regex literals `/pat/flags` — not handled; `\` is an operator
 #     so escapes inside regex don't error, but regex isn't a
 #     distinguished token.
-#   - JSX — a separate grammar, not this one.
+#   - JSX — not handled; no bundled grammar covers it.
 
 [grammar]
 name = "javascript"
 extensions = [".js", ".mjs", ".cjs"]
+shebangs = ["node"]
 
 [defaults]
-shebang = false
+# `#!/usr/bin/env node` routes here, and ES2023 makes a leading `#!`
+# line a comment, so it is one token rather than operator soup
+# (`#` `!` `/` `usr` …, 2.6.1 and earlier).
+shebang = true
 whitespace = true
 
 ident_start = "A-Za-z_$"
@@ -36,6 +41,12 @@ number_decimal = true
 number_0x      = true
 number_0b      = true
 number_0o      = true
+number_float   = true      # `1.5`, `1e5`, `2.5e-3` as one number (ADR 0026)
+number_lead_dot = true    # `.5` (ADR 0026, 2.9.7)
+number_trail_dot = true   # `1.`, `1.e5`; `1..2` and `1.max` stay split (2.9.7)
+# Type suffixes join the literal: BigInt `10n` (2.9.7).
+number_suffixes = ["n"]
+number_separator = "_"    # `1_000` (ADR 0026)
 
 special_vars = false
 
@@ -52,6 +63,10 @@ operators = [
     "+=", "-=", "*=", "/=", "%=",
     "&=", "|=", "^=",
     "=>",
+    # `\/` — a regex's escaped slash (the regex literal itself is not a
+    # token, ADR 0003): through 2.9.11 `/^\/*|\/*$/` opened a `/*` comment
+    # at its `/*` and `\//` a line comment (2.9.12 audit, reviewer A).
+    "\\/",
     "=", "+", "-", "*", "/", "%",
     "!", "~", "&", "|", "^",
     "<", ">",
@@ -74,6 +89,16 @@ punctuation = [
 kind = "comment"
 match = "line"
 start = "//"
+
+
+# Block comments `/* … */`, JSDoc's `/** … */` among them (2.9.3).
+# ECMAScript's do not nest, so the pair rule's close at the first `*/`
+# is the spec's.
+[[rules]]
+kind = "comment"
+match = "pair"
+start = "/*"
+end = "*/"
 
 
 [[rules]]

@@ -204,9 +204,10 @@ fn ansi_fg(code) {
 
 # Emit reset escape \e[0m on stdout. Unguarded — callers only call
 # this after ansi_fg, so the gate has already been checked.
-# Bytes built explicitly: Cyrius doesn't parse \x?? escapes in string
-# literals, and a literal "\x1b[0m" would emit the five characters
-# \, x, 1, b, [.
+# Bytes built explicitly. Through cyrius 6.7.10 string literals did not
+# parse \x?? escapes, so a literal "\x1b[0m" emitted the characters
+# \, x, 1, b, …; 6.7.11+ parses them, but the explicit form is kept so
+# the escape bytes stay visible at the one place they are made.
 fn ansi_reset() {
     var rbuf[4];
     store8(&rbuf + 0, 0x1B);

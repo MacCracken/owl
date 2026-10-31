@@ -66,6 +66,11 @@ number_decimal = true
 number_0x      = false
 number_0b      = false
 number_0o      = false
+# Nix floats are `digits.digits` with an optional exponent — `1.5`,
+# `2.0e3` one number since 2.9.1 (ADR 0026; 2.7.0 left nix out with no
+# reason recorded). An attribute path cannot start with a digit, so
+# `a.1.5` never arises; `.5` is a known gap (ADR 0026).
+number_float   = true
 
 special_vars = false
 unicode_ident = true
@@ -77,9 +82,10 @@ char_literal  = false
 #   `->` — implication.
 #   `?`  — has-attribute test (`set ? path`).
 #   `@`  — `@`-pattern in function args.
-#   `$`  — start of `${...}` interpolation; tokenizes as 1-byte
-#          op when not followed by `{` (interpolation body
-#          stays inside the surrounding string in 2.1.x).
+#   `$`  — start of `${...}` interpolation; outside a string it
+#          tokenizes as a 1-byte op (inside one, the whole
+#          interpolation stays part of the string token — see
+#          Known gaps).
 operators = [
     "//", "++", "->",
     "==", "!=", "<=", ">=",

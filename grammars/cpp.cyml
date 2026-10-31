@@ -16,19 +16,17 @@
 # `tests/corpus/concept.cpp` mirrors the lexer+parser theme used
 # elsewhere, exercising namespace declarations, `enum class`,
 # `std::unique_ptr`, lambdas, range-for, char literals (`'+'`,
-# `'\0'`), block comments, raw string is NOT exercised.
+# `'\0'`), block comments, raw string is NOT exercised. Raw string
+# literals `R"delim(…)delim"` are inline heredoc rules since 2.9.5
+# (ADR 0030); the tests in tests/vyakarana.tcyr cover them.
 #
 # Known gaps (not triggered by the stand-in):
-#   - Raw string literals `R"delim(…)delim"`. Not in the
-#     stand-in. C++11+; would need a custom rule shape since the
-#     delimiter is variable-length.
 #   - User-defined literal suffixes (`42_km`, `"x"sv`). The
 #     suffix tokenizes as ident after the number/string —
 #     cosmetic; coverage holds.
-#   - Numeric digit separators (`1'000'000` in C++14+). The
-#     apostrophe digit-separator looks like char-literal context;
-#     could be confused with `char_literal`. Not in the stand-in;
-#     if it appears in a real corpus, add a `digit_sep` flag.
+#   - Digit separators `1'000'000` (C++14) are one number since
+#     2.7.0 (`number_separator = "'"`, ADR 0026); a `'` joins only
+#     when a digit follows, so `'a'` stays a char literal.
 #   - Preprocessor directives (`#include`, `#define`, `#ifdef`):
 #     same shape as C. Tokenize as `#` op + ident; coverage holds.
 #   - Trigraphs / digraphs (`<:`, `:>`, `??=`): obsolete; no
@@ -49,6 +47,14 @@ number_decimal = true
 number_0x      = true
 number_0b      = true
 number_0o      = false
+number_float   = true      # `1.5`, `1e5`, `2.5e-3` as one number (ADR 0026)
+number_lead_dot = true    # `.5` (ADR 0026, 2.9.7)
+number_trail_dot = true   # `1.`, `1.e5`; `1..2` and `1.max` stay split (2.9.7)
+# Type suffixes join the literal: C's, plus C++23's `uz` / `z` and `f16` … `bf16` (2.9.7).
+number_suffixes = ["u", "U", "l", "L", "ll", "LL", "ul", "lu", "uL", "Lu", "ull", "llu", "uLL", "LLu", "Ul", "lU", "UL", "LU", "Ull", "llU", "ULL", "LLU", "f", "F", "z", "Z", "uz", "uZ", "Uz", "UZ", "zu", "zU", "Zu", "ZU", "f16", "f32", "f64", "f128", "bf16", "F16", "F32", "F64", "F128", "BF16"]
+number_separator = "'"    # `1'000` (ADR 0026)
+# `L"wide"`, `u8"…"`, `u'x'` join their prefix (2.7.1, ADR 0027).
+string_prefixes = ["L", "u", "U", "u8"]
 
 special_vars = false
 unicode_ident = true
@@ -74,8 +80,8 @@ operators = [
     "<", ">",
     "?",
     "#",
-    # `'` is the C++14 digit separator (`1'000'000`) as well as the
-    # char-literal delimiter; `\` continues a line, which every
+    # `'` (a lone one; char literals and `1'000` digit separators are
+    # claimed before this list) and `\` continues a line, which every
     # multi-line macro relies on. Both are already in c.cyml —
     # cpp simply diverged.
     "'", "\\",
@@ -88,6 +94,60 @@ punctuation = [
 
 
 # ── Rules ──────────────────────────────────────────────────────────
+
+# Raw string literals — `R"(…)"`, `R"d(…)d"`, with the `u8R`, `uR`, `UR`
+# and `LR` encodings — end at `)`, the same delimiter, `"`; no escapes
+# (ADR 0030, 2.9.5).
+[[rules]]
+kind = "string"
+match = "heredoc"
+body = "inline"
+start = "R\""
+tag = true
+open = "("
+close = ")"
+close_end = "\""
+
+[[rules]]
+kind = "string"
+match = "heredoc"
+body = "inline"
+start = "u8R\""
+tag = true
+open = "("
+close = ")"
+close_end = "\""
+
+[[rules]]
+kind = "string"
+match = "heredoc"
+body = "inline"
+start = "uR\""
+tag = true
+open = "("
+close = ")"
+close_end = "\""
+
+[[rules]]
+kind = "string"
+match = "heredoc"
+body = "inline"
+start = "UR\""
+tag = true
+open = "("
+close = ")"
+close_end = "\""
+
+[[rules]]
+kind = "string"
+match = "heredoc"
+body = "inline"
+start = "LR\""
+tag = true
+open = "("
+close = ")"
+close_end = "\""
+
 
 [[rules]]
 kind = "comment"

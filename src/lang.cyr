@@ -22,7 +22,7 @@
 # Extensions and shebang hints are space-separated lowercase tokens.
 # Order matters: "cyrius" precedes "c" so *.cyr doesn't match *.c.
 
-var LANG_COUNT = 46;
+var LANG_COUNT = 49;
 
 # Indexed 0..LANG_COUNT-1
 fn lang_name(i) {
@@ -72,6 +72,9 @@ fn lang_name(i) {
     if (i == 43) { return "nix"; }
     if (i == 44) { return "terraform"; }
     if (i == 45) { return "openqasm"; }
+    if (i == 46) { return "nasm"; }
+    if (i == 47) { return "mdx"; }
+    if (i == 48) { return "lean"; }
     return "plain";
 }
 
@@ -126,6 +129,14 @@ fn lang_exts(i) {
     if (i == 43) { return ".nix"; }
     if (i == 44) { return ".tf .tfvars .hcl"; }
     if (i == 45) { return ".qasm"; }
+    # `.asm` deliberately stays asm_x86_64 (index 13). vyakarana 2.9.9
+    # routes `.asm` to nasm and lets a content vote send GNU-as files
+    # back; owl's routing is extension-only, so following it here would
+    # mis-highlight every GAS `.asm`. NASM sources reach nasm through
+    # `.nasm` or `--language=nasm`.
+    if (i == 46) { return ".nasm"; }
+    if (i == 47) { return ".mdx"; }
+    if (i == 48) { return ".lean"; }
     return "";
 }
 

@@ -6,6 +6,140 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.5.1] - 2026-10-31
+
+**Toolchain to cyrius 6.7.18; vyakarana and sit to their latest releases.**
+Highlighting changes where vyakarana deliberately moved token boundaries.
+Three grammars are new, and the change-marker gutter is fixed for executable
+files in git repositories.
+
+### Fixed
+
+- **In a git repository, the gutter marked every line of an executable file
+  as added.** Through 1.5.0 (sit 1.7.0), a one-line edit to a mode-100755 file
+  in a `.git/` checkout put `+` on every line, so every shell script in a git
+  repo showed as entirely new. Regular files were right, and so were native sit
+  repositories. sit 1.12.0 reads git tree modes as git wrote them, and owl
+  picks that up with the bump. Measured on a 50-line `x.sh` with one line
+  edited: 1.5.0 showed 0 `~` and 50 `+`; 1.5.1 shows one `~`. On this repo's
+  own `scripts/smoke.sh`, 1.5.0 marked about 1,600 unchanged lines; 1.5.1
+  marks exactly git's three hunks. A new smoke gate builds a git fixture with
+  an executable file, fails against 1.5.0 (`0 MOD / 20 ADD`), and NOTE-skips
+  where `git` is absent.
+- **A change that only adds or drops a file's final newline now marks the last
+  line `~`**, as `git diff` does (sit 1.7.2). Through 1.5.0 the gutter showed
+  nothing.
+
+### Added
+
+- **Three grammars, `nasm`, `mdx` and `lean`** (vyakarana 2.9.9), bringing
+  owl to 49. Each is wired into the language tables, both grammar-bootstrap
+  lists, `--list-languages` and smoke (extension dispatch, an ANSI probe
+  through `--language`, and plain mode byte-identical to `cat`). They route by
+  `.nasm`, `.mdx` and `.lean`.
+  - **`.asm` deliberately stays `asm_x86_64`.** vyakarana 2.9.9 routes `.asm`
+    to `nasm` and relies on a content vote to send GNU-as files back. owl's
+    routing is extension-only, so following it would mis-highlight every GAS
+    `.asm`. NASM sources reach `nasm` through `.nasm` or `--language=nasm`. A
+    smoke gate pins the choice.
+
+### Changed
+
+- **Toolchain `6.7.9` → `6.7.18`, vyakarana `2.5.0` → `2.10.0`, sit `1.7.0` →
+  `1.13.0`**, the latest tag of each; both deps pin 6.7.18. `lib/` was
+  re-cut from a clean tree and is identical to the 6.7.18 snapshot apart from
+  the dep bundles. `grammars/` was re-synced wholesale; 45 of the 46 existing
+  files changed upstream.
+
+- **Highlighting changes, on purpose, wherever vyakarana moved a token
+  boundary.** Tokenization is vyakarana's job, so these arrive as-is:
+  - number literals are one token (2.7.0 / 2.9.7): `0.1`, `1e5` and `1_000`
+    each split into pieces before, and so did suffixes like `100u32`;
+  - shell `#` mid-word, here-documents and `$0`–`$9` (2.6.0);
+  - string prefixes (2.7.1 / 2.9.6) and raw and heredoc delimiters (2.9.5);
+  - chunk-invariant streaming for the compose grammars (2.8.0 – 2.9.12),
+    which matters because owl feeds per chunk.
+
+  Over vyakarana 2.10.0's corpus, 18 of 49 files change colour.
+  **Nothing else changes:**
+  - colour stripped, highlighted output reproduces every file byte for byte
+    (52/52, with `--tabs=0`);
+  - colour-stripped decorated `-n` output, `-p` and `-x` are identical to
+    1.5.0 on all 49 comparable files;
+  - `-p` still equals `cat` on all 52.
+
+- **sit 1.7.0 → 1.13.0 hardens the path owl's gutter runs in-process.** From
+  its 1.7.6 and 1.12.2 audits:
+  - `sit_diff_path` no longer keeps every blob it compares on owl's
+    never-freed heap (R1);
+  - it no longer diffs files that have not changed; an unchanged 16 MiB file
+    of newlines used to cost 2.6 GB (R9);
+  - it no longer reads through a symlinked directory (G1);
+  - `sit_repo_open` in git mode no longer keeps `.git/config` and alternates
+    per open (G5);
+  - git packs are mapped read-only rather than read onto the heap (1.7.4).
+
+  A sit repository that has been through `sit gc` stores its history in packs,
+  which owl 1.5.0 could not read; 1.5.1 can (1.10.0). The read API now takes
+  the store lock shared, per call: a running `sit` command never blocks owl,
+  and the gutter waits only while a `sit gc` or `fsck --prune` holds it
+  exclusively.
+
+- **`[deps].stdlib` gains `mmap` (17 → 18).** From sit 1.7.4 the read fold
+  maps packs with `mmap_file_ro`, and the sidecar names it. `cyrius deps` also
+  vendors `lib/cmdit.cyr`, sit's CLI dependency; no bundle includes it.
+
+- **`cyrius.lock` regenerated.** It had accumulated commit rows for six tags
+  owl no longer declares, kept fail-closed. That started at 1.4.9; the 1.5.0
+  lock already carried four of them. 6.7.12+ names each one on every resolve.
+  The lock now holds only the three resolved pins (vyakarana, sit, cmdit) and
+  67 `lib/` hashes. `--locked` and `--verify` are both clean.
+
+- **One more link warning: `undefined function 'commit_tree_hex'`.** It has
+  dangled in sit's read bundle since sit 1.7.6. `cmd_show`, a CLI command
+  compiled into the fold, calls it, but it lives in `src/history.cyr`, which the
+  read profile omits. It is unreachable from owl (cyrius refuses to emit a
+  binary with a *reachable* undefined function). It is not in sit's documented
+  list of placeholders (ADR 0013), so it is an upstream bundle-closure gap
+  rather than an owl defect.
+
+- **The migration notes were audited against owl's source before the bump**,
+  covering every entry for 6.7.10 – 6.7.18 that could change what compiling
+  code computes, break a build, or change a stdlib function owl or its folds
+  call. Nothing reached owl's code. Facts found on the way:
+  - string literals parse `\x??` from 6.7.11, so CLAUDE.md's old "they do
+    not" convention and a comment in `src/theme.cyr` are corrected; owl has
+    no such literal;
+  - 6.7.14 removed the 4,096-run DCE compaction cap (`tests/owl.tcyr`, at 5,199
+    unreachable fns, now compacts), so CLAUDE.md's watch rule is updated.
+
+- **`owl --version --verbose`** prints `vyakarana 2.10.0` / `sit 1.13.0` /
+  `cyrius 6.7.18`.
+
+- **Release binary 1,332,120 → 1,405,832 bytes (+73,712)** with `CYRIUS_DCE=1`.
+  `--agnos` DCE: 1,325,136 → 1,402,992. The plain build is 2,958,232 →
+  3,474,312, and unreachable fns rose 3,621 → 4,376. The growth is the deps'
+  reachable code: sit's read path (packs, git read parity, the audit fixes)
+  and three more grammar blobs, partly offset by vyakarana 2.9.0's blob
+  compaction.
+
+### Verified
+
+- `cyrius build` host / DCE / `--agnos` / DCE `--agnos` / `--aarch64`: all clean.
+  The link warnings are sit's three `sign` placeholders plus
+  `commit_tree_hex`, with no duplicate-symbol or conflicting-value warnings.
+- `cyrius test`: 7/7. `cyrius fuzz`: 1 passed (5 invariants). `tests/owl.bcyr`
+  builds and runs.
+- `sh scripts/smoke.sh`: green against both the plain and the DCE binary,
+  including the native-sit gutter gates, the new git executable-file gate, and
+  the new grammar gates. The new gates fail against 1.5.0.
+- `cyrius lint src/*.cyr`: 0 warnings. None of 6.7.11's new overrun and
+  literal-length rules fire, and the two existing deferrals remain.
+- **VCS A/B against 1.5.0**: on `cyrius.cyml` and `src/lang.cyr`, `--diff` and
+  the TTY gutter are byte-identical. They differ on `scripts/smoke.sh`, where
+  1.5.0 was the one that was wrong (see §Fixed). On a 20,000-line file with a
+  change, an insert and a delete, both versions agree with git.
+
 ## [1.5.0] - 2026-10-31
 
 **Toolchain onto cyrius's 6.7 language line.** This is a minor release

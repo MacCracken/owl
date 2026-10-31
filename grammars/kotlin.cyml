@@ -12,8 +12,9 @@
 # vidya snapshot when one ships.
 #
 # Annotations: `@` is in `ident_start` so `@Override`,
-# `@JvmStatic`, `@file:JvmName`, etc. tokenize as a single ident.
-# Same call as java.cyml.
+# `@JvmStatic`, etc. tokenize as a single ident. Same call as
+# java.cyml. A use-site target splits at the `:` punctuation —
+# `@file:JvmName` is `@file` + `:` + `JvmName`.
 #
 # Identifier dollar: `$` is in `ident_start` so `$variable`
 # string interpolation references can be tokenized as part of an
@@ -27,8 +28,8 @@
 #     Add a pair rule ahead of the regular string rule when a
 #     corpus needs them — see [ADR 0008](../docs/adr/0008-toml-triple-quoted-strings.md)
 #     for the same shape in TOML.
-#   - Numeric suffixes (`42L`, `1.5f`, `1_000_000`). Same story
-#     as java.cyml — cosmetic; coverage holds.
+#   - (Not a gap since 2.9.7: suffixes `42L`, `1.5f`, `10u` and `.5`
+#     join the number; floats and `1_000_000` since 2.7.0, ADR 0026.)
 
 [grammar]
 name = "kotlin"
@@ -45,6 +46,11 @@ number_decimal = true
 number_0x      = true
 number_0b      = true
 number_0o      = false
+number_float   = true      # `1.5`, `1e5`, `2.5e-3` as one number (ADR 0026)
+number_lead_dot = true    # `.5` (ADR 0026, 2.9.7)
+# Type suffixes join the literal: `10L`, `10u`, `1.5f` (2.9.7).
+number_suffixes = ["L", "u", "U", "uL", "UL", "f", "F"]
+number_separator = "_"    # `1_000` (ADR 0026)
 
 special_vars = false
 unicode_ident = true
@@ -69,8 +75,8 @@ operators = [
     "!", "~", "&", "|", "^",
     "<", ">",
     "?",
-    # `'` / `\` fallbacks for char-literal escape forms
-    # `char_literal` does not model (`'\u0041'`).
+    # `'` / `\` fallbacks for stray quote / backslash bytes outside
+    # a literal. (`'\u0041'` is one char-literal token since 2.5.2.)
     "'", "\\",
 ]
 
