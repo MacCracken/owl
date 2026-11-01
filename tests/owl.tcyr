@@ -1,5 +1,8 @@
 # owl test suite
-# Stdlib auto-included via cyrius.cyml
+# Stdlib auto-included via cyrius.cyml; `assert` comes from its [test]
+# scope under `cyrius test`. Included here too so an editor resolving this
+# file in build scope sees it (include-once: one copy either way).
+include "lib/assert.cyr"
 
 fn main() {
     alloc_init();

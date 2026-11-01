@@ -1,10 +1,9 @@
 # owl benchmarks
-# Stdlib auto-included via cyrius.cyml — EXCEPT the two modules below.
-#
-# `bench` and `fnptr` are deliberately NOT in [deps].stdlib: that list is
-# auto-prepended to EVERY surface, so putting them there would link the
-# benchmark harness into the shipped `owl` binary. They are included here
-# instead, which keeps them on the bench surface only. The paths resolve
+# Stdlib auto-included via cyrius.cyml. `bench` and `fnptr` come from its
+# [test] scope (1.6.0), which `cyrius bench` prepends and the shipped `owl`
+# never sees; through 1.5.3 they were kept out of [deps].stdlib and included
+# only here. The includes stay so an editor resolving this file in build
+# scope sees them (include-once: one copy either way). The paths resolve
 # from the project root (where lib/ is vendored), not from tests/.
 include "lib/fnptr.cyr"
 include "lib/bench.cyr"

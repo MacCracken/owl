@@ -88,6 +88,20 @@ v_verbose2=$("$BIN" --verbose --version) || fail "--verbose --version exited non
 [ "$v_verbose" = "$v_verbose2" ] || fail "--version --verbose ≠ --verbose --version"
 # Plain --version stays terse (regression guard).
 [ "$v_long" != "$v_verbose" ] || fail "--version regressed to verbose by default"
+# 1.6.0 — the verbose pins are hand-kept in print_version, and went stale for
+# three releases (1.4.1–1.4.8). Pin them to cyrius.cyml, the one authority.
+if [ -f cyrius.cyml ]; then
+    want_cy=$(sed -n 's/^cyrius = "\(.*\)"/\1/p' cyrius.cyml)
+    want_vy=$(sed -n '/^\[deps\.vyakarana\]/,/^\[/s/^tag = "\(.*\)"/\1/p' cyrius.cyml)
+    want_sit=$(sed -n '/^\[deps\.sit\]/,/^\[/s/^tag = "\(.*\)"/\1/p' cyrius.cyml)
+    want_cmdit=$(sed -n '/^\[deps\.cmdit\]/,/^\[/s/^tag = "\(.*\)"/\1/p' cyrius.cyml)
+    for pair in "vyakarana $want_vy" "sit $want_sit" "cmdit $want_cmdit" "cyrius $want_cy"; do
+        printf '%s\n' "$v_verbose" | grep -qx "$pair" \
+            || fail "--version --verbose does not print '$pair' (cyrius.cyml); update print_version"
+    done
+else
+    echo "smoke: NOTE — run from the repo root to check --verbose pins against cyrius.cyml" >&2
+fi
 
 # ============================================================
 # M1 — plain-mode cat parity
@@ -701,16 +715,23 @@ for pair in nasm:nasm mdx:mdx lean:lean; do
     out=$("$BIN" -p "$TMPDIR/t.$ext" | cmp -s - "$TMPDIR/t.$ext" && echo same || echo differ)
     [ "$out" = "same" ] || fail "plain mode must be byte-identical to cat for .$ext"
 done
-# `.asm` stays asm_x86_64 on purpose: vyakarana routes it to nasm and
-# relies on a content vote to send GNU-as files back, which owl's
-# extension-only routing does not have (src/lang.cyr). Pin the choice
-# so it cannot drift silently.
+# `.asm` is decided by content since 1.6.0 (vyakarana's vote, reached through
+# detect_language_combined in src/lang.cyr). Through 1.5.3 owl routed on the
+# extension alone and pinned `.asm` to asm_x86_64, because vyakarana's table
+# says nasm and only its content vote sends GNU-as files back. Now owl has the
+# vote: NASM directives or a bare instruction stream → nasm, a GNU-as
+# directive (`.intel_syntax`, `.text`, `.globl`) → asm_x86_64.
 printf 'mov rax, 60\n' > "$TMPDIR/t.asm"
-out=$("$BIN" -n "$TMPDIR/t.asm")
-case "$out" in
-    *"(asm_x86_64)"*) ;;
-    *) fail "extension detection: .asm should stay (asm_x86_64), got: $out" ;;
-esac
+printf '.intel_syntax noprefix\n.text\nmov rax, 60\n' > "$TMPDIR/g.asm"
+printf 'section .text\nglobal _start\n%%define N 1\n' > "$TMPDIR/n.asm"
+for pair in t:nasm g:asm_x86_64 n:nasm; do
+    f=${pair%%:*}; lang=${pair#*:}
+    out=$("$BIN" -n "$TMPDIR/$f.asm")
+    case "$out" in
+        *"($lang)"*) ;;
+        *) fail "content vote: $f.asm should show ($lang) in header" ;;
+    esac
+done
 
 # 1.5.2 — markdown routes by extension. Through 1.5.1 it had no
 # language-table row: `.md` reached the grammar only when the file's
@@ -854,6 +875,177 @@ out=$(XDG_CONFIG_HOME="$TMPDIR/nonexistent" "$BIN" --color=always --paging=never
 case "$out" in
     *$(printf '\033')*) ;;
     *) fail "missing user grammars dir broke .py highlighting fallback" ;;
+esac
+
+# 1.6.0 — grammars and routes come from vyakarana. The 49 bundled grammars
+# are compiled into the vyakarana bundle (no grammars/ directory at
+# runtime), and routing is vyakarana's detect_language_combined plus, for a
+# user grammar with a new name, detect_language_registered (src/lang.cyr).
+#
+# (a) The binary alone highlights: no grammars/ beside it, none in the cwd,
+# no user overlay. Through 1.5.3 this printed uncoloured text.
+mkdir -p "$TMPDIR/r160/bin" "$TMPDIR/r160/cwd"
+cp "$BIN_ABS" "$TMPDIR/r160/bin/owl"
+printf 'fn main() { return 0; }\n' > "$TMPDIR/r160/cwd/x.rs"
+out=$(cd "$TMPDIR/r160/cwd" && env -i PATH="$PATH" HOME="$TMPDIR/r160/nohome" \
+    "$TMPDIR/r160/bin/owl" --color=always --paging=never x.rs)
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "1.6.0: owl with no grammars/ beside it or in the cwd did not highlight" ;;
+esac
+# (b) --list-languages is exactly the bundled set: the repo's grammars/ copy
+# (re-synced from vyakarana) plus "plain", sorted. Drift between the copy and
+# the pinned vyakarana's embedded blobs fails here.
+want=$( { echo plain; for f in "$GRAMMARS_SRC"/*.cyml; do basename "$f" .cyml; done | LC_ALL=C sort; } )
+got=$(env -i PATH="$PATH" HOME="$TMPDIR/r160/nohome" "$BIN" --list-languages)
+[ "$got" = "$want" ] || fail "1.6.0: --list-languages is not grammars/*.cyml + plain"
+# (c) Every bundled grammar is reachable: each one's first declared extension
+# (or first declared filename) routes to it. `.asm` is nasm's and gets the
+# content vote, so an empty file stays nasm; asm_aarch64 shares `.s` with
+# asm_x86_64 (an empty `.s` votes x86-64) and is reached by content below.
+for f in "$GRAMMARS_SRC"/*.cyml; do
+    g=$(basename "$f" .cyml)
+    [ "$g" != asm_aarch64 ] || continue
+    first=$(sed -n 's/^extensions *= *\["\([^"]*\)".*/\1/p' "$f" | head -n 1)
+    name="x$first"
+    if [ -z "$first" ]; then
+        first=$(sed -n 's/^filenames *= *\["\([^"]*\)".*/\1/p' "$f" | head -n 1)
+        name="$first"
+    fi
+    [ -n "$first" ] || continue
+    : > "$TMPDIR/r160/cwd/$name"
+    out=$(env -i PATH="$PATH" HOME="$TMPDIR/r160/nohome" "$BIN" -n "$TMPDIR/r160/cwd/$name")
+    case "$out" in
+        *"($g)"*) ;;
+        *) fail "1.6.0: $name should route to ($g)" ;;
+    esac
+    rm -f "$TMPDIR/r160/cwd/$name"
+done
+printf 'stp x29, x30, [sp, #-16]!\nldr x0, [x1]\nret\n' > "$TMPDIR/r160/cwd/a.s"
+out=$(env -i PATH="$PATH" HOME="$TMPDIR/r160/nohome" "$BIN" -n "$TMPDIR/r160/cwd/a.s")
+case "$out" in
+    *"(asm_aarch64)"*) ;;
+    *) fail "1.6.0: an AArch64 .s file should route to (asm_aarch64) by content" ;;
+esac
+# (d) A user grammar with a NEW name routes by what it declares — extension,
+# filename, shebang — is listed, and is selectable. It may claim an extension
+# a bundled grammar routes (`.conf` from ini): installing it is the user's
+# choice. Through 1.5.3 a new name was unreachable.
+og="$TMPDIR/r160/xdg/owl/grammars"
+mkdir -p "$og"
+cat > "$og/owlgate.cyml" <<'EOF'
+[grammar]
+name = "owlgate"
+extensions = [".owlgate", ".conf"]
+filenames = ["Owlgatefile"]
+shebangs = ["owlgate-run"]
+
+[defaults]
+shebang = true
+whitespace = true
+ident_start = "A-Za-z_"
+ident_cont  = "A-Za-z0-9_"
+
+[[rules]]
+kind = "comment"
+match = "line"
+start = "#"
+EOF
+printf '# hi\n' > "$TMPDIR/r160/cwd/x.owlgate"
+printf '# hi\n' > "$TMPDIR/r160/cwd/x.conf"
+printf '# hi\n' > "$TMPDIR/r160/cwd/Owlgatefile"
+printf '#!/usr/bin/env owlgate-run\n# hi\n' > "$TMPDIR/r160/cwd/script"
+for f in x.owlgate x.conf Owlgatefile script; do
+    out=$(env -i PATH="$PATH" HOME="$TMPDIR/r160/nohome" XDG_CONFIG_HOME="$TMPDIR/r160/xdg" \
+        "$BIN" -n "$TMPDIR/r160/cwd/$f")
+    case "$out" in
+        *"(owlgate)"*) ;;
+        *) fail "1.6.0: $f should route to the user grammar (owlgate)" ;;
+    esac
+done
+out=$(env -i PATH="$PATH" HOME="$TMPDIR/r160/nohome" "$BIN" -n "$TMPDIR/r160/cwd/x.conf")
+case "$out" in
+    *"(ini)"*) ;;
+    *) fail "1.6.0: without the overlay, x.conf should route to (ini)" ;;
+esac
+env -i PATH="$PATH" HOME="$TMPDIR/r160/nohome" XDG_CONFIG_HOME="$TMPDIR/r160/xdg" \
+    "$BIN" --list-languages | grep -qx owlgate || fail "1.6.0: --list-languages missing the user grammar"
+out=$(printf '# hi\n' | env -i PATH="$PATH" HOME="$TMPDIR/r160/nohome" XDG_CONFIG_HOME="$TMPDIR/r160/xdg" \
+    "$BIN" --color=always --paging=never --language=owlgate)
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "1.6.0: --language=owlgate (a user grammar) did not colour" ;;
+esac
+# (e) A user grammar that REPLACES a bundled one changes how it highlights,
+# not what routes to it: with nasm.cyml in the overlay, a GNU-as `.asm` file
+# still gets the content vote.
+cp "$GRAMMARS_SRC/nasm.cyml" "$og/nasm.cyml"
+printf '.intel_syntax noprefix\n.text\nmov rax, 60\n' > "$TMPDIR/r160/cwd/g.asm"
+out=$(env -i PATH="$PATH" HOME="$TMPDIR/r160/nohome" XDG_CONFIG_HOME="$TMPDIR/r160/xdg" \
+    "$BIN" -n "$TMPDIR/r160/cwd/g.asm")
+case "$out" in
+    *"(asm_x86_64)"*) ;;
+    *) fail "1.6.0: a replaced nasm grammar took .asm routing from the content vote" ;;
+esac
+# (f) Overlay hygiene: a FIFO, a directory, an unparseable file, a nameless
+# grammar and one named "plain", all named *.cyml, are skipped — owl neither blocks (the overlay is stat'ed, never
+# opened, unless it is a regular file) nor drops the good grammar.
+if command -v timeout > /dev/null 2>&1 && mkfifo "$og/zz-fifo.cyml" 2>/dev/null; then
+    mkdir -p "$og/dir.cyml"
+    printf 'this is not a grammar\n' > "$og/bad.cyml"
+    # Parses, but declares no name: through the 1.6.0 dev cycle a nameless
+    # entry crashed owl's name scans (SIGSEGV); "plain" is owl's to reserve.
+    printf '[grammar]\nextensions = [".owlgate"]\n' > "$og/noname.cyml"
+    printf '[grammar]\nname = "plain"\nextensions = [".owlgate"]\n' > "$og/plain.cyml"
+    set +e
+    out=$(env -i PATH="$PATH" HOME="$TMPDIR/r160/nohome" XDG_CONFIG_HOME="$TMPDIR/r160/xdg" \
+        timeout 5 "$BIN" -n "$TMPDIR/r160/cwd/x.owlgate")
+    rc=$?
+    set -e
+    [ "$rc" -eq 0 ] || fail "1.6.0: a FIFO / directory / bad grammar in the overlay made owl exit $rc (124 = blocked)"
+    case "$out" in
+        *"(owlgate)"*) ;;
+        *) fail "1.6.0: junk in the overlay dropped the good user grammar" ;;
+    esac
+else
+    echo "smoke: NOTE — timeout or mkfifo unavailable; skipping the overlay FIFO gate" >&2
+fi
+# (g) owl's supplement: routes owl 1.5.3 had that vyakarana 2.10.0 does not
+# (docs/development/issues/2026-10-31-vyakarana-missing-routes.md).
+for pair in t.tcyr:cyrius b.bcyr:cyrius f.FCYR:cyrius; do
+    f=${pair%%:*}; lang=${pair#*:}
+    printf '# a comment\nvar x = 1;\n' > "$TMPDIR/r160/cwd/$f"
+    out=$(env -i PATH="$PATH" HOME="$TMPDIR/r160/nohome" "$BIN" -n "$TMPDIR/r160/cwd/$f")
+    case "$out" in
+        *"($lang)"*) ;;
+        *) fail "1.6.0 supplement: $f should route to ($lang)" ;;
+    esac
+done
+for pair in "env deno:javascript" "env -S deno run:javascript" "rust-script:rust" \
+            "swift:swift" "env elixir:elixir" "ocaml:ocaml" "ocamlrun:ocaml"; do
+    interp=${pair%%:*}; lang=${pair#*:}
+    printf '#!/usr/bin/%s\nx\n' "$interp" > "$TMPDIR/r160/cwd/s"
+    out=$(env -i PATH="$PATH" HOME="$TMPDIR/r160/nohome" "$BIN" -n "$TMPDIR/r160/cwd/s")
+    case "$out" in
+        *"($lang)"*) ;;
+        *) fail "1.6.0 supplement: #!/usr/bin/$interp should route to ($lang)" ;;
+    esac
+done
+# (h) INFO-013: a dotfile is never sniffed as markdown — `# ` opens a shell
+# or git comment there, not a heading. Through 1.5.3 `.gitignore` and
+# `.bashrc` starting `# …` rendered as markdown. A non-dotfile still is.
+for f in .bashrc .gitignore .env.example; do
+    printf '# a comment\nX=1\n' > "$TMPDIR/r160/cwd/$f"
+    out=$(env -i PATH="$PATH" HOME="$TMPDIR/r160/nohome" "$BIN" -n "$TMPDIR/r160/cwd/$f")
+    case "$out" in
+        *"(markdown)"*) fail "INFO-013: $f was sniffed as markdown" ;;
+    esac
+done
+printf '# Title\n\ntext\n' > "$TMPDIR/r160/cwd/NOTES"
+out=$(env -i PATH="$PATH" HOME="$TMPDIR/r160/nohome" "$BIN" -n "$TMPDIR/r160/cwd/NOTES")
+case "$out" in
+    *"(markdown)"*) ;;
+    *) fail "1.6.0: an extensionless file opening '# Title' should still sniff as (markdown)" ;;
 esac
 
 # 1.1.3 — user theme overlay via $XDG_CONFIG_HOME/owl/themes/<name>.cyml.
@@ -2141,6 +2333,106 @@ if command -v timeout >/dev/null 2>&1; then
     grep -q '^new-2$' "$TMPDIR/f.out" || fail "FINDING-034: --follow lost lines appended after truncation"
     grep -q 'truncated' "$TMPDIR/f.err" || fail "FINDING-034: --follow did not report the truncation"
 fi
+
+# 1.6.0 — --follow is token-coloured (_follow_hl: a vyakarana document,
+# appended to as the file grows). Through 1.5.3 a follow session had no
+# token colour at all. The test is that following a file as it grows prints
+# what the one-shot viewer prints for the final file, byte for byte: the
+# initial content, whole lines appended in several batches (a block comment
+# opened in one and closed in the next), a partial line drawn when the file
+# goes quiet and then continued — `fn ma` + `in() …`, where re-tokenizing
+# the tail alone would colour `in` as a keyword — and a line carrying
+# terminal escapes, which must still be stripped. Under -n the session is
+# the one-shot output minus the closing rule a follow never reaches.
+# Truncation restarts from the top, coloured.
+if command -v timeout > /dev/null 2>&1; then
+    fd160="$TMPDIR/fol160"
+    mkdir -p "$fd160"
+    printf 'fn main() {\n    let s = "hi"; // c\n' > "$fd160/f.rs"
+    printf 'fn old() {}\n' > "$fd160/t.rs"
+    ( timeout 5 "$BIN" -f --color=always "$fd160/f.rs" > "$fd160/f.out" 2> "$fd160/f.err" & )
+    ( timeout 5 "$BIN" -f --color=always -n "$fd160/f.rs" > "$fd160/n.out" 2> /dev/null & )
+    ( timeout 5 "$BIN" -f --color=always "$fd160/t.rs" > "$fd160/t.out" 2> "$fd160/t.err" & )
+    sleep 1
+    printf '    let n = 42;\n    /* multi\n' >> "$fd160/f.rs"
+    : > "$fd160/t.rs"
+    sleep 1
+    printf '       line */ let x = 1;\n}\nfn ma' >> "$fd160/f.rs"
+    printf 'fn new() { return 1; }\n' >> "$fd160/t.rs"
+    sleep 1
+    printf 'in() { let e = "\033[2J\033]0;owl\007"; }\n' >> "$fd160/f.rs"
+    sleep 3
+    "$BIN" --color=always --paging=never "$fd160/f.rs" > "$fd160/f.want"
+    cmp -s "$fd160/f.out" "$fd160/f.want" \
+        || fail "1.6.0: coloured --follow differs from the one-shot render of the final file"
+    "$BIN" --color=always --paging=never -n "$fd160/f.rs" > "$fd160/n.want"
+    [ -s "$fd160/n.out" ] || fail "1.6.0: --follow -n printed nothing"
+    head -c "$(wc -c < "$fd160/n.out")" "$fd160/n.want" | cmp -s - "$fd160/n.out" \
+        || fail "1.6.0: --follow -n is not the one-shot -n output (less its closing rule)"
+    case "$(cat "$fd160/f.out")" in
+        *"$(printf '\033[2J')"*|*"$(printf '\033]0')"*) fail "1.6.0: coloured --follow passed a file-origin escape through" ;;
+    esac
+    [ ! -s "$fd160/f.err" ] || fail "1.6.0: coloured --follow wrote to stderr: $(cat "$fd160/f.err")"
+    grep -q 'truncated' "$fd160/t.err" || fail "1.6.0: coloured --follow did not report the truncation"
+    case "$(cat "$fd160/t.out")" in
+        *"$(printf '\033[')"*"fn"*"new"*) ;;
+        *) fail "1.6.0: coloured --follow lost or uncoloured the lines appended after truncation" ;;
+    esac
+else
+    echo "smoke: NOTE — timeout unavailable; skipping the coloured --follow gates" >&2
+fi
+
+# 1.6.0 — the CLI is parsed by cmdit. What changed, each pinned:
+#   - a value flag takes `--name VALUE` as well as `--name=VALUE`;
+#   - `--` ends the options, so a file may start with `-`;
+#   - --help / --version / --list-* answer only when the whole command line
+#     parses (`--help --bogus` was help; now it is an error);
+#   - a missing value, and a value given to a switch, say so.
+# What did not: error wording for an attached value, `-np` (one short flag
+# per argument), -n / -N last-wins, exit codes.
+printf 'fn a() {}\n' > "$TMPDIR/c160.rs"
+out=$("$BIN" --color always --paging never "$TMPDIR/c160.rs")
+case "$out" in
+    *$(printf '\033')*) ;;
+    *) fail "1.6.0 CLI: --color always (separate value) did not colour" ;;
+esac
+[ "$out" = "$("$BIN" --color=always --paging=never "$TMPDIR/c160.rs")" ] \
+    || fail "1.6.0 CLI: --color always and --color=always differ"
+mkdir -p "$TMPDIR/c160"
+printf 'dash file\n' > "$TMPDIR/c160/-x.txt"
+out=$(cd "$TMPDIR/c160" && "$BIN" -p -- -x.txt)
+[ "$out" = "dash file" ] || fail "1.6.0 CLI: -- did not make -x.txt a file"
+cli_err() {   # args… ; sets rc and err
+    set +e
+    "$BIN" "$@" < /dev/null > /dev/null 2> "$TMPDIR/c160/err"; rc=$?
+    set -e
+    err=$(cat "$TMPDIR/c160/err")
+}
+cli_err --help --bogus
+[ "$rc" -eq 2 ] || fail "1.6.0 CLI: --help --bogus exited $rc, want 2"
+[ "$err" = "owl: --bogus: unknown option" ] || fail "1.6.0 CLI: --help --bogus said: $err"
+cli_err --color
+[ "$rc" -eq 2 ] || fail "1.6.0 CLI: --color with no value exited $rc, want 2"
+[ "$err" = "owl: --color: missing value (want auto|always|never)" ] || fail "1.6.0 CLI: --color said: $err"
+cli_err --language -n "$TMPDIR/c160.rs"
+[ "$err" = "owl: --language: missing value (try --list-languages)" ] \
+    || fail "1.6.0 CLI: --language -n should refuse -n as the value, said: $err"
+cli_err --plain=1 "$TMPDIR/c160.rs"
+[ "$rc" -eq 2 ] || fail "1.6.0 CLI: --plain=1 exited $rc, want 2"
+[ "$err" = "owl: --plain=1: takes no value" ] || fail "1.6.0 CLI: --plain=1 said: $err"
+cli_err --paging nope "$TMPDIR/c160.rs"
+[ "$err" = "owl: --paging=nope: invalid value (want auto|always|never)" ] \
+    || fail "1.6.0 CLI: --paging nope said: $err"
+cli_err --paging=nope "$TMPDIR/c160.rs"
+[ "$err" = "owl: --paging=nope: invalid value (want auto|always|never)" ] \
+    || fail "1.6.0 CLI: --paging=nope wording changed: $err"
+cli_err -np "$TMPDIR/c160.rs"
+[ "$rc" -eq 2 ] || fail "1.6.0 CLI: -np exited $rc, want 2"
+[ "$err" = "owl: -np: unknown option" ] || fail "1.6.0 CLI: -np said: $err"
+on=$("$BIN" -N -n --color=never "$TMPDIR/c160.rs")
+off=$("$BIN" -n -N --color=never "$TMPDIR/c160.rs")
+case "$on" in *"1 "*"fn a"*) ;; *) fail "1.6.0 CLI: -N -n should end with numbers on" ;; esac
+[ "$off" = "fn a() {}" ] || fail "1.6.0 CLI: -n -N should end with numbers off"
 
 # FINDING-036 — no colour codes for bytes that are not drawn: through 1.5.2
 # --line-range emitted an empty SGR pair for every token before the range.

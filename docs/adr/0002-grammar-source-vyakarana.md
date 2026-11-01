@@ -3,6 +3,8 @@
 - **Status**: Accepted
 - **Date**: 2026-04-23
 - **Deciders**: @MacCracken
+- **Partially superseded by**: [ADR 0009](0009-routing-and-grammars-from-vyakarana.md) (1.6.0) — grammar
+  files no longer ship beside the binary; the bundled set comes from vyakarana's embedded blobs.
 
 ## Context
 

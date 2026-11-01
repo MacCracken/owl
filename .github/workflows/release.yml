@@ -124,15 +124,15 @@ jobs:
         run: bash scripts/smoke.sh build/owl
 
       - name: Package release artifact
-        # Ships binary + grammars (runtime data that vyakarana loads
-        # from CWD/grammars/<lang>.cyml) + docs. No vendored lib/ —
-        # consumers building from source run `cyrius deps` themselves.
+        # Ships the binaries + docs. Since 1.6.0 the bundled grammars are
+        # compiled into the binary (vyakarana's embedded blobs), so there
+        # is no grammars/ directory to install beside it. No vendored
+        # lib/ — consumers building from source run `cyrius deps`.
         run: |
           PKG="owl-${VERSION}-${{ matrix.target }}"
           mkdir -p "pkg/$PKG"
           cp build/owl "pkg/$PKG/"
           cp build/owl_agnos "pkg/$PKG/"
-          cp -r grammars "pkg/$PKG/"
           cp README.md LICENSE CHANGELOG.md VERSION "pkg/$PKG/"
           mkdir -p out
           tar czf "out/${PKG}.tar.gz" -C pkg "$PKG"

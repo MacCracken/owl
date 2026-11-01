@@ -71,7 +71,6 @@ output = "owl"
 #     fs                    — reading files by path (M1, §3.2)
 #     hashmap               — language + theme tables (M3, §5.1/§5.2)
 #     process               — pager spawn (M4, §7)
-#     assert                — tests/owl.tcyr
 #   reached through sit-read's diff path
 #     chrono/freelist + sankoch (zlib), sigil (hashing),
 #     patra (B+tree object store), mmap (read-only pack mappings)
@@ -87,7 +86,6 @@ stdlib = [
     "args",
     "hashmap",
     "process",
-    "assert",
     "chrono",
     "freelist",
     "sankoch",
@@ -95,6 +93,15 @@ stdlib = [
     "patra",
     "mmap",
 ]
+
+# Test-only modules (cyrius 6.7.6+): prepended to `cyrius test` / `bench` /
+# `fuzz` compiles only, never to the shipped `owl` and never to a `.deps`
+# sidecar. `assert` sat in [deps].stdlib through 1.5.3, so it was prepended
+# to every surface (DCE dropped it from the release binary, the plain build
+# carried it). The test files still `include` what they use themselves, so an
+# editor's build-scope resolve sees it too (include-once makes it one copy).
+[test]
+stdlib = ["assert", "bench", "fnptr"]
 
 [deps.vyakarana]
 git = "https://github.com/MacCracken/vyakarana.git"
@@ -138,3 +145,13 @@ modules = ["dist/vyakarana.cyr"]
 git = "https://github.com/MacCracken/sit.git"
 tag = "1.13.0"
 modules = ["dist/sit-read.cyr"]
+
+# cmdit — the AGNOS getopt-long library (1.6.0). owl's CLI is parsed by it
+# (src/main.cyr, the CLI section) and `--completions` is generated from the
+# same flag table. The tag is the one sit pins, so the shared `lib/cmdit.cyr`
+# is one file at one version; it was vendored before 1.6.0 as sit's own
+# dependency, though nothing in owl included it.
+[deps.cmdit]
+git = "https://github.com/MacCracken/cmdit.git"
+tag = "1.5.0"
+modules = ["dist/cmdit.cyr"]

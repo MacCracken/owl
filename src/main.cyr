@@ -2,6 +2,7 @@
 # Stdlib auto-included via cyrius.cyml
 
 include "lib/vyakarana.cyr"
+include "lib/cmdit.cyr"
 include "src/escape.cyr"
 include "src/out.cyr"
 include "src/lang.cyr"
@@ -12,7 +13,7 @@ include "src/config.cyr"
 
 # Keep OWL_VERSION in sync with the VERSION file.
 # A M8 CI check will enforce equality; for now, manual.
-var OWL_VERSION = "owl 1.5.3";
+var OWL_VERSION = "owl 1.6.0";
 
 var BUFSIZE = 65536;
 
@@ -85,8 +86,8 @@ var g_flag_format = 0;
 
 # -f / --follow: after rendering the file, keep the fd open and render
 # bytes as they are appended, like `tail -f`. Forces paging off (there is
-# no end to page to) and highlighting off — see _follow_loop for why the
-# tail is deliberately not token-coloured.
+# no end to page to). Since 1.6.0 the tail is token-coloured like the rest
+# of the file (_follow_hl); through 1.5.3 colour was off for the session.
 var g_flag_follow = 0;
 var FOLLOW_POLL_MS = 200;
 var FORMAT_TEXT   = 0;
@@ -519,127 +520,35 @@ fn report_error(path, reason) {
     return 0;
 }
 
-# ── Grammar resolution (1.1.2) ─────────────────────────────────────────
-# vyakarana's bootstrap loads grammars via the literal relative path
-# "grammars/<lang>.cyml" (lib/vyakarana.cyr:1774). That breaks for any
-# invocation where the cwd doesn't happen to contain a grammars/
-# subdirectory — silently, because grammar_load returns 0 and the
-# registry just stays empty, so has_grammar(lang) reports false and
-# render_path skips the highlight branch entirely. The user sees plain
-# bytes with no error.
+# ── Grammars (1.6.0: vyakarana's embedded set + the user overlay) ──────
+# The 49 bundled grammars are compiled into the vyakarana bundle as blobs;
+# `bootstrap_grammars()` registers them with no file I/O and from any cwd.
+# Through 1.5.3 owl instead located a grammars/ directory beside its binary
+# through /proc/self/exe and loaded 49 .cyml files from it — the same
+# content, re-synced on every vyakarana bump — and wrote vyakarana's
+# private `_grammars_bootstrapped` flag to keep its own bootstrap from
+# running. Neither is needed now, and grammars/ is no longer a runtime file.
 #
-# Fix: owl resolves grammars/ via /proc/self/exe (binary location)
-# before vyakarana's lazy bootstrap fires, pre-loads every grammar
-# with an absolute path, and sets _grammars_bootstrapped = 1 so
-# vyakarana's relative-path fallback never runs. Tries:
-#   1. <exe-dir>/grammars/                       (installed-adjacent)
-#   2. <exe-dir>/../grammars/                    (dev: build/owl + ./grammars/)
-#   3. cwd-relative via vyakarana's legacy path  (resolved-by 0 on failure)
-# Probe is grammars/cyrius.cyml — every owl build has it.
+# The user overlay still comes first: every regular `*.cyml` in
+# $XDG_CONFIG_HOME/owl/grammars/ (else ~/.config/owl/grammars/) is
+# registered before the bundled set, and vyakarana's name lookup returns
+# the first match, so a user grammar replaces a bundled one of the same
+# name. Since 1.6.0 a user grammar may also have a NEW name: it is listed
+# by --list-languages, selectable with --language, and routed by what it
+# declares (lang.cyr, detect_language_registered).
 
-var g_grammars_dir          = 0;   # NUL-term abs path of grammars/, or 0
-var g_grammars_dir_resolved = 0;   # cache flag: don't re-resolve
-
-# 1.1.3 — user grammar overlay. Loaded BEFORE bundled in the bootstrap
-# so vyakarana's registry_find_by_name (first-match) returns the user
-# version when names collide. New language names need a lang.cyr table
-# update; the override-only scope here lets a user patch a single
-# bundled grammar without that.
 var g_user_grammars_dir          = 0;
 var g_user_grammars_dir_resolved = 0;
-
-fn _grammar_dir_has_cyrius(dir) {
-    # Build "<dir>cyrius.cyml" in a probe buffer, file_open it.
-    var dlen = strlen(dir);
-    if (dlen + 12 >= 512) { return 0; }
-    var probe[512];
-    var k = 0;
-    while (k < dlen) { store8(&probe + k, load8(dir + k)); k = k + 1; }
-    var name = "cyrius.cyml";
-    var nlen = strlen(name);
-    var j = 0;
-    while (j < nlen) { store8(&probe + dlen + j, load8(name + j)); j = j + 1; }
-    store8(&probe + dlen + nlen, 0);
-    var fd = file_open(&probe, O_RDONLY, 0);
-    if (fd < 0) { return 0; }
-    file_close(fd);
-    return 1;
-}
-
-# Build "<base>grammars/" into out (alloc'd). Returns out.
-fn _join_grammars(base, base_len) {
-    var suffix = "grammars/";
-    var slen = strlen(suffix);
-    var total = base_len + slen + 1;
-    var out = alloc(total);
-    if (out == 0) { return 0; }
-    var k = 0;
-    while (k < base_len) { store8(out + k, load8(base + k)); k = k + 1; }
-    var j = 0;
-    while (j < slen) { store8(out + base_len + j, load8(suffix + j)); j = j + 1; }
-    store8(out + base_len + slen, 0);
-    return out;
-}
-
-fn _resolve_grammars_dir() {
-    if (g_grammars_dir_resolved == 1) { return g_grammars_dir; }
-    g_grammars_dir_resolved = 1;
-
-    # readlink /proc/self/exe → absolute binary path. SYS_readlink = 89
-    # on Linux x86_64. Returns negative on failure (no /proc, etc.).
-    #ifdef CYRIUS_TARGET_AGNOS
-    # No readlink / /proc on agnos — use the compiled-in vyakarana grammars
-    # (no external grammars dir relative to the binary).
-    g_grammars_dir = 0;
-    return 0;
-    #endif
-    var link[512];
-    var n = syscall(89, "/proc/self/exe", &link, 511);
-    if (n <= 0) { g_grammars_dir = 0; return 0; }
-    store8(&link + n, 0);
-
-    # Find last "/" — everything before it (inclusive) is the exe dir.
-    var slash = n;
-    while (slash > 0) {
-        if (load8(&link + slash - 1) == 47) { break; }
-        slash = slash - 1;
-    }
-
-    # Candidate 1: <exe-dir>/grammars/
-    var c1 = _join_grammars(&link, slash);
-    if (c1 == 0) { g_grammars_dir = 0; return 0; }
-    if (_grammar_dir_has_cyrius(c1) == 1) {
-        g_grammars_dir = c1;
-        return c1;
-    }
-
-    # Candidate 2: <exe-dir>/../grammars/  (covers build/owl + ./grammars/)
-    # Strip one trailing path component from the exe dir to get parent.
-    if (slash > 1) {
-        var parent_end = slash - 1;     # skip trailing "/"
-        while (parent_end > 0) {
-            if (load8(&link + parent_end - 1) == 47) { break; }
-            parent_end = parent_end - 1;
-        }
-        var c2 = _join_grammars(&link, parent_end);
-        if (c2 == 0) { g_grammars_dir = 0; return 0; }
-        if (_grammar_dir_has_cyrius(c2) == 1) {
-            g_grammars_dir = c2;
-            return c2;
-        }
-    }
-
-    # No exe-relative dir found. Leave g_grammars_dir = 0; caller will
-    # let vyakarana fall back to cwd-relative load. That fallback works
-    # only when cwd has grammars/ — same as pre-1.1.2 behavior.
-    g_grammars_dir = 0;
-    return 0;
-}
+var g_owl_bootstrapped           = 0;
+var g_overlay_new                = 0;   # vec: names of new-name user grammars
 
 # Longest env-derived directory owl will build a grammar path from. The
 # user-overlay dir comes from $XDG_CONFIG_HOME / $HOME, so its length is
 # the environment's to choose.
 var GRAMMAR_DIR_MAX = 4096;
+# Most overlay entries examined — a directory is the user's, but a huge
+# one must not stall startup.
+var OVERLAY_MAX = 256;
 
 # "<base><suffix>" in an allocation sized from both; 0 when base is empty,
 # longer than GRAMMAR_DIR_MAX, or the alloc fails.
@@ -671,10 +580,17 @@ fn _is_dir(path) {
     #endif
 }
 
+# 1 when path is a regular file (stat, never open: a FIFO in the overlay
+# must not hang owl — the class FINDING-019 / 031 closed elsewhere).
+fn _is_regular(path) {
+    var st[256];
+    if (xstat(path, &st) != 0) { return 0; }
+    if ((load32(&st + STAT_MODE) & 0xF000) != 0x8000) { return 0; }
+    return 1;
+}
+
 # Resolve the user grammars dir: $XDG_CONFIG_HOME/owl/grammars/ when XDG is
-# set, else $HOME/.config/owl/grammars/. 0 when it is not a directory —
-# user grammars are opt-in, and probing 49 files in a dir that does not
-# exist cost 49 failed opens on every first highlight.
+# set, else $HOME/.config/owl/grammars/. 0 when it is not a directory.
 fn _resolve_user_grammars_dir() {
     if (g_user_grammars_dir_resolved == 1) { return g_user_grammars_dir; }
     g_user_grammars_dir_resolved = 1;
@@ -695,65 +611,98 @@ fn _resolve_user_grammars_dir() {
     return dir;
 }
 
-# Load "<dir><name>.cyml" into the registry. `path` holds `cap` bytes;
-# a path that would not fit is skipped. Through 1.5.2 this copied an
-# env-derived dir into a fixed 1024-byte buffer with no check — a heap
-# overflow from a long $HOME / $XDG_CONFIG_HOME on any highlighted file
-# (audit 2026-10-31 FINDING-017, a sibling of FINDING-007).
-fn _owl_load_grammar(dir, path, cap, name) {
-    var dlen = strlen(dir);
-    var nlen = strlen(name);
-    if (dlen + nlen + 6 > cap) { return 0; }
-    memcpy(path, dir, dlen);
-    memcpy(path + dlen, name, nlen);
-    memcpy(path + dlen + nlen, ".cyml", 5);
-    store8(path + dlen + nlen + 5, 0);
-    var g = grammar_load(path);
-    if (g != 0) { registry_add(g); }
-    return 0;
-}
-
-# Every grammar owl knows, from one list: the language table (1.5.2 wired
-# markdown, the one bundled grammar it lacked; 1.5.3 made the table the
-# only list, so a grammar cannot again be bundled but unreachable).
-fn _owl_load_all(dir, path, cap) {
-    var i = 1;   # 0 is "plain"
-    while (i < LANG_COUNT) {
-        _owl_load_grammar(dir, path, cap, lang_name(i));
+# Register every regular `*.cyml` in the overlay dir (at most OVERLAY_MAX
+# entries examined). A file the grammar parser rejects is skipped, as a
+# missing one always was, and so is one that declares no `name` (the parser
+# accepts it, and a nameless registry entry crashed the name scans below)
+# or the name "plain", which owl reserves for unhighlighted output.
+fn _owl_load_overlay(udir) {
+    var names = dir_list(str_from(udir));
+    var n = vec_len(names);
+    if (n > OVERLAY_MAX) { n = OVERLAY_MAX; }
+    var i = 0;
+    while (i < n) {
+        var nm = str_cstr(vec_get(names, i));
+        var nl = 0;
+        if (nm != 0) { nl = strlen(nm); }
+        if (nl > 5) {
+            if (memeq(nm + nl - 5, ".cyml", 5) == 1) {
+                var p = _join_dir(udir, nm);
+                if (p != 0) {
+                    if (_is_regular(p) == 1) {
+                        var g = grammar_load(p);
+                        if (_overlay_name_ok(g) == 1) { registry_add(g); }
+                    }
+                }
+            }
+        }
         i = i + 1;
     }
     return 0;
 }
 
-# Owl-side bootstrap. Pre-loads every bundled grammar via an absolute
-# path resolved from /proc/self/exe, then sets vyakarana's
-# _grammars_bootstrapped flag so its lazy relative-path bootstrap
-# doesn't fire and overwrite the registry with failed loads.
-# Idempotent. Cheap on the second call.
+# 1 when a loaded user grammar may be registered: it parsed, and it has a
+# non-empty name other than "plain".
+fn _overlay_name_ok(g) {
+    if (g == 0) { return 0; }
+    var nm = grammar_name(g);
+    if (nm == 0) { return 0; }
+    if (load8(nm) == 0) { return 0; }
+    if (streq(nm, "plain") == 1) { return 0; }
+    return 1;
+}
+
+# Load the registry once: the user overlay, then vyakarana's embedded set.
+# Every registry consumer goes through here first (_owl_has_grammar,
+# _owl_detect, print_language_list), so the overlay is always registered
+# before the bundled grammars it may replace.
 fn _owl_bootstrap_grammars() {
-    if (_grammars_bootstrapped == 1) { return 0; }
-    var dir = _resolve_grammars_dir();
-    if (dir == 0) { return 0; }   # let vyakarana's relative path try
-
-    registry_init();
+    if (g_owl_bootstrapped == 1) { return 0; }
+    g_owl_bootstrapped = 1;
+    g_overlay_new = vec_new();
+    var reg = registry_init();
     var udir = _resolve_user_grammars_dir();
-    var cap = strlen(dir);
-    if (udir != 0) { if (strlen(udir) > cap) { cap = strlen(udir); } }
-    cap = cap + 64;               # longest name ("asm_aarch64") + ".cyml" + NUL
-    var path = alloc(cap);
-    if (path == 0) { return 0; }
-
-    # User overlay first — vyakarana's registry is a vec and find_by_name
-    # returns the first match, so a user grammar wins by name.
-    if (udir != 0) { _owl_load_all(udir, path, cap); }
-    _owl_load_all(dir, path, cap);
-
-    _grammars_bootstrapped = 1;
+    if (udir != 0) { _owl_load_overlay(udir); }
+    var n_user = vec_len(reg);
+    bootstrap_grammars();
+    # A user grammar is "new" when no bundled grammar has its name; only new
+    # ones route by their declarations (lang.cyr, _owl_detect step 2).
+    var i = 0;
+    while (i < n_user) {
+        var nm = grammar_name(vec_get(reg, i));
+        var bundled = 0;
+        var j = n_user;
+        while (j < vec_len(reg)) {
+            if (streq(grammar_name(vec_get(reg, j)), nm) == 1) { bundled = 1; j = vec_len(reg); }
+            j = j + 1;
+        }
+        if (bundled == 0) { vec_push(g_overlay_new, nm); }
+        i = i + 1;
+    }
     return 0;
 }
 
-# Wrapper around vyakarana's has_grammar that ensures owl's
-# absolute-path bootstrap runs first.
+# How many user grammars have a new name. 0, with no registry load, when
+# there is no overlay directory.
+fn _owl_overlay_new_count() {
+    if (_resolve_user_grammars_dir() == 0) { return 0; }
+    _owl_bootstrap_grammars();
+    return vec_len(g_overlay_new);
+}
+
+# 1 when `name` is a new-name user grammar.
+fn _owl_overlay_is_new(name) {
+    if (g_overlay_new == 0) { return 0; }
+    var i = 0;
+    while (i < vec_len(g_overlay_new)) {
+        if (streq(vec_get(g_overlay_new, i), name) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Wrapper around vyakarana's has_grammar that ensures owl's bootstrap
+# (overlay first) runs before vyakarana's own.
 fn _owl_has_grammar(lang) {
     _owl_bootstrap_grammars();
     return has_grammar(lang);
@@ -1243,10 +1192,33 @@ fn render_chunk(buf, n) {
 # for the new/feed*/finish/free dance, then this helper for the
 # render loop.
 fn _render_highlighted_with_tb(buf, n, tb) {
+    return _render_hl_range(buf, 0, n, tb);
+}
+
+# Index of the first token in `tb` that ends after byte `pos` (tokenbuf_count
+# when none does). Tokens are ordered and never overlap, so their ends rise.
+fn _tb_first_ending_after(tb, pos) {
+    var lo = 0;
+    var hi = tokenbuf_count(tb);
+    while (lo < hi) {
+        var mid = (lo + hi) / 2;
+        if (tokenbuf_start(tb, mid) + tokenbuf_len(tb, mid) <= pos) { lo = mid + 1; }
+        else { hi = mid; }
+    }
+    return lo;
+}
+
+# Render buf[from, to) coloured by `tb`, whose spans are offsets into `buf`.
+# --follow (1.6.0) draws the appended tail this way, each call starting
+# where the last stopped; a token that began before `from` colours the rest
+# of its bytes. The gutter, wrap and escape-classifier state are global, so
+# consecutive ranges render exactly as one call over their union would.
+fn _render_hl_range(buf, from, to, tb) {
     if (tb == 0) { return 0 - 1; }
+    if (g_render_done == 1) { return 0; }
 
     var tok_count = tokenbuf_count(tb);
-    var tok_i = 0;
+    var tok_i = _tb_first_ending_after(tb, from);
     var show_nums = resolved_show_numbers();
     var show_all  = g_flag_show_all;
     var tabs      = g_flag_tabs;
@@ -1263,8 +1235,8 @@ fn _render_highlighted_with_tb(buf, n, tb) {
         kk = kk + 1;
     }
 
-    var i = 0;
-    while (i < n) {
+    var i = from;
+    while (i < to) {
         # Advance past tokens that ended before this byte.
         while (tok_i < tok_count) {
             var tok_end = tokenbuf_start(tb, tok_i) + tokenbuf_len(tb, tok_i);
@@ -1403,8 +1375,8 @@ fn _buf_first() { if (g_first_buf == 0) { g_first_buf = alloc(BUFSIZE); } return
 fn _buf_hl()    { if (g_hl_buf == 0)    { g_hl_buf    = alloc(HIGHLIGHT_MAX + 1); } return g_hl_buf; }
 
 # The tokenbuf, emptied for reuse. `_tokenbuf_reset` is vyakarana-private
-# (as `_grammars_bootstrapped` is); a rename upstream fails the build
-# loudly rather than silently.
+# (owl's last private use since 1.6.0 dropped `_grammars_bootstrapped`); a
+# rename upstream fails the build loudly rather than silently.
 fn _hl_tokenbuf() {
     if (g_hl_tb == 0) { g_hl_tb = tokenbuf_new(); return g_hl_tb; }
     _tokenbuf_reset(g_hl_tb);
@@ -1574,20 +1546,13 @@ fn render_fd(fd, path_for_header) {
     return 0;
 }
 
-# Tail an open fd: render whatever arrives, sleep when it is quiet, repeat.
-# Ends only on read error or signal (Ctrl-C) — like `tail -f`, there is no
-# natural end.
+# Tail an open fd without colour: render whatever arrives, sleep when it is
+# quiet, repeat. Ends only on read error or signal (Ctrl-C) — like
+# `tail -f`, there is no natural end.
 #
-# The tail is rendered through `render_chunk`, NOT the highlight path, and
-# the whole follow session is forced down that path so the output is
-# consistent from the first byte. That is a deliberate trade, not an
-# oversight: token colouring needs a tokenbuf whose spans cover the bytes
-# being drawn, and a live stream produces spans in absolute stream offsets
-# while the render loop indexes into the chunk it was handed. Reconciling
-# the two means threading a base offset through the render loop and
-# reasoning about tokens that straddle an append boundary — real work with
-# real correctness risk, for a mode whose value is *seeing new lines
-# arrive*. Everything else survives: the line-number gutter, tab expansion,
+# Used when the session is not coloured (colour off, no grammar), and by
+# _follow_hl when it gives colour up (past HIGHLIGHT_MAX, a refused feed).
+# Everything but colour applies: the line-number gutter, tab expansion,
 # `-A` glyphs, wrap, and — the one that matters — escape stripping, so a
 # log line carrying a terminal escape is filtered exactly as it is in the
 # normal viewer.
@@ -1599,27 +1564,145 @@ fn _follow_loop(fd, path) {
         var n = file_read(fd, buf, BUFSIZE);
         if (n < 0) { return 0 - 1; }
         if (n == 0) {
-            # Truncated under us (logrotate copytruncate, `: > log`): start
-            # over from the top, as `tail -f` does. Through 1.5.2 owl went
-            # silent and later printed a torn fragment (audit 2026-10-31).
-            var sz = _fd_size(fd);
-            if (sz >= 0) {
-                var cur = sys_lseek(fd, 0, 1);
-                if (cur > sz) {
-                    sys_lseek(fd, 0, 0);
-                    escape_reset();
-                    out_flush();
-                    eprint("owl: ", 5);
-                    eprint_sanitized(path, strlen(path));
-                    eprint(": file truncated\n", 17);
-                    continue;
-                }
+            # Truncated under us: start over from the top, as `tail -f`
+            # does. Through 1.5.2 owl went silent and later printed a torn
+            # fragment (audit 2026-10-31).
+            if (_follow_truncated(fd) == 1) {
+                sys_lseek(fd, 0, 0);
+                escape_reset();
+                out_flush();
+                eprint("owl: ", 5);
+                eprint_sanitized(path, strlen(path));
+                eprint(": file truncated\n", 17);
+                continue;
             }
             out_flush();
             sleep_ms(FOLLOW_POLL_MS);
             continue;
         }
         render_chunk(buf, n);
+    }
+    return 0;
+}
+
+# 1 when `fd`'s file is now shorter than the offset we read up to — it
+# was truncated under us (logrotate copytruncate, `: > log`).
+fn _follow_truncated(fd) {
+    var sz = _fd_size(fd);
+    if (sz < 0) { return 0; }
+    var cur = sys_lseek(fd, 0, 1);
+    if (cur > sz) { return 1; }
+    return 0;
+}
+
+# Coloured --follow (1.6.0). The text read so far lives in the highlight
+# buffer, tokenized as a vyakarana document (ADR 0033): an append is an
+# edit at the end, which re-scans from the last checkpoint (every 4 KiB)
+# rather than from the top, and whose tokens always equal a from-scratch
+# tokenization of the whole text.
+#
+# The file as it stands is read to EOF and drawn in one pass, exactly as
+# the viewer draws it without -f. After that, what is drawn stays drawn — a
+# tail cannot redraw — so appended text is drawn by whole lines, each once
+# its newline arrives and coloured as the text up to it tokenizes then. A
+# partial last line is drawn when the file goes quiet (a poll finds
+# nothing new), as `tail -f` shows it; if that line then continues, the
+# token straddling the boundary colours the rest of its bytes by what it
+# has become (_render_hl_range starts mid-token). Escape stripping sees
+# every byte once, in order, exactly as on the plain tail.
+#
+# Bounded by HIGHLIGHT_MAX like the highlight path. A file that grows past
+# it gets the usual notice and continues plainly; so does a feed vyakarana
+# refuses (one construct past its stream caps). The caller has already
+# refused a file over the cap at the start.
+#
+# Returns 0, -1 on a read error, or 1 when nothing was drawn because the
+# document or buffer could not be had — the caller then follows plainly.
+fn _follow_hl(fd, path, lang, first_buf, first_n) {
+    var buf = _buf_hl();
+    if (buf == 0) { return 1; }
+    var d = tokenize_doc_new(lang);
+    if (d == 0) { return 1; }
+    memcpy(buf, first_buf, first_n);
+    var total = first_n;
+    var reading = 1;
+    while (reading == 1) {
+        if (total >= HIGHLIGHT_MAX) { reading = 0; continue; }
+        var n0 = file_read(fd, buf + total, HIGHLIGHT_MAX - total);
+        if (n0 < 0) { tokenize_doc_free(d); return 0 - 1; }
+        if (n0 == 0) { reading = 0; continue; }
+        total = total + n0;
+    }
+    var plain = 0;
+    if (total >= HIGHLIGHT_MAX) {
+        _too_large_notice(path, ": file");
+        plain = 1;
+    }
+    if (plain == 0) {
+        if (tokenize_doc_set(d, buf, total) < 0) { plain = 1; }
+    }
+    if (plain == 1) {
+        render_chunk(buf, total);
+        tokenize_doc_free(d);
+        return _follow_loop(fd, path);
+    }
+    _render_hl_range(buf, 0, total, tokenize_doc_tokens(d));
+    var drawn = total;
+
+    var going = 1;
+    while (going == 1) {
+        if (total >= HIGHLIGHT_MAX) {
+            # Grown past the cap: draw what is held, say why colour stops,
+            # and go on plainly.
+            if (drawn < total) { _render_hl_range(buf, drawn, total, tokenize_doc_tokens(d)); }
+            _too_large_notice(path, ": file");
+            tokenize_doc_free(d);
+            return _follow_loop(fd, path);
+        }
+        var n = file_read(fd, buf + total, HIGHLIGHT_MAX - total);
+        if (n < 0) { tokenize_doc_free(d); return 0 - 1; }
+        if (n == 0) {
+            if (_follow_truncated(fd) == 1) {
+                # Start over from the top, as `tail -f` does.
+                sys_lseek(fd, 0, 0);
+                escape_reset();
+                out_flush();
+                eprint("owl: ", 5);
+                eprint_sanitized(path, strlen(path));
+                eprint(": file truncated\n", 17);
+                total = 0;
+                drawn = 0;
+                tokenize_doc_set(d, buf, 0);
+                continue;
+            }
+            # Quiet: draw a held partial line now.
+            if (drawn < total) {
+                _render_hl_range(buf, drawn, total, tokenize_doc_tokens(d));
+                drawn = total;
+            }
+            out_flush();
+            sleep_ms(FOLLOW_POLL_MS);
+            continue;
+        }
+        var old = total;
+        total = total + n;
+        if (tokenize_doc_edit(d, buf, total, old, 0, n) < 0) {
+            render_chunk(buf + drawn, total - drawn);
+            tokenize_doc_free(d);
+            return _follow_loop(fd, path);
+        }
+        # Draw through the last complete line.
+        var lim = total;
+        var scanning = 1;
+        while (scanning == 1) {
+            if (lim <= drawn) { scanning = 0; continue; }
+            if (load8(buf + lim - 1) == 10) { scanning = 0; continue; }
+            lim = lim - 1;
+        }
+        if (lim > drawn) {
+            _render_hl_range(buf, drawn, lim, tokenize_doc_tokens(d));
+            drawn = lim;
+        }
     }
     return 0;
 }
@@ -1695,7 +1778,7 @@ fn render_path(path) {
         return 0 - 1;
     }
 
-    var lang = detect_language_from_path(path);
+    var lang = "plain";
 
     var first_buf = _buf_first();
     if (first_buf == 0) { file_close(fd); report_error(path, "out of memory"); return 0 - 1; }
@@ -1758,22 +1841,16 @@ fn render_path(path) {
         }
     }
 
-    if (streq(lang, "plain") == 1) {
-        if (first_n > 0) {
-            var sh = detect_language_from_shebang(first_buf, first_n);
-            if (sh != 0) { lang = sh; }
-        }
-    }
-
-    # 1.1.4 — content-based detection as a third-pass fallback. Fires
-    # only when extension AND shebang both missed; high-confidence
-    # patterns for json/yaml/toml/markdown only (programming languages
-    # excluded — false-positive risk).
-    if (streq(lang, "plain") == 1) {
-        if (first_n > 0) {
-            var ct = _owl_detect_language_from_content(first_buf, first_n);
-            if (ct != 0) { lang = ct; }
-        }
+    # Route only when the language is used: a header (decorated), token
+    # colour, or ndjson. Undecorated, uncoloured output never shows it, and
+    # routing may load the grammar registry (lang.cyr, _owl_detect).
+    var need_lang = 0;
+    if (g_decorated == 1) { need_lang = 1; }
+    if (g_want_color == 1) { need_lang = 1; }
+    if (g_flag_format == FORMAT_NDJSON) { need_lang = 1; }
+    if (g_flag_plain == 1) { need_lang = 0; }
+    if (need_lang == 1) {
+        if (g_flag_lang == 0) { lang = _owl_detect(path, first_buf, first_n); }
     }
 
     if (g_flag_lang != 0) { lang = g_flag_lang; }
@@ -1813,11 +1890,6 @@ fn render_path(path) {
             if (_owl_has_grammar(lang) == 1) { highlight_ok = 1; }
         }
     }
-    # --follow renders the whole session through the streaming path so the
-    # already-present content and the appended tail look the same. See
-    # _follow_loop for why the tail is not token-coloured.
-    if (g_flag_follow == 1) { highlight_ok = 0; }
-
     render_reset();
     if (resolved_show_header() == 1) { emit_header(path); }
 
@@ -1828,6 +1900,23 @@ fn render_path(path) {
             _too_large_notice(path, ": file");
             highlight_ok = 0;
         }
+    }
+
+    # --follow owns the fd until Ctrl-C: coloured through _follow_hl when
+    # the file would be highlighted, else the plain tail at the bottom.
+    if (g_flag_follow == 1) {
+        if (highlight_ok == 1) {
+            var fh = _follow_hl(fd, path, lang, first_buf, first_n);
+            if (fh != 1) {
+                file_close(fd);
+                if (fh < 0) {
+                    report_error(path, "read error");
+                    return 0 - 1;
+                }
+                return 0;
+            }
+        }
+        highlight_ok = 0;
     }
 
     if (highlight_ok == 1) {
@@ -1897,10 +1986,10 @@ fn render_path(path) {
 
     render_chunk(first_buf, first_n);
     var rc = render_fd_loop(fd);
-    # --follow: the file is fully rendered and the fd sits at EOF; hand it
-    # to the tail loop, which blocks until Ctrl-C. `highlight_ok` was forced
-    # to 0 above, so follow always lands here rather than on a highlight
-    # path that has already closed the fd.
+    # --follow, uncoloured: the file is fully rendered and the fd sits at
+    # EOF; hand it to the tail loop, which blocks until Ctrl-C. A coloured
+    # session returned above; `highlight_ok` is 0 for every follow that
+    # reaches here, so none lands on a highlight path that closes the fd.
     if (g_flag_follow == 1) {
         if (rc >= 0) {
             var frc = _follow_loop(fd, path);
@@ -1925,15 +2014,30 @@ fn render_path(path) {
 fn print_version() {
     println(OWL_VERSION);
     if (g_flag_verbose == 1) {
-        # Kept in sync with cyrius.cyml [deps.*].tag and [package].cyrius.
-        # Useful for bug reports — "owl 1.5.3 vyakarana 2.10.0 sit 1.13.0
-        # cyrius 6.7.18 linux-x86_64" pins the exact toolchain + dep
-        # versions a user is running against. sit (1.4.0) backs the VCS
-        # change-marker gutter via sit_diff_path.
+        # Kept in sync with cyrius.cyml [deps.*].tag and [package].cyrius
+        # (smoke compares them). Useful for bug reports — "owl 1.6.0
+        # vyakarana 2.10.0 sit 1.13.0 cmdit 1.5.0 cyrius 6.7.18
+        # linux-x86_64" pins the exact toolchain + dep versions a user is
+        # running against. sit (1.4.0) backs the VCS change-marker gutter;
+        # cmdit (1.6.0) parses the command line.
         println("vyakarana 2.10.0");
         println("sit 1.13.0");
+        println("cmdit 1.5.0");
         println("cyrius 6.7.18");
-        println("target linux-x86_64");
+        # The build's own target. Through 1.5.3 this was a literal
+        # "linux-x86_64", which agnos and aarch64 builds printed too.
+        var os = "linux";
+        #ifdef CYRIUS_TARGET_AGNOS
+        os = "agnos";
+        #endif
+        #ifdef CYRIUS_TARGET_MACOS
+        os = "macos";
+        #endif
+        var arch = "x86_64";
+        #ifdef CYRIUS_ARCH_AARCH64
+        arch = "aarch64";
+        #endif
+        println(_cli_cat3("target ", os, _cli_cat3("-", arch, "")));
     }
     return EXIT_OK;
 }
@@ -1945,6 +2049,7 @@ fn print_help() {
     println("  owl [OPTIONS] [FILE...]");
     println("  owl -                  Read from stdin");
     println("  owl a.txt - b.txt      Mix files and stdin");
+    println("  owl -- -name.txt       Everything after -- is a file");
     println("");
     println("Options:");
     println("  -n, --number           Force line numbers on");
@@ -1954,7 +2059,7 @@ fn print_help() {
     println("                         CR as ␍, other controls as ^X");
     println("  -x, --hex              xxd-style hex dump (auto for binary files)");
     println("      --diff             Show only changed lines (uses VCS markers)");
-    println("  -f, --follow           Keep rendering as the file grows (tail -f; no token colour)");
+    println("  -f, --follow           Keep rendering as the file grows (tail -f)");
     println("      --format=<fmt>     text (default) | ndjson (one JSON object per token)");
     println("  -r, --raw-control-chars  Pass file-origin terminal escapes through");
     println("                         unchanged (default: strip in decorated mode)");
@@ -1980,16 +2085,9 @@ fn print_help() {
     println("  else ~/.config/owl/config.cyml. Keys: theme, paging,");
     println("  style, tabs, wrap, ext.<ext> = <language>. CLI flags");
     println("  override the config.");
+    println("");
+    println("A value flag takes --name=VALUE or --name VALUE.");
     return EXIT_OK;
-}
-
-# Match a long option of the form "--name=VALUE".
-# Returns pointer to the VALUE part on match, 0 otherwise.
-fn match_eq_flag(arg, name) {
-    var nlen = strlen(name);
-    if (memeq(arg, name, nlen) == 0) { return 0; }
-    if (load8(arg + nlen) != 61) { return 0; }
-    return arg + nlen + 1;
 }
 
 fn set_color(value) {
@@ -2258,6 +2356,263 @@ fn should_page() {
     return 1;
 }
 
+# ── CLI (1.6.0: parsed by cmdit) ───────────────────────────────────────
+# cmdit (the AGNOS getopt-long library) parses; owl keeps its own help text,
+# version line, error wording and validators. What cmdit brought:
+#   - `--name VALUE` as well as `--name=VALUE`, and `--` (everything after
+#     it is a file);
+#   - --help / --version / --list-* answer only when the whole command line
+#     parses: `owl --help --bogus` is an error (through 1.5.3 the first of
+#     them to appear won, before later arguments were looked at).
+# A parse error (unknown flag, bad choice, missing value) is reported before
+# any value a validator below checks; validators run in a fixed order, so
+# with two bad values the first reported is the first in that order.
+#
+# Not yet: shell completions. cmdit_completions writes them from this flag
+# table, but for a tool without subcommands its 1.5.0 scripts complete the
+# (empty) subcommand list in the first argument's place, so `owl <TAB>`
+# offered nothing — worse than the shell's own file completion. Filed
+# upstream: docs/development/issues/2026-10-31-cmdit-completions-verbless-tools.md.
+
+# Flag indices from cmdit registration (_cli_register).
+var F_NUMBER = 0;
+var F_NONUMBER = 0;
+var F_PLAIN = 0;
+var F_SHOWALL = 0;
+var F_HEX = 0;
+var F_DIFF = 0;
+var F_FOLLOW = 0;
+var F_RAW = 0;
+var F_VERBOSE = 0;
+var F_LTHEMES = 0;
+var F_LLANGS = 0;
+var F_COLOR = 0;
+var F_STRIP = 0;
+var F_FORMAT = 0;
+var F_PAGING = 0;
+var F_STYLE = 0;
+var F_THEME = 0;
+var F_LANG = 0;
+var F_TABS = 0;
+var F_WRAP = 0;
+var F_RANGE = 0;
+
+# A value flag: a separate value that looks like a flag is refused, so
+# `--color --plain` says the value is missing rather than that `--plain` is
+# an invalid colour.
+fn _cli_v(h, idx) {
+    cmdit_reject_flag_value(h, idx);
+    return idx;
+}
+
+fn _cli_register(h) {
+    F_NUMBER    = cmdit_bool(h, 110, "number", "force line numbers on");          # n
+    F_NONUMBER  = cmdit_bool(h, 78, "no-number", "force line numbers off");       # N
+    F_PLAIN     = cmdit_bool(h, 112, "plain", "plain output, cat-identical");     # p
+    F_SHOWALL   = cmdit_bool(h, 65, "show-all", "show non-printables");           # A
+    F_HEX       = cmdit_bool(h, 120, "hex", "xxd-style hex dump");                # x
+    F_DIFF      = cmdit_bool(h, 0, "diff", "show only changed lines");
+    F_FOLLOW    = cmdit_bool(h, 102, "follow", "keep rendering as the file grows"); # f
+    F_RAW       = cmdit_bool(h, 114, "raw-control-chars", "pass file escapes through"); # r
+    F_VERBOSE   = cmdit_bool(h, 118, "verbose", "with --version, print pins");    # v
+    F_LTHEMES   = cmdit_bool(h, 0, "list-themes", "list themes");
+    F_LLANGS    = cmdit_bool(h, 0, "list-languages", "list languages");
+    # CLI-only choices: cmdit checks the value, in argv order. `auto` is a
+    # long-standing undocumented alias of --format=text.
+    F_COLOR     = _cli_v(h, cmdit_enum(h, 0, "color", 0, "auto|always|never", "when to colour"));
+    F_STRIP     = _cli_v(h, cmdit_enum(h, 0, "strip-ansi", 0, "auto|always|never", "when to strip file escapes"));
+    F_FORMAT    = _cli_v(h, cmdit_enum(h, 0, "format", 0, "text|ndjson|auto", "output format"));
+    # Also config keys or open-ended: one shared validator each, applied
+    # after the parse (a choice list here would be a second copy to drift).
+    F_PAGING    = _cli_v(h, cmdit_str(h, 0, "paging", 0, "when to page"));
+    F_STYLE     = _cli_v(h, cmdit_str(h, 0, "style", 0, "gutter VCS markers"));
+    F_THEME     = _cli_v(h, cmdit_str(h, 0, "theme", 0, "syntax theme"));
+    F_LANG      = _cli_v(h, cmdit_str(h, 0, "language", 0, "force the language"));
+    F_TABS      = _cli_v(h, cmdit_str(h, 0, "tabs", 0, "tab width"));
+    F_WRAP      = _cli_v(h, cmdit_str(h, 0, "wrap", 0, "line wrapping"));
+    F_RANGE     = _cli_v(h, cmdit_str(h, 0, "line-range", 0, "lines A:B"));
+    return 0;
+}
+
+# The "(want …)" hint for a value flag.
+fn _cli_want(idx) {
+    if (idx == F_COLOR)       { return "(want auto|always|never)"; }
+    if (idx == F_STRIP)       { return "(want auto|always|never)"; }
+    if (idx == F_FORMAT)      { return "(want text|ndjson)"; }
+    if (idx == F_PAGING)      { return "(want auto|always|never)"; }
+    if (idx == F_STYLE)       { return "(want auto|changes|no-changes)"; }
+    if (idx == F_THEME)       { return "(try --list-themes)"; }
+    if (idx == F_LANG)        { return "(try --list-languages)"; }
+    if (idx == F_TABS)        { return "(want a non-negative integer)"; }
+    if (idx == F_WRAP)        { return "(want auto|never|character)"; }
+    if (idx == F_RANGE)       { return "(want A:B, A:, :B, or A)"; }
+    return "";
+}
+
+# "<a><b><c>" in a fresh allocation, or `a` when the alloc fails.
+fn _cli_cat3(a, b, c) {
+    var la = strlen(a);
+    var lb = strlen(b);
+    var lc = strlen(c);
+    var out = alloc(la + lb + lc + 1);
+    if (out == 0) { return a; }
+    memcpy(out, a, la);
+    memcpy(out + la, b, lb);
+    memcpy(out + la + lb, c, lc);
+    store8(out + la + lb + lc, 0);
+    return out;
+}
+
+# The argument as the user meant it, for an error: `tok` itself when the
+# value was attached (`--color=x`, byte-identical to 1.5.3's messages), else
+# `--name=value` for a separate one.
+fn _cli_shown(tok, val) {
+    var n = strlen(tok);
+    var i = 0;
+    while (i < n) {
+        if (load8(tok + i) == 61) { return tok; }
+        i = i + 1;
+    }
+    return _cli_cat3(tok, "=", val);
+}
+
+# Report a failed parse. Returns EXIT_USAGE.
+fn _cli_parse_error(h) {
+    var e = cmdit_error(h);
+    var tok = cmdit_err_token(h);
+    var idx = cmdit_err_flag(h);
+    if (e == CMDIT_ERR_ARGV) {
+        eprint("owl: cannot read the command line\n", 34);
+        return EXIT_USAGE;
+    }
+    if (tok == 0) {
+        eprint("owl: out of memory\n", 19);
+        return EXIT_USAGE;
+    }
+    if (e == CMDIT_ERR_UNEXPECTED_VALUE) {
+        report_error(tok, "takes no value");
+        return EXIT_USAGE;
+    }
+    if (e == CMDIT_ERR_MISSING_VALUE) {
+        report_error(tok, _cli_cat3("missing value ", _cli_want(idx), ""));
+        return EXIT_USAGE;
+    }
+    if (e == CMDIT_ERR_BAD_ENUM) {
+        if (idx == F_FORMAT) {
+            eprint("owl: invalid --format (want text or ndjson)\n", 44);
+            return EXIT_USAGE;
+        }
+        report_error(_cli_shown(tok, cmdit_err_value(h)), _cli_cat3("invalid value ", _cli_want(idx), ""));
+        return EXIT_USAGE;
+    }
+    # Unknown, bundled (`-np`: cmdit takes one short flag per argument, as
+    # owl always has) and anything else.
+    report_error(tok, "unknown option");
+    return EXIT_USAGE;
+}
+
+# Report a value flag `idx` (`name`) whose validator refused `val`.
+# Returns EXIT_USAGE.
+fn _cli_value_error(idx, name, val) {
+    var what = "invalid value ";
+    if (idx == F_THEME) { what = "unknown theme "; }
+    if (idx == F_LANG)  { what = "unknown language "; }
+    report_error(_cli_cat3(name, "=", val), _cli_cat3(what, _cli_want(idx), ""));
+    return EXIT_USAGE;
+}
+
+# 1 when token `t` is a long value flag given without `=`, so the next
+# argument is its value.
+fn _cli_takes_next(h, t) {
+    if (load8(t) != 45) { return 0; }
+    if (load8(t + 1) != 45) { return 0; }
+    var n = strlen(t);
+    var i = 2;
+    while (i < n) {
+        if (load8(t + i) == 61) { return 0; }
+        i = i + 1;
+    }
+    var fi = cmdit_flag_find_long(h, t + 2, n - 2);
+    if (fi < 0) { return 0; }
+    if (cmdit_flag_type_at(h, fi) == CMDIT_BOOL) { return 0; }
+    return 1;
+}
+
+# -n / -N share one setting and the last given wins, as through 1.5.3. Two
+# cmdit bools cannot say which came last, so walk the arguments as cmdit
+# did: stop at `--`, step over a separate value. 1 = on, 0 = off.
+fn _cli_last_number(h) {
+    var av = cmdit_raw_argv(h);
+    var ac = cmdit_raw_argc(h);
+    var last = 1;
+    var i = 1;
+    while (i < ac) {
+        var t = load64(av + i * 8);
+        if (streq(t, "--") == 1) { i = ac; continue; }
+        if (_cli_takes_next(h, t) == 1) { i = i + 2; continue; }
+        if (streq(t, "-n") == 1)          { last = 1; }
+        if (streq(t, "--number") == 1)    { last = 1; }
+        if (streq(t, "-N") == 1)          { last = 0; }
+        if (streq(t, "--no-number") == 1) { last = 0; }
+        i = i + 1;
+    }
+    return last;
+}
+
+# Apply the parsed flags over the config. Returns 0, or EXIT_USAGE after
+# reporting a refused value.
+fn _cli_apply(h) {
+    if (cmdit_get_bool(h, F_PLAIN) == 1)   { g_flag_plain = 1; }
+    if (cmdit_get_bool(h, F_SHOWALL) == 1) { g_flag_show_all = 1; }
+    if (cmdit_get_bool(h, F_VERBOSE) == 1) { g_flag_verbose = 1; }
+    if (cmdit_get_bool(h, F_HEX) == 1)     { g_flag_hex = 1; }
+    if (cmdit_get_bool(h, F_DIFF) == 1)    { g_flag_diff = 1; }
+    if (cmdit_get_bool(h, F_FOLLOW) == 1)  { g_flag_follow = 1; }
+    if (cmdit_get_bool(h, F_RAW) == 1)     { g_flag_raw_controls = 1; }
+    var nset = 0;
+    if (cmdit_get_bool(h, F_NUMBER) == 1)   { nset = 1; }
+    if (cmdit_get_bool(h, F_NONUMBER) == 1) { nset = 1; }
+    if (nset == 1) { g_flag_numbers = _cli_last_number(h); }
+
+    if (cmdit_seen(h, F_COLOR) == 1)  { set_color(cmdit_get_str(h, F_COLOR)); }
+    if (cmdit_seen(h, F_STRIP) == 1)  { set_strip_ansi(cmdit_get_str(h, F_STRIP)); }
+    if (cmdit_seen(h, F_FORMAT) == 1) { set_format(cmdit_get_str(h, F_FORMAT)); }
+
+    var v = 0;
+    if (cmdit_seen(h, F_PAGING) == 1) {
+        v = cmdit_get_str(h, F_PAGING);
+        if (set_paging(v) != 0) { return _cli_value_error(F_PAGING, "--paging", v); }
+    }
+    if (cmdit_seen(h, F_STYLE) == 1) {
+        v = cmdit_get_str(h, F_STYLE);
+        if (set_style(v) != 0) { return _cli_value_error(F_STYLE, "--style", v); }
+    }
+    if (cmdit_seen(h, F_THEME) == 1) {
+        v = cmdit_get_str(h, F_THEME);
+        var tidx = theme_index(v);
+        if (tidx < 0) { return _cli_value_error(F_THEME, "--theme", v); }
+        g_active_theme = tidx;
+    }
+    if (cmdit_seen(h, F_LANG) == 1) {
+        v = cmdit_get_str(h, F_LANG);
+        if (lang_is_valid(v) == 0) { return _cli_value_error(F_LANG, "--language", v); }
+        g_flag_lang = v;
+    }
+    if (cmdit_seen(h, F_TABS) == 1) {
+        v = cmdit_get_str(h, F_TABS);
+        if (set_tabs(v) != 0) { return _cli_value_error(F_TABS, "--tabs", v); }
+    }
+    if (cmdit_seen(h, F_WRAP) == 1) {
+        v = cmdit_get_str(h, F_WRAP);
+        if (set_wrap(v) != 0) { return _cli_value_error(F_WRAP, "--wrap", v); }
+    }
+    if (cmdit_seen(h, F_RANGE) == 1) {
+        v = cmdit_get_str(h, F_RANGE);
+        if (set_line_range(v) != 0) { return _cli_value_error(F_RANGE, "--line-range", v); }
+    }
+    return 0;
+}
+
 fn main() {
     alloc_init();
     # The stdlib reads argv from /proc/self/cmdline. Without /proc (a
@@ -2271,188 +2626,36 @@ fn main() {
     # below always win. Missing file is a silent no-op.
     config_load();
 
-    var n = argc();
     # Two passes. Pass 1 parses and validates every flag and collects the
-    # positional arguments; pass 2 renders them. Through 1.5.2 this was one
-    # loop that rendered each file as it was reached, so a flag after a file
-    # half-applied (`owl a.c -p b.c` highlighted b.c — -p no longer cat-
-    # identical; `--color=never` after a file was ignored), `owl FILE
-    # --bogus` rendered FILE before exiting 2 and orphaned the pager, and
-    # `owl missing.txt -V` threw the failure away (audit 2026-10-31
-    # FINDING-024). Every flag now applies to every file.
-    var pos = alloc((n + 1) * 8);
-    if (pos == 0) {
+    # files; pass 2 renders them. Through 1.5.2 one loop rendered each file
+    # as it was reached, so a flag after a file half-applied (`owl a.c -p
+    # b.c` highlighted b.c), `owl FILE --bogus` rendered FILE before exiting
+    # 2, and `owl missing.txt -V` threw the failure away (audit 2026-10-31
+    # FINDING-024). Every flag applies to every file.
+    var h = cmdit_new("owl");
+    if (h == 0) {
         eprint("owl: out of memory\n", 19);
         return EXIT_USAGE;
     }
-    var npos = 0;
+    _cli_register(h);
+    var pr = cmdit_parse(h);
+    if (pr == CMDIT_RESULT_ERR) { return _cli_parse_error(h); }
+    if (pr == CMDIT_HELP) { return print_help(); }
+    if (cmdit_get_bool(h, F_VERBOSE) == 1) { g_flag_verbose = 1; }
+    if (pr == CMDIT_VERSION) { return print_version(); }
+    if (cmdit_get_bool(h, F_LTHEMES) == 1) { return print_theme_list(); }
+    if (cmdit_get_bool(h, F_LLANGS) == 1)  { return print_language_list(); }
+    var arc = _cli_apply(h);
+    if (arc != 0) { return arc; }
 
-    var i = 1;
-    while (i < n) {
-        var a = argv(i);
-
-        if (streq(a, "-V") == 1) {
-            var k = i + 1;
-            while (k < n) {
-                var ak = argv(k);
-                if (streq(ak, "--verbose") == 1) { g_flag_verbose = 1; }
-                if (streq(ak, "-v") == 1)        { g_flag_verbose = 1; }
-                k = k + 1;
-            }
-            return print_version();
-        }
-        if (streq(a, "--version") == 1) {
-            var k = i + 1;
-            while (k < n) {
-                var ak = argv(k);
-                if (streq(ak, "--verbose") == 1) { g_flag_verbose = 1; }
-                if (streq(ak, "-v") == 1)        { g_flag_verbose = 1; }
-                k = k + 1;
-            }
-            return print_version();
-        }
-        if (streq(a, "-h") == 1)        { return print_help(); }
-        if (streq(a, "--help") == 1)    { return print_help(); }
-
-        if (streq(a, "--list-themes") == 1)    { return print_theme_list(); }
-        if (streq(a, "--list-languages") == 1) { return print_language_list(); }
-
-        if (streq(a, "-n") == 1)         { g_flag_numbers = 1; i = i + 1; continue; }
-        if (streq(a, "--number") == 1)   { g_flag_numbers = 1; i = i + 1; continue; }
-        if (streq(a, "-N") == 1)         { g_flag_numbers = 0; i = i + 1; continue; }
-        if (streq(a, "--no-number") == 1) { g_flag_numbers = 0; i = i + 1; continue; }
-        if (streq(a, "-p") == 1)         { g_flag_plain = 1; i = i + 1; continue; }
-        if (streq(a, "--plain") == 1)    { g_flag_plain = 1; i = i + 1; continue; }
-        if (streq(a, "-A") == 1)         { g_flag_show_all = 1; i = i + 1; continue; }
-        if (streq(a, "--show-all") == 1) { g_flag_show_all = 1; i = i + 1; continue; }
-        if (streq(a, "-v") == 1)         { g_flag_verbose = 1; i = i + 1; continue; }
-        if (streq(a, "--verbose") == 1)  { g_flag_verbose = 1; i = i + 1; continue; }
-        if (streq(a, "-x") == 1)         { g_flag_hex = 1; i = i + 1; continue; }
-        if (streq(a, "--hex") == 1)      { g_flag_hex = 1; i = i + 1; continue; }
-        if (streq(a, "--diff") == 1)     { g_flag_diff = 1; i = i + 1; continue; }
-        if (streq(a, "-f") == 1)         { g_flag_follow = 1; i = i + 1; continue; }
-        if (streq(a, "--follow") == 1)   { g_flag_follow = 1; i = i + 1; continue; }
-        if (streq(a, "-r") == 1)                     { g_flag_raw_controls = 1; i = i + 1; continue; }
-        if (streq(a, "--raw-control-chars") == 1)    { g_flag_raw_controls = 1; i = i + 1; continue; }
-
-        var v = match_eq_flag(a, "--color");
-        if (v != 0) {
-            if (set_color(v) != 0) {
-                report_error(a, "invalid value (want auto|always|never)");
-                return EXIT_USAGE;
-            }
-            i = i + 1;
-            continue;
-        }
-        v = match_eq_flag(a, "--paging");
-        if (v != 0) {
-            if (set_paging(v) != 0) {
-                report_error(a, "invalid value (want auto|always|never)");
-                return EXIT_USAGE;
-            }
-            i = i + 1;
-            continue;
-        }
-        v = match_eq_flag(a, "--style");
-        if (v != 0) {
-            if (set_style(v) != 0) {
-                report_error(a, "invalid value (want auto|changes|no-changes)");
-                return EXIT_USAGE;
-            }
-            i = i + 1;
-            continue;
-        }
-        v = match_eq_flag(a, "--theme");
-        if (v != 0) {
-            var tidx = theme_index(v);
-            if (tidx < 0) {
-                report_error(a, "unknown theme (try --list-themes)");
-                return EXIT_USAGE;
-            }
-            g_active_theme = tidx;
-            i = i + 1;
-            continue;
-        }
-        v = match_eq_flag(a, "--language");
-        if (v != 0) {
-            if (lang_is_valid(v) == 0) {
-                report_error(a, "unknown language (try --list-languages)");
-                return EXIT_USAGE;
-            }
-            g_flag_lang = v;
-            i = i + 1;
-            continue;
-        }
-        v = match_eq_flag(a, "--format");
-        if (v != 0) {
-            if (set_format(v) != 0) {
-                eprint("owl: invalid --format (want text or ndjson)\n", 44);
-                return 2;
-            }
-            i = i + 1;
-            continue;
-        }
-
-        v = match_eq_flag(a, "--tabs");
-        if (v != 0) {
-            if (set_tabs(v) != 0) {
-                report_error(a, "invalid value (want a non-negative integer)");
-                return EXIT_USAGE;
-            }
-            i = i + 1;
-            continue;
-        }
-        v = match_eq_flag(a, "--wrap");
-        if (v != 0) {
-            if (set_wrap(v) != 0) {
-                report_error(a, "invalid value (want auto|never|character)");
-                return EXIT_USAGE;
-            }
-            i = i + 1;
-            continue;
-        }
-        v = match_eq_flag(a, "--strip-ansi");
-        if (v != 0) {
-            if (set_strip_ansi(v) != 0) {
-                report_error(a, "invalid value (want auto|always|never)");
-                return EXIT_USAGE;
-            }
-            i = i + 1;
-            continue;
-        }
-        v = match_eq_flag(a, "--line-range");
-        if (v != 0) {
-            if (set_line_range(v) != 0) {
-                report_error(a, "invalid value (want A:B, A:, :B, or A)");
-                return EXIT_USAGE;
-            }
-            i = i + 1;
-            continue;
-        }
-
-        if (streq(a, "-") == 1) {
-            store64(pos + npos * 8, i);
-            npos = npos + 1;
-            i = i + 1;
-            continue;
-        }
-
-        if (load8(a) == 45) {
-            report_error(a, "unknown option");
-            return EXIT_USAGE;
-        }
-
-        store64(pos + npos * 8, i);
-        npos = npos + 1;
-        i = i + 1;
-    }
+    var npos = cmdit_positional_count(h);
 
     # --follow tails one regular file: with several, the first never ended
     # and the rest were never shown; on stdin it was silently not followed.
     if (g_flag_follow == 1) {
         var fok = 0;
         if (npos == 1) {
-            if (streq(argv(load64(pos)), "-") == 0) { fok = 1; }
+            if (streq(cmdit_positional(h, 0), "-") == 0) { fok = 1; }
         }
         if (fok == 0) {
             report_error("--follow", "needs exactly one file (not stdin)");
@@ -2482,7 +2685,7 @@ fn main() {
     var fail = 0;
     var k = 0;
     while (k < npos) {
-        var pa = argv(load64(pos + k * 8));
+        var pa = cmdit_positional(h, k);
         var rc = 0;
         g_err_reported = 0;
         g_read_errno = 0;

@@ -20,7 +20,7 @@ Pipe `owl` into another command and it quietly steps aside — no decorations, n
 # AGNOS / Cyrius native package manager
 pkg install owl
 
-# From source — Cyrius toolchain 5.10.10+ on $PATH
+# From source — the Cyrius toolchain pinned in cyrius.cyml, on $PATH
 git clone https://github.com/MacCracken/owl
 cd owl
 cyrius deps                            # populate lib/ from cyrius.cyml
@@ -30,6 +30,10 @@ cyrius build src/main.cyr build/owl    # → build/owl
 `lib/` is gitignored and regenerated on demand from
 [cyrius.cyml](cyrius.cyml) — `cyrius deps` is mandatory after a fresh
 checkout.
+
+The binary is self-contained: the 49 bundled grammars are compiled into it
+(since 1.6.0), so `build/owl` can be copied anywhere on its own. Your own
+grammars go in `~/.config/owl/grammars/` (or `$XDG_CONFIG_HOME/owl/grammars/`).
 
 ---
 
@@ -41,6 +45,7 @@ owl a.py b.py c.py        # show several files in order
 owl -p file.txt           # plain output, no decorations (like cat)
 echo "hello" | owl        # read from stdin
 owl huge.log | head       # pipe-safe; no broken-pipe errors
+owl -f app.log            # follow a growing file, highlighted (like tail -f)
 ```
 
 If you've used `cat`, you already know how to use `owl`. The defaults just do more.
@@ -51,7 +56,7 @@ If you've used `cat`, you already know how to use `owl`. The defaults just do mo
 
 When you run `owl file.py` in a terminal:
 
-- **Syntax highlighting** for the language, auto-detected from the filename or shebang
+- **Syntax highlighting** for the language, auto-detected from the filename, shebang or content
 - **Line numbers** in a narrow gutter on the left
 - **A file header** so you know what you're looking at
 - **Git markers** in the gutter if the file is tracked and has changes
@@ -177,7 +182,7 @@ owl serves as Claude Code's colored-`cat` substitute when an agent reads source 
 
 The agent is then forced to invoke `owl --color=always --paging=never <path>` instead of the built-in Read tool. owl emits ANSI escape sequences into the conversation transcript, where the user's terminal renders them as colored output — visible regardless of whether the model itself "sees" the colors (it doesn't; it sees the raw escape bytes). The user gets a syntax-highlighted view of the source with no extra effort.
 
-Requires owl **1.1.2+**: earlier versions resolved bundled grammars via a cwd-relative path and silently fell back to plain output when invoked from outside owl's own source repo (which is the common case when an agent is working in another project). 1.1.2 fixed this by resolving grammars relative to `/proc/self/exe`. The cyrius project's [`CLAUDE.md`](https://github.com/MacCracken/cyrius/blob/main/CLAUDE.md) documents the agent-side conventions in more detail.
+Requires owl **1.1.2+**: earlier versions resolved bundled grammars via a cwd-relative path and silently fell back to plain output when invoked from outside owl's own source repo (which is the common case when an agent is working in another project). 1.1.2 fixed this by resolving grammars relative to `/proc/self/exe`; since 1.6.0 they are compiled into the binary, so no path is involved at all. The cyrius project's [`CLAUDE.md`](https://github.com/MacCracken/cyrius/blob/main/CLAUDE.md) documents the agent-side conventions in more detail.
 
 Extending the pattern to other source types is just a matter of adding the glob: `Read(**/*.cyr)` for cyrius, `Read(**/*.go)` for Go, etc. Each added glob assumes owl can highlight that language — see `owl --list-languages`.
 

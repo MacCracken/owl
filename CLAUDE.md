@@ -49,8 +49,8 @@ CYRIUS_DCE=1 cyrius build src/main.cyr build/owl    # release parity (DCE)
 
 Module responsibilities (file list in `state.md`):
 
-- **`main.cyr`** — entry, CLI parsing, render dispatch, TTY and mode resolution. Owns global flag state; other modules read but do not set
-- **`lang.cyr`** — extension + shebang language detection, name table
+- **`main.cyr`** — entry, CLI (parsed by cmdit since 1.6.0; owl keeps its own help, version, error wording and validators), render dispatch, TTY and mode resolution, the grammar registry bootstrap (user overlay, then vyakarana's embedded set). Owns global flag state; other modules read but do not set
+- **`lang.cyr`** — language routing: config `ext.` overrides, new-name user grammars, vyakarana's `detect_language_combined`, owl's small supplement, the opening sniff. No language table of its own (since 1.6.0)
 - **`theme.cyr`** — bundled themes (dark, light), 10-kind token palette, ANSI emission
 - **`pager.cyr`** — pager spawn (`OWL_PAGER` → `PAGER` → `less -R`), SIGPIPE handling
 - **`vcs.cyr`** — sit-backed VCS change markers for the gutter (since 1.4.0): `sit_repo_open` / `sit_diff_path` / `sit_repo_close` library calls, LCS edit-script → ADD/MOD/DEL mapping. All VCS-backend code confined here behind a stable five-fn interface (`vcs_compute_markers`, `vcs_mark_for_line`, `vcs_enabled`, `vcs_reset`, `set_style`) so a backend swap is a single-file rewrite
@@ -59,7 +59,7 @@ Module responsibilities (file list in `state.md`):
 - **`escape.cyr`** — the file-origin terminal-escape classifier (split out of `main.cyr` at 1.4.7). Self-contained state machine over two globals so `tests/owl.fcyr` can include it directly; the caller decides *whether* to filter (`_strip_active()` in main.cyr), this decides *what a sequence is*. Audit FINDING-001/006/013 all live here — change it with the fuzz harness in hand
 - **`fetch.cyr`** — http/https remote fetch. **Not wired into the build** (see its header): complete but parked at 1.4.7 because the sandhi transport could not be verified, it costs ~521 KB of network stdlib, and it wants its own audit pass
 
-Include order in `main.cyr`: `lib/vyakarana.cyr` first, then `src/escape.cyr` and `src/out.cyr` (no owl deps; everything after them writes through `out_write`), then the rest of the owl modules. Runtime grammar resolution is cwd-relative (`grammars/<lang>.cyml`); installed-binary (exe-relative) resolution is a packaging concern.
+Include order in `main.cyr`: `lib/vyakarana.cyr` and `lib/cmdit.cyr` first, then `src/escape.cyr` and `src/out.cyr` (no owl deps; everything after them writes through `out_write`), then the rest of the owl modules. The bundled grammars are compiled in (vyakarana's embedded blobs, registered by `bootstrap_grammars()`); nothing is resolved from disk except the user overlay `$XDG_CONFIG_HOME/owl/grammars/` (else `~/.config/owl/grammars/`), which is registered first so it wins by name.
 
 ## Key Constraints
 
@@ -67,7 +67,9 @@ Include order in `main.cyr`: `lib/vyakarana.cyr` first, then `src/escape.cyr` an
 - **Plain mode is sacred** — `-p` must be byte-identical to `cat` for any input. No transforms, no decorations, no surprises. Tested by `scripts/smoke.sh`
 - **Color is triply-gated** — `g_want_color` resolves from (`-p` → off, `--color=always` → on, `NO_COLOR` env → off unless `always`, else TTY detection). Highlight path gates on `g_want_color` *not* `g_decorated` — piped output with `--color=always` still colors tokens even though header/gutter stay off
 - **Highlight ceiling** — `HIGHLIGHT_MAX` is one less than vyakarana's `VYK_STREAM_CAP` (a stream holding `len` bytes needs `len + n + 1`), and every `tokenize_stream_feed` result is checked: a refused feed is an overflow, never a silently short stream. Resident memory for a highlighted file is roughly 13× its size (the slurp buffer, the stream's own copy, the tokenbuf), not the 4× once claimed. Oversized files fall back to plain streaming (ndjson: a hard error). The slurp buffer, read buffers and tokenbuf are allocated once and reused across files; raising the cap needs a freeing allocator or vyakarana draining per chunk
-- **Grammar files ship with owl** — `grammars/*.cyml` are runtime data, not source. They must be installed alongside the binary
+- **`grammars/` is a reference copy, not runtime data** (since 1.6.0). The binary carries vyakarana's embedded grammars; `grammars/` is re-synced from the pinned vyakarana on every bump so smoke can check `--list-languages` and per-grammar reachability against it, and `docs/grammar-coverage.md` against it. Nothing installs it
+- **Routing is vyakarana's** — owl keeps no language table. A wrong or missing route is fixed in vyakarana (drafted in `docs/development/issues/`). `_owl_supplement` in `lang.cyr` carries only routes owl had already shipped before 1.6.0, until vyakarana has them; never add a new row to it
+- **A user grammar replacing a bundled one changes highlighting, not routing** — only a user grammar with a new name routes by its declarations, so the `.s` / `.asm` content votes survive an overlay
 - **`[deps].stdlib` is what owl REACHES** — since 1.4.7 owl consumes sit's read-only fold (`dist/sit-read.cyr`), not the full bundle. On a dep bump, start from the union of `dist/sit-read.deps` and `dist/vyakarana.deps` plus owl's own surface, then add back whatever the link reports undefined. Do NOT trust either list alone. Through cyrius 6.6.2 the sidecars under-reported sigil's crypto follow-throughs (`ct` / `keccak` / `bayan` / `random`). From 6.6.20 the folded modules include their own requires, so the link is clean without them. A clean link is necessary but not sufficient: also confirm the trimmed build compiles the same function set (the `unreachable fns` note) and that smoke passes
 - **Check the DCE release size on every bump** — it is the shipped binary. (Cyrius 6.6.20–6.7.13 stopped removing dead code past 4,096 dead-code runs and only printed a note; 6.7.14 removed that cap.)
 - **An escape sequence may never swallow more than its own line** — the classifier is bounded at a newline and at `ESC_MAX_LEN`, and an ESC at either bound starts a new sequence rather than being emitted. Three audit findings (006, 013) came from getting this wrong; `tests/owl.fcyr` pins all of it
@@ -114,7 +116,7 @@ Include order in `main.cyr`: `lib/vyakarana.cyr` first, then `src/escape.cyr` an
 
 ## Cyrius Conventions
 
-- `var buf[N]` is N **bytes**, not N elements
+- A bare `var buf[N]` is N **bytes** inside a function, but N **i64 slots** (N × 8 bytes) at top level, where it also lands in the binary image — see the cyrius guide's bare-`var a[N]` section. Give big buffers `alloc()` (1.5.3: a top-level 64 KiB output buffer added 512 KiB to the binary)
 - `&&` / `||` short-circuit; mixed in one expression requires parens: `a && (b || c)`. Prefer nested `if` when in doubt
 - No closures — use named functions
 - No negative literals — write `(0 - N)`, not `-N`
@@ -144,6 +146,7 @@ Include order in `main.cyr`: `lib/vyakarana.cyr` first, then `src/escape.cyr` an
 - `CHANGELOG.md` — what landed, when
 - `docs/development/state.md` — **live state snapshot**
 - `docs/audit/` — security audit reports
+- `docs/development/issues/` — upstream writeups (cyrius, sit, vyakarana) drafted here with repros, for the user to carry across; owl never edits upstream repos
 - `../vyakarana/` — tokenizer source (owl's only non-stdlib dep)
 - `../vidya/content/lexing_and_parsing/` — reference corpus vyakarana grammars are tested against
 

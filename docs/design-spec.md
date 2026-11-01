@@ -60,13 +60,23 @@ owl                      # with no args and stdin is a pipe: read stdin
 
 - `FILE...` — one or more file paths. If multiple, files are concatenated in order, each preceded by a header (see §6.3) when decorations are on.
 - `-` — explicit stdin marker. Can be mixed with file paths (e.g. `owl a.txt - b.txt`).
+- `--` — ends the options: every later argument is a file, even one that starts with `-` (1.6.0).
 
 ### 3.3 Options
 
-Value-taking options use the `--name=value` form only (`--color=always`,
-not `--color always`). Every option applies to every file, wherever it
-appears among the arguments, and all of them are validated before anything
-renders (1.5.3).
+A value-taking option is written `--name=value` or `--name value` (the
+second form since 1.6.0). A separate value that looks like an option is
+refused, so `--color --plain` reports a missing value. Short options take
+one per argument: `-np` is an unknown option, not `-n -p`. Every option
+applies to every file, wherever it appears among the arguments, and all of
+them are validated before anything renders (1.5.3). Options are parsed by
+cmdit (1.6.0).
+
+`-h`, `-V`, `--list-themes` and `--list-languages` answer only when the
+whole command line parses. Since 1.6.0, `owl --help --bogus` is a usage
+error; through 1.5.3, whichever of them appeared first won before later
+arguments were read. `-n` and `-N` set one switch, and the last one given
+wins.
 
 | Short | Long | Description |
 |-------|------|-------------|
@@ -76,7 +86,7 @@ renders (1.5.3).
 | `-A` | `--show-all` | Show non-printable characters (tabs as `→`, newlines as `$`, etc.) |
 | `-x` | `--hex` | xxd-style hex dump (automatic for a file containing NUL bytes) |
 | `-r` | `--raw-control-chars` | Pass file-origin terminal escapes through (default: stripped in decorated or coloured output) |
-| `-f` | `--follow` | Keep rendering as the file grows, like `tail -f`; exactly one file, not stdin |
+| `-f` | `--follow` | Keep rendering as the file grows, like `tail -f`; exactly one file, not stdin. Token-coloured like the rest of the file since 1.6.0. An appended line is drawn once its newline arrives, and a partial last line is drawn once the file goes quiet |
 | `-v` | `--verbose` | With `--version`, also print the dependency and toolchain pins |
 | | `--color=<when>` | `auto` (default), `always`, `never` |
 | | `--paging=<when>` | `auto` (default), `always`, `never` |
@@ -122,7 +132,7 @@ A default theme is set with `theme = <name>` in the config file.
 
 - No decorations of any kind
 - With `-p`, bytes pass through unchanged: byte-identical to `cat`, always
-- Without `-p`, piped output is undecorated and uncoloured but tabs are still expanded to `--tabs` (default 4); use `-p` or `--tabs=0` for exact bytes. *(This differs from the original "essentially unchanged" wording; smoke pins the expansion. Whether piped output should keep literal tabs is an open decision recorded in the 2026-10-31 audit, INFO-012.)*
+- Without `-p`, piped output is undecorated and uncoloured, but tabs are still expanded to `--tabs` (default 4); use `-p` or `--tabs=0` for exact bytes. **Decided at 1.6.0 (audit INFO-012):** the expansion stays. Exact bytes already have two spellings (`-p`, `--tabs=0`), and the expansion has shipped since 1.0, so changing it would break piped consumers for no gain. Smoke pins it. *(The original spec said piped output was "essentially unchanged".)*
 - Exit behavior matches `cat` for scriptability
 
 **Rule:** `owl` MUST detect whether stdout is a TTY and flip to plain mode when it is not, unless the user explicitly requests `--color=always` or `--paging=always`.
@@ -133,12 +143,26 @@ A default theme is set with `theme = <name>` in the config file.
 
 ### 5.1 Language detection
 
-Detection order (first match wins):
+Detection order (first match wins). Since 1.6.0, step 4 is vyakarana's
+routing, and owl keeps no language table of its own (`src/lang.cyr`):
 1. `--language` flag if given
-2. Filename and extension match (e.g. `.py` → Python, `Makefile` → Make)
-3. Shebang line (e.g. `#!/usr/bin/env node` → JavaScript)
-4. Content heuristics (optional, may be skipped in v1)
-5. Fallback: plain text, no highlighting
+2. `ext.<x> = <lang>` overrides in the config
+3. A user grammar with a new name, by the `extensions` / `filenames` /
+   `shebangs` it declares. A user grammar that replaces a bundled one by name
+   changes its highlighting, not its routing
+4. vyakarana's routes: extension and filename (e.g. `.py` → python,
+   `Dockerfile.dev` → dockerfile, `Android.mk` → makefile), the shebang
+   interpreter (e.g. `#!/usr/bin/env node` → javascript), and content votes
+   for the ambiguous assembly extensions (`.s`: x86-64 or AArch64; `.asm`:
+   NASM or GNU as)
+5. owl's supplement: the few routes owl 1.5.3 had and vyakarana does not yet
+   (`.tcyr` / `.bcyr` / `.fcyr` → cyrius; six shebang interpreters)
+6. Opening-bytes sniff for JSON / YAML / TOML / markdown. Markdown is never
+   sniffed for a dotfile, where `# ` opens a comment (INFO-013)
+7. Fallback: plain text, no highlighting
+
+The bundled grammars are compiled into the binary (vyakarana's embedded
+set). Nothing beside the binary is needed at runtime.
 
 ### 5.2 Themes
 
@@ -288,8 +312,8 @@ A conforming implementation should pass at least:
 
 ## 14. Open Questions (for implementer)
 
-1. Should there be a `--follow` / `-f` mode like `tail -f` with highlighting? (Suggested: defer to v2)
-2. How aggressive should content-based language detection be? (Suggested: minimal in v1 — extension + shebang only)
+1. ~~Should there be a `--follow` / `-f` mode like `tail -f` with highlighting?~~ Yes: `-f` since 1.4.7, highlighted since 1.6.0.
+2. ~~How aggressive should content-based language detection be?~~ vyakarana's narrow set (signatures, the assembly votes) plus owl's four opening sniffs (§5.1).
 3. Should `owl` integrate with the AGNOS / Cyrius native theming system, or maintain its own theme format?
 4. Is there a platform convention on config file format (TOML vs native) that should be followed?
 

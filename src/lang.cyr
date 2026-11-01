@@ -1,202 +1,41 @@
-# src/lang.cyr — language detection (M3a)
+# src/lang.cyr — language routing (M3a; vyakarana's routes since 1.6.0)
 #
-# Extension table + shebang peek. Stores a detected-language name for
-# the current file; actual token-level coloring lands in M3b.
+# owl decides which grammar a file gets; vyakarana owns the grammars and,
+# since 1.6.0, the routes too. `_owl_detect` tries, in order:
 #
-# Design:
-#   - lang table is a flat array of {name, extensions, shebang_hints}
-#   - extensions are matched case-insensitively against the file suffix
-#     (the path is folded; table entries and user overrides are lowercase)
-#   - shebang peek reads the first 128 bytes and looks for "#!"
-#   - unknown/missing input falls through to "plain"
+#   1. `ext.<x> = <lang>` overrides from the config — the user's explicit
+#      choice, so they win;
+#   2. a user grammar with a NEW name (one that replaces no bundled grammar),
+#      by what it declares (`extensions` / `filenames` / `shebangs`), through
+#      vyakarana's `detect_language_registered`. Installing it is the user's
+#      choice too, so it may claim an extension a bundled grammar routes —
+#      unless a bundled grammar declares a longer match (`.d.ts` over
+#      `.ts`). A grammar that replaces a bundled one by name changes how that
+#      language highlights, not which files route to it, so the content votes
+#      in step 3 keep working. Skipped when no such grammar is installed: it
+#      needs the registry loaded;
+#   3. vyakarana's `detect_language_combined` — its compiled route table for
+#      the bundled grammars (extensions, filenames such as `Dockerfile` /
+#      `GNUmakefile`, shebangs incl. CRLF and tab forms) plus content votes:
+#      `.s` picks x86-64 or AArch64, `.asm` picks NASM or GNU as. It needs no
+#      grammar loaded, so routing stays cheap;
+#   4. owl's supplement — the routes owl 1.5.3 had and vyakarana 2.10.0 does
+#      not (`_owl_supplement`). Each is an upstream gap
+#      (docs/development/issues/2026-10-31-vyakarana-missing-routes.md); the
+#      table shrinks as vyakarana gains them and goes when it is empty;
+#   5. owl's own opening sniff (1.1.4): JSON / YAML / TOML / markdown.
+#
+# Through 1.5.3 owl routed through three hand-kept tables of its own. A
+# grammar bundled but missing from them was unreachable (markdown, until
+# 1.5.2), `.asm` could not get vyakarana's NASM / GNU-as vote, and every
+# vyakarana grammar drop meant editing them in lockstep.
 #
 # Usage from main.cyr:
-#   include "src/lang.cyr"
-#   lang_init();
-#   detect_language_from_path("foo.py")  → "python"
-#   detect_language_from_shebang(buf, n) → "shell" | ... | 0
-#   lang_is_valid("rust")                → 1 / 0
+#   _owl_detect(path, first_buf, first_n) → "rust" | … | "plain"
+#   lang_is_valid("rust")                  → 1 / 0   (registry, or "plain")
 #   print_language_list()
 
-# ── Table ──────────────────────────────────────────────────────────────
-# One language per row, as three parallel constants, joined by index.
-# Extensions and shebang hints are space-separated lowercase tokens.
-# Order matters: "cyrius" precedes "c" so *.cyr doesn't match *.c.
-
-var LANG_COUNT = 50;
-
-# Indexed 0..LANG_COUNT-1
-fn lang_name(i) {
-    if (i == 0)  { return "plain"; }
-    if (i == 1)  { return "shell"; }
-    if (i == 2)  { return "python"; }
-    if (i == 3)  { return "javascript"; }
-    if (i == 4)  { return "typescript"; }
-    if (i == 5)  { return "rust"; }
-    if (i == 6)  { return "cyrius"; }
-    if (i == 7)  { return "c"; }
-    if (i == 8)  { return "toml"; }
-    if (i == 9)  { return "json"; }
-    if (i == 10) { return "yaml"; }
-    if (i == 11) { return "go"; }
-    if (i == 12) { return "zig"; }
-    if (i == 13) { return "asm_x86_64"; }
-    if (i == 14) { return "asm_aarch64"; }
-    if (i == 15) { return "java"; }
-    if (i == 16) { return "kotlin"; }
-    if (i == 17) { return "cpp"; }
-    if (i == 18) { return "csharp"; }
-    if (i == 19) { return "php"; }
-    if (i == 20) { return "ruby"; }
-    if (i == 21) { return "lua"; }
-    if (i == 22) { return "swift"; }
-    if (i == 23) { return "elixir"; }
-    if (i == 24) { return "ocaml"; }
-    if (i == 25) { return "haskell"; }
-    if (i == 26) { return "sql"; }
-    if (i == 27) { return "graphql"; }
-    if (i == 28) { return "protobuf"; }
-    if (i == 29) { return "html"; }
-    if (i == 30) { return "xml"; }
-    if (i == 31) { return "css"; }
-    if (i == 32) { return "scss"; }
-    if (i == 33) { return "dockerfile"; }
-    if (i == 34) { return "makefile"; }
-    if (i == 35) { return "ini"; }
-    if (i == 36) { return "cyml"; }
-    if (i == 37) { return "llvm_ir"; }
-    if (i == 38) { return "powershell"; }
-    if (i == 39) { return "crystal"; }
-    if (i == 40) { return "julia"; }
-    if (i == 41) { return "vue"; }
-    if (i == 42) { return "svelte"; }
-    if (i == 43) { return "nix"; }
-    if (i == 44) { return "terraform"; }
-    if (i == 45) { return "openqasm"; }
-    if (i == 46) { return "nasm"; }
-    if (i == 47) { return "mdx"; }
-    if (i == 48) { return "lean"; }
-    if (i == 49) { return "markdown"; }
-    return "plain";
-}
-
-# Extensions for language i (space-separated, lowercase, leading dot).
-# Empty string = language has no extension dispatch (asm_aarch64 needs
-# --language=, dockerfile + makefile dispatch via _path_filename_match
-# below).
-fn lang_exts(i) {
-    if (i == 0)  { return ""; }
-    if (i == 1)  { return ".sh .bash .zsh"; }
-    if (i == 2)  { return ".py"; }
-    if (i == 3)  { return ".js .mjs .cjs"; }
-    if (i == 4)  { return ".ts"; }
-    if (i == 5)  { return ".rs"; }
-    if (i == 6)  { return ".cyr .tcyr .bcyr .fcyr"; }
-    if (i == 7)  { return ".c .h"; }
-    if (i == 8)  { return ".toml"; }
-    if (i == 9)  { return ".json"; }
-    if (i == 10) { return ".yaml .yml"; }
-    if (i == 11) { return ".go"; }
-    if (i == 12) { return ".zig"; }
-    if (i == 13) { return ".s .asm"; }
-    if (i == 14) { return ""; }
-    if (i == 15) { return ".java"; }
-    if (i == 16) { return ".kt .kts"; }
-    if (i == 17) { return ".cpp .cc .cxx .hpp .hxx"; }
-    if (i == 18) { return ".cs .csx"; }
-    if (i == 19) { return ".php .phtml"; }
-    if (i == 20) { return ".rb"; }
-    if (i == 21) { return ".lua"; }
-    if (i == 22) { return ".swift"; }
-    if (i == 23) { return ".ex .exs"; }
-    if (i == 24) { return ".ml .mli"; }
-    if (i == 25) { return ".hs .lhs"; }
-    if (i == 26) { return ".sql"; }
-    if (i == 27) { return ".graphql .gql"; }
-    if (i == 28) { return ".proto"; }
-    if (i == 29) { return ".html .htm"; }
-    if (i == 30) { return ".xml .xsl .xsd .svg"; }
-    if (i == 31) { return ".css"; }
-    if (i == 32) { return ".scss .sass"; }
-    if (i == 33) { return ""; }
-    if (i == 34) { return ""; }
-    if (i == 35) { return ".ini .conf .cfg .properties"; }
-    if (i == 36) { return ".cyml"; }
-    if (i == 37) { return ".ll"; }
-    if (i == 38) { return ".ps1 .psm1 .psd1"; }
-    if (i == 39) { return ".cr"; }
-    if (i == 40) { return ".jl"; }
-    if (i == 41) { return ".vue"; }
-    if (i == 42) { return ".svelte"; }
-    if (i == 43) { return ".nix"; }
-    if (i == 44) { return ".tf .tfvars .hcl"; }
-    if (i == 45) { return ".qasm"; }
-    # `.asm` deliberately stays asm_x86_64 (index 13). vyakarana 2.9.9
-    # routes `.asm` to nasm and lets a content vote send GNU-as files
-    # back; owl's routing is extension-only, so following it here would
-    # mis-highlight every GAS `.asm`. NASM sources reach nasm through
-    # `.nasm` or `--language=nasm`.
-    if (i == 46) { return ".nasm"; }
-    if (i == 47) { return ".mdx"; }
-    if (i == 48) { return ".lean"; }
-    # markdown's grammar has shipped since 1.0.0 and is in both bootstrap
-    # lists, but it had no row here until 1.5.2, so `.md` routed only via
-    # the "# " content sniff below and `--language=markdown` was refused.
-    # `.md` cannot shadow `.mdx` (index 47): matching is on the suffix.
-    if (i == 49) { return ".md .markdown"; }
-    return "";
-}
-
-# Shebang interpreter hints for language i (space-separated tokens
-# that may appear in the shebang line, e.g. "python" matches
-# "#!/usr/bin/env python3").
-fn lang_shebangs(i) {
-    if (i == 1)  { return "sh bash zsh"; }
-    if (i == 2)  { return "python python3 python2"; }
-    if (i == 3)  { return "node deno"; }
-    if (i == 5)  { return "rust-script"; }
-    if (i == 19) { return "php"; }
-    if (i == 20) { return "ruby"; }
-    if (i == 21) { return "lua"; }
-    if (i == 22) { return "swift"; }
-    if (i == 23) { return "elixir"; }
-    if (i == 24) { return "ocaml ocamlrun"; }
-    if (i == 38) { return "pwsh powershell"; }
-    return "";
-}
-
 # ── Helpers ────────────────────────────────────────────────────────────
-
-# Case-sensitive end-match: does `path` end exactly with `tail`?
-# Used by filename-suffix detection (Dockerfile / Containerfile —
-# vyakarana 1.8.0 ADR semantics: filename-shape match, not extension).
-fn _path_ends_with(path, tail) {
-    var plen = strlen(path);
-    var tlen = strlen(tail);
-    if (tlen > plen) { return 0; }
-    var pi = plen - tlen;
-    var ti = 0;
-    while (ti < tlen) {
-        if (load8(path + pi + ti) != load8(tail + ti)) { return 0; }
-        ti = ti + 1;
-    }
-    return 1;
-}
-
-# Filename-shape match: returns 1 if `path` is exactly `name`, ends with
-# `/<name>`, or ends with `.<name>` (Dockerfile-style suffix per
-# vyakarana 1.8.0 — covers ./Dockerfile, /path/to/Dockerfile, and
-# name.Dockerfile uniformly).
-fn _path_filename_match(path, name) {
-    if (_path_ends_with(path, name) == 0) { return 0; }
-    var plen = strlen(path);
-    var nlen = strlen(name);
-    if (plen == nlen) { return 1; }              # exact basename
-    var prev = load8(path + plen - nlen - 1);
-    if (prev == 47) { return 1; }                # '/' — basename match
-    if (prev == 46) { return 1; }                # '.' — name.Dockerfile
-    return 0;
-}
 
 # Case-folded suffix check: does `path` end with `ext` (lowercase)?
 # Path chars are compared lowercase via add-32-if-A-to-Z trick.
@@ -216,61 +55,46 @@ fn _path_ends_with_lower(path, ext) {
     return 1;
 }
 
-# Does `path` have any of the space-separated extensions in `list`?
-fn _path_has_any_ext(path, list) {
-    var llen = strlen(list);
-    var i = 0;
-    while (i < llen) {
-        # Skip leading spaces
-        while (i < llen) {
-            if (load8(list + i) != 32) { break; }
-            i = i + 1;
-        }
-        if (i >= llen) { return 0; }
-        # Extract current token into a small buf
-        var ebuf[32];
-        var ei = 0;
-        while (i < llen) {
-            if (load8(list + i) == 32) { break; }
-            if (ei < 31) {
-                store8(&ebuf + ei, load8(list + i));
-                ei = ei + 1;
-            }
-            i = i + 1;
-        }
-        store8(&ebuf + ei, 0);
-        if (_path_ends_with_lower(path, &ebuf) == 1) { return 1; }
+# 1 when the last path component starts with '.' (a dotfile: .bashrc,
+# .gitignore, .env …).
+fn _path_is_dotfile(path) {
+    if (path == 0) { return 0; }
+    var n = strlen(path);
+    var i = n;
+    while (i > 0) {
+        if (load8(path + i - 1) == 47) { i = 0 - i; continue; }
+        i = i - 1;
     }
+    var start = 0;
+    if (i < 0) { start = 0 - i; }
+    if (start >= n) { return 0; }
+    if (load8(path + start) == 46) { return 1; }
     return 0;
 }
 
 # ── Public API ─────────────────────────────────────────────────────────
 
-# Look up language by name. Returns index or -1.
-fn lang_index(name) {
-    var i = 0;
-    while (i < LANG_COUNT) {
-        if (streq(lang_name(i), name) == 1) { return i; }
-        i = i + 1;
-    }
-    return 0 - 1;
-}
-
+# 1 when `name` is a language owl can render: "plain", or any grammar in
+# vyakarana's registry — the bundled set and the user's overlay alike.
+# Loads the registry on first use (_owl_has_grammar), so validating
+# `--language` / `ext.<x>` costs one grammar bootstrap.
 fn lang_is_valid(name) {
-    if (lang_index(name) >= 0) { return 1; }
+    if (name == 0) { return 0; }
+    if (streq(name, "plain") == 1) { return 1; }
+    if (_owl_has_grammar(name) == 1) { return 1; }
     return 0;
 }
 
 # ── Config-driven extension overrides (1.1.1) ─────────────────────────
 # Up to 16 user-defined `ext.<extension> = <language>` entries from
 # config.cyml. Entries are registered before CLI parsing and consulted
-# in detect_language_from_path BEFORE the built-in table — so a user
-# can map .conf → shell without forking the bundled grammar list.
+# FIRST by _owl_detect — so a user can map .conf → shell without forking a
+# grammar.
 
 var USER_EXT_MAX = 16;
 var g_user_ext_count = 0;
 var g_user_ext_keys  = 0;   # alloc'd lazily: USER_EXT_MAX * 8 bytes
-var g_user_ext_langs = 0;   # alloc'd lazily: USER_EXT_MAX * 8 bytes
+var g_user_ext_langs = 0;   # alloc'd lazily: USER_EXT_MAX * 8 bytes (name copies)
 
 fn _user_ext_init() {
     if (g_user_ext_keys == 0) {
@@ -283,30 +107,39 @@ fn _user_ext_init() {
     return 0;
 }
 
+# A heap copy of NUL-terminated `s`, or 0.
+fn _lang_strdup(s) {
+    var n = strlen(s);
+    var d = alloc(n + 1);
+    if (d == 0) { return 0; }
+    memcpy(d, s, n);
+    store8(d + n, 0);
+    return d;
+}
+
 # Register one ext→lang override. Returns 0 OK, 1 if the table is full
 # (USER_EXT_MAX distinct extensions), 2 if the language name is unknown,
 # the extension is empty, or memory ran out. Called by config.cyr after
 # key parsing; config.cyr owns the messages for these codes.
 #
 # The extension is stored normalised — leading dot added, A-Z folded to
-# a-z — because the lookup in detect_language_from_path folds only the
-# PATH side (the built-in table is lowercase by construction). Through
-# 1.5.2 it was stored as typed, so `ext.CONF = shell` could never match
-# anything. Registering an extension that is already present replaces its
-# language in place (every other config key is last-wins; this one was
-# first-wins) and does not use up a slot.
+# a-z — because the lookup folds only the PATH side. Registering an
+# extension that is already present replaces its language in place (every
+# config key is last-wins) and does not use up a slot. The language is
+# stored as a heap copy of its name: `lang` points into the config
+# parser's scratch buffer, which the next line reuses (the 1.5.3
+# dangling-theme-name lesson), and since 1.6.0 there is no index table to
+# store a number from.
 fn lang_register_ext_override(ext, lang) {
-    var li = lang_index(lang);
-    if (li < 0) { return 2; }
+    if (lang_is_valid(lang) == 0) { return 2; }
 
     var elen = strlen(ext);
     if (elen == 0) { return 2; }
 
     if (_user_ext_init() != 0) { return 2; }   # FINDING-011
 
-    # Normalize: prepend a leading dot if the user didn't include one,
-    # so _path_ends_with_lower behaves the same as for the built-in
-    # lang_exts table ("conf" → ".conf"), and fold to lowercase.
+    # Normalize: prepend a leading dot if the user didn't include one
+    # ("conf" → ".conf"), and fold to lowercase.
     var dot = 0;
     if (load8(ext) != 46) { dot = 1; }
     var copy = alloc(elen + dot + 1);
@@ -326,10 +159,13 @@ fn lang_register_ext_override(ext, lang) {
     }
     store8(copy + off, 0);
 
+    var lname = _lang_strdup(lang);
+    if (lname == 0) { return 2; }   # FINDING-011
+
     var ui = 0;
     while (ui < g_user_ext_count) {
         if (streq(load64(g_user_ext_keys + ui * 8), copy) == 1) {
-            store64(g_user_ext_langs + ui * 8, li);
+            store64(g_user_ext_langs + ui * 8, lname);
             return 0;
         }
         ui = ui + 1;
@@ -337,141 +173,164 @@ fn lang_register_ext_override(ext, lang) {
 
     if (g_user_ext_count >= USER_EXT_MAX) { return 1; }
     store64(g_user_ext_keys  + g_user_ext_count * 8, copy);
-    store64(g_user_ext_langs + g_user_ext_count * 8, li);
+    store64(g_user_ext_langs + g_user_ext_count * 8, lname);
     g_user_ext_count = g_user_ext_count + 1;
     return 0;
 }
 
-# Map path → language name (by extension). Returns "plain" on no match.
-# User config overrides win first; built-in table is the fallback.
-fn detect_language_from_path(path) {
+# The user's override for `path`, or 0.
+fn _user_ext_lookup(path) {
     var ui = 0;
     while (ui < g_user_ext_count) {
-        var ext_ptr = load64(g_user_ext_keys + ui * 8);
-        if (_path_ends_with_lower(path, ext_ptr) == 1) {
-            var li = load64(g_user_ext_langs + ui * 8);
-            return lang_name(li);
+        if (_path_ends_with_lower(path, load64(g_user_ext_keys + ui * 8)) == 1) {
+            return load64(g_user_ext_langs + ui * 8);
         }
         ui = ui + 1;
     }
-
-    # Filename-shape detection (1.2.6) — Dockerfile and Makefile have
-    # no extension. Case-sensitive per vyakarana ADRs: "Makefile",
-    # "makefile", "GNUmakefile" all match makefile; "Dockerfile" and
-    # "Containerfile" plus the .Dockerfile / .Containerfile suffix
-    # forms match dockerfile.
-    if (_path_filename_match(path, "Dockerfile") == 1)    { return "dockerfile"; }
-    if (_path_filename_match(path, "Containerfile") == 1) { return "dockerfile"; }
-    if (_path_filename_match(path, "Makefile") == 1)      { return "makefile"; }
-    if (_path_filename_match(path, "makefile") == 1)      { return "makefile"; }
-    if (_path_filename_match(path, "GNUmakefile") == 1)   { return "makefile"; }
-
-    var i = 1;  # skip "plain"
-    while (i < LANG_COUNT) {
-        if (_path_has_any_ext(path, lang_exts(i)) == 1) {
-            return lang_name(i);
-        }
-        i = i + 1;
-    }
-    return "plain";
+    return 0;
 }
 
-# Scan a buffer holding the first N bytes of a file for a shebang line.
-# Returns a language name or 0 if none matched.
-fn detect_language_from_shebang(buf, n) {
-    if (n < 3) { return 0; }
-    if (load8(buf) != 35) { return 0; }   # '#'
-    if (load8(buf + 1) != 33) { return 0; } # '!'
+# ── owl's supplement (1.6.0) ───────────────────────────────────────────
+# Routes owl 1.5.3's own tables had that vyakarana 2.10.0's do not. Keeping
+# them means moving to vyakarana's routes regresses no file. Filed upstream
+# (docs/development/issues/2026-10-31-vyakarana-missing-routes.md); delete
+# each row when vyakarana routes it, and the table when it is empty.
 
-    # Extract shebang line (up to \n, \r or EOF, cap at 127 bytes). CR
-    # ends it too, so a CRLF script's interpreter is "sh", not "sh\r"; a
-    # TAB is a separator exactly as the kernel's shebang parser treats it,
-    # so `#!/usr/bin/env<TAB>python3` routes. Both were missed through 1.5.2.
-    var sb[128];
-    var sbi = 0;
-    var pi = 2;
-    var stop = 0;
-    while (stop == 0) {
-        if (pi >= n)    { stop = 1; continue; }
-        if (sbi >= 127) { stop = 1; continue; }
-        var c = load8(buf + pi);
-        if (c == 10) { stop = 1; continue; }
-        if (c == 13) { stop = 1; continue; }
-        if (c == 9)  { c = 32; }
-        store8(&sb + sbi, c);
-        sbi = sbi + 1;
-        pi = pi + 1;
-    }
-    store8(&sb + sbi, 0);
+# Interpreter word → language. A word matches when it starts with the entry
+# and the rest is digits or dots (`ocaml4.14`), as vyakarana's prefix match
+# allows `python3`.
+fn _supp_interp_lang(w, wl) {
+    if (_supp_word_is(w, wl, "deno") == 1)        { return "javascript"; }
+    if (_supp_word_is(w, wl, "rust-script") == 1) { return "rust"; }
+    if (_supp_word_is(w, wl, "swift") == 1)       { return "swift"; }
+    if (_supp_word_is(w, wl, "elixir") == 1)      { return "elixir"; }
+    if (_supp_word_is(w, wl, "ocamlrun") == 1)    { return "ocaml"; }
+    if (_supp_word_is(w, wl, "ocaml") == 1)       { return "ocaml"; }
+    return 0;
+}
 
-    # For each language with shebang hints, check if any hint appears
-    # as a word in the shebang line. We check word-as-suffix-of-path
-    # (e.g. "python" inside "/usr/bin/env python3" — the basename of
-    # the last space-separated token) AND plain occurrence.
-    var i = 1;
-    while (i < LANG_COUNT) {
-        var hints = lang_shebangs(i);
-        if (strlen(hints) > 0) {
-            # Tokenize hints
-            var hlen = strlen(hints);
-            var hi = 0;
-            while (hi < hlen) {
-                while (hi < hlen) {
-                    if (load8(hints + hi) != 32) { break; }
-                    hi = hi + 1;
-                }
-                if (hi >= hlen) { break; }
-                var h_start = hi;
-                while (hi < hlen) {
-                    if (load8(hints + hi) == 32) { break; }
-                    hi = hi + 1;
-                }
-                var h_len = hi - h_start;
-                # Search sbuf for this hint as a whole token boundary.
-                var sblen = sbi;
-                var si = 0;
-                while (si <= sblen - h_len) {
-                    if (memeq(&sb + si, hints + h_start, h_len) == 1) {
-                        # Boundary check: prev char must be / or space or start;
-                        # next char must be end, space, digit, or newline.
-                        var prev_ok = 0;
-                        if (si == 0) { prev_ok = 1; }
-                        else {
-                            var pc = load8(&sb + si - 1);
-                            if (pc == 47) { prev_ok = 1; }  # '/'
-                            if (pc == 32) { prev_ok = 1; }  # ' '
-                        }
-                        var next_ok = 0;
-                        if (si + h_len >= sblen) { next_ok = 1; }
-                        else {
-                            var nc = load8(&sb + si + h_len);
-                            if (nc == 0)  { next_ok = 1; }
-                            if (nc == 32) { next_ok = 1; }  # ' '
-                            if (nc >= 48) { if (nc <= 57) { next_ok = 1; } } # digit (python3)
-                        }
-                        if (prev_ok == 1) {
-                            if (next_ok == 1) { return lang_name(i); }
-                        }
-                    }
-                    si = si + 1;
-                }
-            }
-        }
+fn _supp_word_is(w, wl, name) {
+    var nl = strlen(name);
+    if (wl < nl) { return 0; }
+    if (memeq(w, name, nl) == 0) { return 0; }
+    var i = nl;
+    while (i < wl) {
+        var c = load8(w + i);
+        var ok = 0;
+        if (c == 46) { ok = 1; }
+        if (c >= 48) { if (c <= 57) { ok = 1; } }
+        if (ok == 0) { return 0; }
         i = i + 1;
     }
+    return 1;
+}
+
+# 1 when byte c separates shebang words (space or tab, as the kernel's
+# parser treats them).
+fn _supp_is_sep(c) {
+    if (c == 32) { return 1; }
+    if (c == 9) { return 1; }
     return 0;
+}
+
+# The language a `#!` line's interpreter names, or 0. The interpreter is the
+# basename of the first word; for `env` it is the first later word that is
+# not an option (`env -S deno run`). The line ends at LF, CR or byte 256.
+fn _supp_shebang(buf, n) {
+    if (n < 3) { return 0; }
+    if (load8(buf) != 35) { return 0; }
+    if (load8(buf + 1) != 33) { return 0; }
+    var end = n;
+    if (end > 256) { end = 256; }
+    var i = 2;
+    var stop = 0;
+    while (stop == 0) {
+        if (i >= end) { stop = 1; continue; }
+        var c = load8(buf + i);
+        if (c == 10) { stop = 1; continue; }
+        if (c == 13) { stop = 1; continue; }
+        i = i + 1;
+    }
+    end = i;
+    var pos = 2;
+    var first = 1;
+    while (pos < end) {
+        while (pos < end) {
+            if (_supp_is_sep(load8(buf + pos)) == 0) { break; }
+            pos = pos + 1;
+        }
+        if (pos >= end) { return 0; }
+        var ws = pos;
+        while (pos < end) {
+            if (_supp_is_sep(load8(buf + pos)) == 1) { break; }
+            pos = pos + 1;
+        }
+        # basename: the word after its last '/'
+        var bs = ws;
+        var k = ws;
+        while (k < pos) {
+            if (load8(buf + k) == 47) { bs = k + 1; }
+            k = k + 1;
+        }
+        var bl = pos - bs;
+        var skip = 0;
+        if (first == 1) {
+            if (bl == 3) { if (memeq(buf + bs, "env", 3) == 1) { skip = 1; } }
+        } else {
+            if (load8(buf + ws) == 45) { skip = 1; }   # an env option
+        }
+        if (skip == 0) { return _supp_interp_lang(buf + bs, bl); }
+        first = 0;
+    }
+    return 0;
+}
+
+# The supplement's language for `path` / its first `n` bytes, or 0.
+fn _owl_supplement(path, buf, n) {
+    if (path != 0) {
+        if (_path_ends_with_lower(path, ".tcyr") == 1) { return "cyrius"; }
+        if (_path_ends_with_lower(path, ".bcyr") == 1) { return "cyrius"; }
+        if (_path_ends_with_lower(path, ".fcyr") == 1) { return "cyrius"; }
+    }
+    if (buf != 0) { return _supp_shebang(buf, n); }
+    return 0;
+}
+
+# ── Routing ────────────────────────────────────────────────────────────
+
+# The language for a file: `path` and its first `n` bytes (`buf`). See the
+# header for the order. Never 0.
+fn _owl_detect(path, buf, n) {
+    var u = _user_ext_lookup(path);
+    if (u != 0) { return u; }
+    if (_owl_overlay_new_count() > 0) {
+        var r = detect_language_registered(path, buf, n);
+        if (r != 0) {
+            if (_owl_overlay_is_new(r) == 1) { return r; }
+        }
+    }
+    var c = detect_language_combined(path, buf, n);
+    if (c != 0) { return c; }
+    var x = _owl_supplement(path, buf, n);
+    if (x != 0) { return x; }
+    var s = _owl_detect_language_from_content(buf, n, path);
+    if (s != 0) { return s; }
+    return "plain";
 }
 
 # Content-based detection (1.1.4). Conservative anchored patterns
 # for file-format languages where the opening bytes are highly
 # diagnostic. Programming languages are intentionally NOT detected
-# this way — false-positive risk is too high for the small payoff.
+# this way — false-positive risk is too high for the small payoff
+# (vyakarana's shebang and signature sniffs run before this).
 # Returns a language name or 0 (no match).
 #
 # Recognized openings:
 #   "{" / "[" non-alpha → json     (TOML section [name] disambiguates)
 #   "---" at file start → yaml
-#   "# " / "## "        → markdown
+#   "# " / "## "        → markdown, except in a dotfile: `.bashrc`,
+#                          `.gitignore` and friends open with `# ` comments
+#                          and were drawn as markdown (audit INFO-013)
 fn _is_alpha_or_underscore(c) {
     if (c == 95) { return 1; }              # _
     if (c >= 65) { if (c <= 90)  { return 1; } }
@@ -480,26 +339,22 @@ fn _is_alpha_or_underscore(c) {
 }
 
 # Renamed at 1.3.1 — vyakarana 2.x exports its own
-# `detect_language_from_content(src, src_len)` from
-# dist/vyakarana.cyr and the duplicate triggered a "last definition
-# wins" warning that the CI lint gate caught. owl's content
-# detection (anchored `{`/`[`/`---`/`#` patterns from M1.4) stays
-# under the `_owl_*` convention used elsewhere in owl
-# (`_owl_load_grammar`, `_owl_bootstrap_grammars`).
-fn _owl_detect_language_from_content(buf, n) {
-    if (n == 0) { return 0; }
+# `detect_language_from_content(src, src_len)`, and the duplicate
+# triggered a "last definition wins" warning the CI lint gate caught.
+# owl's content detection stays under the `_owl_*` convention.
+fn _owl_detect_language_from_content(buf, n, path) {
+    if (n <= 0) { return 0; }
     # Skip leading blank lines + whitespace.
     var i = 0;
-    while (i < n) {
+    var go = 1;
+    while (go == 1) {
+        if (i >= n) { go = 0; continue; }
         var c = load8(buf + i);
-        if (c != 32) {
-            if (c != 9) {
-                if (c != 10) {
-                    if (c != 13) { break; }
-                }
-            }
-        }
-        i = i + 1;
+        if (c == 32) { i = i + 1; continue; }
+        if (c == 9)  { i = i + 1; continue; }
+        if (c == 10) { i = i + 1; continue; }
+        if (c == 13) { i = i + 1; continue; }
+        go = 0;
     }
     if (i >= n) { return 0; }
 
@@ -528,22 +383,73 @@ fn _owl_detect_language_from_content(buf, n) {
         }
     }
 
-    # Markdown: ATX header "# " or "## ..."
+    # Markdown: ATX header "# " or "## ..." — not in a dotfile.
     if (c0 == 35) {                     # #
-        if (i + 1 < n) {
-            var c1 = load8(buf + i + 1);
-            if (c1 == 32) { return "markdown"; }
-            if (c1 == 35) { return "markdown"; }
+        if (_path_is_dotfile(path) == 0) {
+            if (i + 1 < n) {
+                var c2 = load8(buf + i + 1);
+                if (c2 == 32) { return "markdown"; }
+                if (c2 == 35) { return "markdown"; }
+            }
         }
     }
 
     return 0;
 }
 
+# Every language owl can render: "plain", then the registry's grammar
+# names — bundled and user overlay — sorted and de-duplicated (a user
+# grammar that overrides a bundled one by name is listed once).
 fn print_language_list() {
+    _owl_bootstrap_grammars();
+    var reg = registry_init();
+    var total = vec_len(reg);
+    var names = alloc((total + 1) * 8);
+    if (names == 0) { println("plain"); return 0; }
+    var cnt = 0;
     var i = 0;
-    while (i < LANG_COUNT) {
-        println(lang_name(i));
+    while (i < total) {
+        var nm = grammar_name(vec_get(reg, i));
+        var dup = 0;
+        var j = 0;
+        while (j < cnt) {
+            if (streq(load64(names + j * 8), nm) == 1) { dup = 1; j = cnt; continue; }
+            j = j + 1;
+        }
+        if (dup == 0) {
+            # Insertion sort: shift larger names right, then place.
+            var k = cnt;
+            var placing = 1;
+            while (placing == 1) {
+                if (k == 0) { placing = 0; continue; }
+                var prev = load64(names + (k - 1) * 8);
+                if (_lang_cmp(prev, nm) <= 0) { placing = 0; continue; }
+                store64(names + k * 8, prev);
+                k = k - 1;
+            }
+            store64(names + k * 8, nm);
+            cnt = cnt + 1;
+        }
+        i = i + 1;
+    }
+    println("plain");
+    var p = 0;
+    while (p < cnt) {
+        println(load64(names + p * 8));
+        p = p + 1;
+    }
+    return 0;
+}
+
+# strcmp-style byte comparison of two NUL-terminated names.
+fn _lang_cmp(a, b) {
+    var i = 0;
+    var go = 1;
+    while (go == 1) {
+        var ca = load8(a + i);
+        var cb = load8(b + i);
+        if (ca != cb) { return ca - cb; }
+        if (ca == 0) { return 0; }
         i = i + 1;
     }
     return 0;

@@ -6,6 +6,202 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.6.0] - 2026-10-31
+
+**The 1.6.x feature line.** owl stops keeping its own language tables and
+grammar files. Languages route through vyakarana, and the bundled grammars
+come from the binary. `--follow` is token-coloured, and the command line is
+parsed by cmdit. Pins are unchanged (cyrius 6.7.18, vyakarana 2.10.0, sit
+1.13.0), and cmdit 1.5.0 becomes a direct dependency at the tag sit already
+pins.
+
+### Added
+
+- **Coloured `--follow`.** The tail is highlighted like the rest of the file.
+  Through 1.5.3 a follow session had no token colour at all. The text sits in
+  a vyakarana document (ADR 0033). Each append is an edit at the end, so each
+  poll re-scans from the last 4 KiB checkpoint, not from the top, and its
+  tokens always equal a from-scratch tokenization. The rules:
+  - an appended line is drawn once its newline arrives;
+  - a partial last line is drawn when the file goes quiet;
+  - a token that straddles that boundary colours the rest of its bytes by
+    what it has become (`fn ma` + `in()` stays one identifier, never the
+    keyword `in`);
+  - escape stripping still sees every byte;
+  - past the 16 MiB highlight cap, or if vyakarana refuses a feed, the
+    session continues plainly with the usual notice.
+
+  Following a file as it grows prints, byte for byte, what the one-shot
+  viewer prints for the final file. Smoke checks this across several append
+  batches, a block comment split between them, a partial line, a line of
+  terminal escapes, and truncation. Memory is flat per poll: 4,000 appends
+  to a 1.2 MB document allocated nothing beyond a one-time 281 KB checkpoint
+  array.
+- **A user grammar with a new name works end to end.** Through 1.5.3 only
+  a user grammar that replaced a bundled one by name was ever loaded. Now
+  any `*.cyml` in `~/.config/owl/grammars/` routes by the `extensions`,
+  `filenames` and `shebangs` it declares. It is listed by
+  `--list-languages`, accepted by `--language`, and valid in an `ext.<x>`
+  config override. It may claim an extension a bundled grammar routes (it is
+  the user's choice), unless the bundled grammar declares a longer match. A
+  same-name user grammar still replaces the bundled one's highlighting, but
+  not its routing, so the `.s` / `.asm` content votes survive it.
+- **`--name VALUE` and `--`.** Value flags take a separate value
+  (`--color always`) as well as `--color=always`, and `--` ends the options
+  (`owl -- -notes.txt`).
+- **`cmdit` in the `--version --verbose` banner,** and a `target` line that
+  names the real build target (below).
+
+### Changed
+
+- **Languages route through vyakarana** (`detect_language_combined`).
+  owl's three hand-kept tables (names, extensions, shebangs) and its
+  filename special cases are gone. Routing order:
+  1. config `ext.<x>` overrides;
+  2. a new-name user grammar;
+  3. vyakarana's routes and content votes;
+  4. owl's supplement (below);
+  5. the JSON / YAML / TOML / markdown opening sniff.
+
+  Over a 2,539-file sample of `~/Repos`, 171 files route differently, and
+  each one is a correction:
+  - 107 dotfiles (`.gitignore`, `.gitattributes`, `.env.example`,
+    `.clang-format`, …) are no longer sniffed as markdown (INFO-013);
+  - 27 `Dockerfile.<suffix>` files and `Android.mk` reach dockerfile and
+    makefile;
+  - 26 NASM `.asm` files get nasm instead of asm_x86_64;
+  - 10 AArch64 `.s` files get asm_aarch64.
+
+  No file lost a route. Before deleting its tables, owl checked all 122
+  routes from them against vyakarana's. The 13 that vyakarana lacks are kept
+  in a small supplement until vyakarana gains them (drafted upstream):
+  - `.tcyr`, `.bcyr` and `.fcyr` → cyrius;
+  - the shebangs `deno`, `rust-script`, `swift`, `elixir`, `ocaml` and
+    `ocamlrun`, each in `env` and direct form.
+- **The bundled grammars come from the binary.** vyakarana compiles its 49
+  grammars in as blobs. The 1.5.3 binary already carried them, because
+  static data survives DCE, but loaded 49 `.cyml` files from a `grammars/`
+  directory beside the binary, located through `/proc/self/exe`. Now
+  `bootstrap_grammars()` registers the blobs with no file I/O. Effects:
+  - the binary works from anywhere;
+  - releases no longer ship `grammars/`;
+  - owl no longer writes vyakarana's private `_grammars_bootstrapped`.
+
+  `grammars/` stays in the repo as the reference copy smoke checks
+  against.
+- **`.asm` is decided by content.** NASM directives, or a bare instruction
+  stream, route to nasm. A GNU-as directive routes to asm_x86_64. Through
+  1.5.3 every `.asm` file was asm_x86_64, so NASM `; comments` rendered as
+  code.
+- **The command line is parsed by cmdit.** owl keeps its own help text,
+  version line, error wording and validators. Across all 362 smoke
+  invocations, run on 1.5.3's parser and the new one with the same stdin,
+  only `--help` output differs (three new lines). Deliberate differences:
+  - `--help`, `--version` and `--list-*` answer only when the whole command
+    line parses: `owl --help --bogus` is now exit 2;
+  - with both `--help` and `--version`, help wins (through 1.5.3 the first
+    one won);
+  - a missing value says so: `owl: --color: missing value (want
+    auto|always|never)` (was `unknown option`);
+  - a value given to a switch says so: `owl: --plain=1: takes no value`
+    (was `unknown option`);
+  - a separate value that looks like a flag is refused, so `--language -n`
+    is a missing value;
+  - a bad separate value is reported as `--name=value`.
+
+  The attached-value wording, `-np` ("unknown option": one short flag per
+  argument), `-n` / `-N` last-wins and every exit code are unchanged.
+- **Piped tabs: decided (INFO-012).** Piped output without `-p` keeps
+  expanding tabs. Exact bytes already have two spellings (`-p`,
+  `--tabs=0`), and the expansion has shipped since 1.0. design-spec §4.2
+  records it as intended.
+
+### Fixed
+
+- **A nameless user grammar no longer crashes owl.** A `*.cyml` in the
+  overlay that parsed but declared no `name` was registered with a null
+  name, and owl's name scans dereferenced it (SIGSEGV). This was new in the
+  1.6.0 cycle and never shipped. Smoke's overlay-hygiene gate caught it.
+  Such files, and one named `plain`, are now skipped.
+- **The `target` line in `--version --verbose`** was a literal
+  `linux-x86_64`, so agnos and aarch64 builds printed it too. It now comes
+  from the build (`linux-aarch64` verified under qemu).
+
+### Security
+
+- **The user-grammar overlay is read safely.** Only regular files are
+  opened, after a `stat`, so a FIFO named `x.cyml` cannot block startup (the
+  FINDING-019 / 031 class). At most 256 entries are examined. Unparseable
+  and nameless files are skipped. Smoke gate 1.6.0 (f).
+- **Escape stripping on the coloured follow path.** Every appended byte
+  goes through the classifier in order, as on the plain tail. Pinned by the
+  coloured `--follow` gate.
+
+### Build
+
+- **`[test]` manifest scope (cyrius 6.7.6+).** `assert`, `bench` and
+  `fnptr` are prepended only to `cyrius test` / `bench` / `fuzz`. `assert`
+  left `[deps].stdlib`, so the shipped binary's compile no longer sees it.
+- **`[deps.cmdit]`** at 1.5.0, the tag sit pins, so `lib/cmdit.cyr` is one
+  file at one version.
+- **Release binary 1,476,032 bytes (`CYRIUS_DCE=1`), +61,576 over 1.5.3.**
+  About 24 KB is vyakarana's routing and bootstrap code, now reachable.
+  The rest is cmdit and the document API. `--agnos` DCE is 1,473,256; the
+  plain build 3,483,072. DCE still eliminates dead code rather than
+  NOP-filling it.
+
+### Performance
+
+On the release binary, best of 3 × 40 runs:
+- highlighting a small file takes 2.56 ms, down from 3.43 ms (−25%),
+  because the 49 grammar file reads are gone;
+- `--version` takes 0.48 ms, up from 0.40 ms (cmdit's flag table);
+- an unhighlighted file takes 0.52 ms, up from 0.42 ms.
+
+### Tests
+
+New smoke gates, each shown to fail before its change:
+- **the `--verbose` pins are checked against `cyrius.cyml`** (fails on
+  1.5.0, which printed stale pins);
+- **routing:**
+  - the binary alone highlights, with no `grammars/` anywhere;
+  - `--list-languages` equals `grammars/*.cyml` + `plain`;
+  - every bundled grammar routes from its first declared extension or
+    filename;
+  - AArch64 `.s` and the `.asm` vote;
+  - new-name user grammars;
+  - a same-name user grammar keeps routing;
+  - overlay hygiene;
+  - the supplement;
+  - INFO-013;
+- **coloured `--follow`:** identity with the one-shot render, `-n`,
+  escapes, truncation (three failures on 1.5.3);
+- **the CLI:** `--color always`, `--`, `--help --bogus`, missing values,
+  `--plain=1`, `-np`, `-n` / `-N` order.
+
+`tests/owl_config.fcyr` follows the name-based ext table. Its model stores
+language names, and a new check proves the stored name is lang.cyr's own
+copy.
+
+### Docs
+
+- **Upstream filings drafted** in `docs/development/issues/`:
+  - vyakarana's missing routes;
+  - cmdit's completion scripts, which complete nothing in the first
+    argument of a tool with no subcommands. That bug is why 1.6.0 does not
+    expose `--completions` yet.
+
+  The vyakarana private-API filing is updated: owl dropped
+  `_grammars_bootstrapped`.
+- **ADR 0009** (routing and bundled grammars from vyakarana; partly
+  supersedes ADR 0002) and **ADR 0010** (the CLI parsed by cmdit).
+- **Updated for 1.6.0:**
+  - design-spec §3.2, §3.3, §4.2, §5.1;
+  - README (self-contained binary, `-f`);
+  - CLAUDE.md (grammars are a reference copy; routing is vyakarana's);
+  - the roadmap (1.6.x is now its three blocked items);
+  - the audit report (INFO-012 decided, INFO-013 / 014 closed).
+
 ## [1.5.3] - 2026-10-31
 
 **A P(−1) audit, hardening and repair pass** over everything since the

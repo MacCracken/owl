@@ -11,7 +11,8 @@
 # `src/lang.cyr`, `src/theme.cyr` and `src/config.cyr` are included
 # directly. main.cyr cannot be (it ends in a top-level call), so the few
 # symbols config.cyr reaches in main.cyr / pager.cyr / vcs.cyr are stubbed
-# below. The stubs accept exactly what the real setters accept and LOG
+# below, and so is `_owl_has_grammar` — the grammar registry lang.cyr
+# validates `ext.` languages against since 1.6.0 — as a fixed set of names. The stubs accept exactly what the real setters accept and LOG
 # every call, which is what lets the invariants talk about what the parser
 # handed over rather than only whether it crashed.
 #
@@ -33,7 +34,10 @@
 #      reusing the caller's buffer cannot rename the loaded theme.
 #   4. **ext overrides.** Stored extensions are lowercase with one leading
 #      dot; re-registering an extension replaces it in place; the 17th
-#      distinct one reports "too many", and the table equals the model's.
+#      distinct one reports "too many", and the table equals the model's —
+#      including each language name, which must be lang.cyr's own copy
+#      (config.cyr reuses its value buffer for every line, so a stored
+#      pointer to it would read as a later line's value).
 #   5. **Parsing is total and ordered.** A multi-line buffer applies each
 #      line exactly once, in file order — the setter-call log equals the
 #      model's — so the last occurrence of a key wins, and the reported
@@ -170,6 +174,17 @@ fn set_wrap(v)   { _rec(W_WRAP, v);   if (_acc(W_WRAP, v) == 1)   { return 0; } 
 # main.cyr's version replaces control bytes; the harness silences fd 2
 # around the only phase that prints, so a plain write is enough.
 fn eprint_sanitized(s, n) { eprint(s, n); return 0; }
+
+# main.cyr's version asks vyakarana's registry. These names stand in for it:
+# the generator's ext values are three of them plus "markdown" and
+# "bogus-lang", so both a valid and an invalid language are common.
+fn _owl_has_grammar(name) {
+    if (streq(name, "shell") == 1)  { return 1; }
+    if (streq(name, "python") == 1) { return 1; }
+    if (streq(name, "ini") == 1)    { return 1; }
+    if (streq(name, "markdown") == 1) { return 1; }
+    return 0;
+}
 
 var g_saved_err = 0 - 1;
 fn _quiet_on() {
@@ -417,7 +432,7 @@ var M_EITHER = 99;          # theme name that may or may not exist on disk
 
 # The model's own ext table, kept in step with lang.cyr's.
 var g_mx_keys = 0;          # 16 * 72
-var g_mx_lang = 0;          # 16 * 8
+var g_mx_lang = 0;          # 16 * 72 (name copies)
 var g_mx_n = 0;
 var g_mtmp = 0;             # 128-byte scratch
 
@@ -546,27 +561,43 @@ fn _model_cfg(line, n) {
             if (klen - 4 >= 63) { return CFG_E_VALUE; }
             if (_m_has_nul(line, first + 4, ke) == 1) { return CFG_E_VALUE; }
             g_m_which = W_EXT;
-            var li = lang_index(vcopy);
-            if (li < 0) { return CFG_E_VALUE; }
+            if (_m_lang_ok(vcopy) == 0) { return CFG_E_VALUE; }
             _m_norm_ext(line, first + 4, ke);
             var x = 0;
             while (x < g_mx_n) {
                 if (streq(g_mx_keys + x * 72, g_mtmp) == 1) {
-                    store64(g_mx_lang + x * 8, li);
+                    _m_copy(g_mx_lang + x * 72, vcopy);
                     return 0;
                 }
                 x = x + 1;
             }
             if (g_mx_n >= 16) { return CFG_E_EXTFULL; }
-            var dst = g_mx_keys + g_mx_n * 72;
-            var y = 0;
-            while (y <= strlen(g_mtmp)) { store8(dst + y, load8(g_mtmp + y)); y = y + 1; }
-            store64(g_mx_lang + g_mx_n * 8, li);
+            _m_copy(g_mx_keys + g_mx_n * 72, g_mtmp);
+            _m_copy(g_mx_lang + g_mx_n * 72, vcopy);
             g_mx_n = g_mx_n + 1;
             return 0;
         }
     }
     return CFG_E_KEY;
+}
+
+# The model's language check: "plain", or a name the registry stub knows.
+fn _m_lang_ok(v) {
+    if (streq(v, "plain") == 1)    { return 1; }
+    if (streq(v, "shell") == 1)    { return 1; }
+    if (streq(v, "python") == 1)   { return 1; }
+    if (streq(v, "ini") == 1)      { return 1; }
+    if (streq(v, "markdown") == 1) { return 1; }
+    return 0;
+}
+
+# NUL-terminated copy of src (at most 63 bytes, as the parser caps values).
+fn _m_copy(dst, src) {
+    var y = 0;
+    var n = _blen(src, 63);
+    while (y < n) { store8(dst + y, load8(src + y)); y = y + 1; }
+    store8(dst + n, 0);
+    return 0;
 }
 
 fn _ext_reset() {
@@ -590,8 +621,8 @@ fn _check_ext_table() {
         }
         if (load8(k) != 46) { return _fail("ext key stored without its leading dot"); }
         if (streq(k, g_mx_keys + i * 72) == 0) { return _fail("ext key differs from the model"); }
-        if (load64(g_user_ext_langs + i * 8) != load64(g_mx_lang + i * 8)) {
-            return _fail("ext language differs from the model (re-register must replace)");
+        if (streq(load64(g_user_ext_langs + i * 8), g_mx_lang + i * 72) == 0) {
+            return _fail("ext language differs from the model (re-register must replace; name must be a copy)");
         }
         i = i + 1;
     }
@@ -1011,14 +1042,21 @@ fn _fuzz_multi() {
     return 0;
 }
 
+# 1 when the user's override for `path` is `want`.
+fn _ext_is(path, want) {
+    var u = _user_ext_lookup(path);
+    if (u == 0) { return 0; }
+    return streq(u, want);
+}
+
 # Deterministic ext checks the random walk might reach only rarely.
 fn _fuzz_ext_fixed() {
     _ext_reset();
     if (lang_register_ext_override("CONF", "shell") != 0) { return _fail("ext CONF refused"); }
-    if (streq(detect_language_from_path("x.conf"), "shell") == 0) { return _fail("ext.CONF did not match x.conf"); }
+    if (_ext_is("x.conf", "shell") == 0) { return _fail("ext.CONF did not match x.conf"); }
     if (lang_register_ext_override(".conf", "python") != 0) { return _fail("ext re-register refused"); }
     if (g_user_ext_count != 1) { return _fail("ext re-register used a second slot"); }
-    if (streq(detect_language_from_path("X.CONF"), "python") == 0) { return _fail("ext re-register did not replace"); }
+    if (_ext_is("X.CONF", "python") == 0) { return _fail("ext re-register did not replace"); }
     var i = 1;
     var nb[16];
     while (i < 16) {
@@ -1031,6 +1069,13 @@ fn _fuzz_ext_fixed() {
     }
     if (lang_register_ext_override("Conf", "ini") != 0) { return _fail("replacing in a full table refused"); }
     if (lang_register_ext_override("ok", "no-such-lang") != 2) { return _fail("unknown language not reported"); }
+    # The stored name is lang.cyr's own copy: rewriting the caller's buffer
+    # afterwards must not change what `.conf` routes to.
+    var lb[8];
+    store8(&lb, 105); store8(&lb + 1, 110); store8(&lb + 2, 105); store8(&lb + 3, 0);
+    if (lang_register_ext_override("conf", &lb) != 0) { return _fail("replace from a caller buffer refused"); }
+    store8(&lb, 120);
+    if (_ext_is("a.conf", "ini") == 0) { return _fail("ext language aliases the caller's buffer"); }
     g_ln = 0; _puts("ext.another = shell");
     if (_cfg_parse_line(g_line, 0, g_ln) != CFG_E_EXTFULL) {
         return _fail("config did not map table-full to 'too many'");
@@ -1121,7 +1166,7 @@ fn _harness_main() {
     g_line     = alloc(LINE_CAP + 8);
     g_mbuf     = alloc(MBUF_CAP);
     g_mx_keys  = alloc(16 * 72);
-    g_mx_lang  = alloc(16 * 8);
+    g_mx_lang  = alloc(16 * 72);
     g_mtmp     = alloc(256);
     g_tsnap    = alloc(15 * 8);
     g_tmod     = alloc(15 * 8);

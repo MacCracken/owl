@@ -6,6 +6,26 @@
 
 ## Version
 
+**1.6.0** — 2026-10-31. **The 1.6.x feature line.** owl keeps no
+language table and no grammar files:
+- languages route through vyakarana (`detect_language_combined`), so `.asm`
+  gets the NASM / GNU-as content vote and `.s` the x86-64 / AArch64 one;
+- the 49 bundled grammars are vyakarana's embedded blobs, so the binary
+  works from anywhere and releases ship no `grammars/`;
+- a user grammar with a new name routes, lists and is selectable.
+
+Also:
+- `--follow` is token-coloured, through a vyakarana document;
+- the CLI is parsed by cmdit (`--name VALUE`, `--`);
+- INFO-012 is decided (piped tabs keep expanding);
+- INFO-013 and INFO-014 are closed.
+
+Over a 2,539-file sample, 171 files route differently, every one a
+correction. 13 routes vyakarana lacks are kept in a supplement and drafted
+upstream. Shell completions wait on a cmdit fix, and `--diff-from` on a sit
+API (roadmap). Pins unchanged: cyrius 6.7.18, vyakarana 2.10.0, sit 1.13.0.
+cmdit 1.5.0 becomes a direct dependency.
+
 **1.5.3** — shipped 2026-10-31. **P(−1) audit, hardening and repair
 pass** over everything since the 1.4.6 audit
 ([`2026-10-31-audit.md`](../audit/2026-10-31-audit.md)). Five independent
@@ -657,6 +677,12 @@ complete; full owl attack surface audited and hardened.
 
 ## Binary
 
+- **1,476,032 bytes (`CYRIUS_DCE=1`) at 1.6.0**, +61,576 over 1.5.3. About
+  24 KB is vyakarana's routing and bootstrap code, now reachable. The rest
+  is cmdit and the document API. `--agnos` DCE is 1,473,256; the plain build
+  3,483,072. The grammar blobs were already in 1.5.3's binary as static
+  data, which DCE keeps. Highlighting a small file takes 2.56 ms, down from
+  3.43 ms, with no grammar file reads; `--version` takes 0.48 ms.
 - **1,414,456 bytes (`CYRIUS_DCE=1`) at 1.5.3**, +8,616 over 1.5.2: the
   audit's repairs, the buffered writer and the new checks. `--agnos` DCE
   is 1,411,656; the plain build 3,482,936.
@@ -713,17 +739,19 @@ complete; full owl attack surface audited and hardened.
 
 ## Source
 
-- 4,527 lines across 8 built modules at 1.5.3 (`fetch.cyr`, 325, is not
+- 5,161 lines across 8 built modules at 1.6.0 (`fetch.cyr`, 325, is not
   built — see §Next):
-  - `src/main.cyr` (2,525) — entry, CLI (two-pass since 1.5.3), mode
-    resolution, render dispatch, decorated frame, gutter, wrap, hex dump,
-    ndjson, `--follow`, the shared slurp (`_hl_slurp`, 1.5.3) and grammar
-    bootstrap (one loop over the language table since 1.5.3)
+  - `src/main.cyr` (2,728) — entry, CLI (two-pass since 1.5.3; parsed by
+    cmdit since 1.6.0), mode resolution, render dispatch, decorated frame,
+    gutter, wrap, hex dump, ndjson, `--follow` (coloured through a
+    vyakarana document since 1.6.0), the shared slurp (`_hl_slurp`) and the
+    grammar bootstrap (user overlay, then vyakarana's embedded set)
   - `src/vcs.cyr` (593) — sit-backed change markers (1.4.0); stat-only repo
     probe, worktree size / line pre-check, and symlink / `.git`-file / `..`
     skips (1.5.3)
-  - `src/lang.cyr` (550) — extension / shebang / filename / content
-    detection, ext-override table; `LANG_COUNT` 50
+  - `src/lang.cyr` (456) — routing: ext overrides, new-name user grammars,
+    vyakarana's routes, owl's supplement, the opening sniff. No language
+    table since 1.6.0
   - `src/theme.cyr` (539) — bundled and user themes, the 10-kind palette,
     ANSI emission (through `out_write` since 1.5.3)
   - `src/config.cyr` (416) — `key = value` parser and `cfg_read_regular`,
@@ -749,6 +777,18 @@ complete; full owl attack surface audited and hardened.
 - `tests/owl_config.fcyr` — **fuzz harness for the config and theme
   parsers (1.5.3)**, closing the 1.4.6 audit's follow-up. 6 invariants
   checked against reference models; it caught 11 planted mutations.
+- **1.6.0 gates**, each shown to fail before its change:
+  - the `--verbose` pins against `cyrius.cyml`;
+  - routing: the bare binary highlights, `--list-languages` equals
+    `grammars/`, every grammar is reachable, the `.s` / `.asm` votes,
+    new-name and same-name user grammars, overlay hygiene, the supplement,
+    INFO-013;
+  - coloured `--follow`: byte-identical to the one-shot render of the final
+    file;
+  - the cmdit CLI.
+
+  Unit tests, both fuzz harnesses (also `--poison`), smoke on the plain,
+  poison and DCE builds, and lint are green at 1.6.0.
 - `scripts/smoke.sh` gates every 2026-10-31 finding. FINDING-017 needs
   `OWL_POISON_BIN` (a `cyrius build -D CYRIUS_POISON` binary) and
   NOTE-skips without one. Several gates need `script(1)`, `git` or
@@ -787,6 +827,10 @@ complete; full owl attack surface audited and hardened.
   the 1.2.x/1.3.x cascade and 2.3.5's `openqasm`; 2.0.0
   streaming-API break migrated at 1.3.1/1.3.6; 2.4.0 made that
   streaming path chunk-invariant.
+- **cmdit** 1.5.0 — the AGNOS getopt-long library (direct dependency since
+  1.6.0; vendored before that as sit's own dependency). Parses owl's CLI.
+  The tag is the one sit pins, so `lib/cmdit.cyr` is one file at one
+  version. `cyrius.lock` carries 3 commit pins (cmdit, sit, vyakarana).
 - **sit** 1.13.0 — AGNOS-native VCS (added 1.4.0). owl consumes its
   ADR-0009 library surface (`sit_repo_open` / `sit_diff_path` /
   `sit_repo_close` + `ann_*` accessors) for the VCS change-marker
@@ -795,13 +839,13 @@ complete; full owl attack surface audited and hardened.
   patra (B+tree/WAL object store), sigil (hashing), sankoch
   (zlib/DEFLATE), sakshi (structured logging).
 
-`grammars/` is runtime data copied from vyakarana, not source —
-re-sync it wholesale on a vyakarana bump (`git archive <tag>
-grammars/`) rather than editing in place, and wire any new
-grammar into `src/lang.cyr`'s three tables plus both bootstrap
-lists in `src/main.cyr`.
+`grammars/` is a reference copy of vyakarana's grammars, not runtime data
+(since 1.6.0 the binary carries them). Re-sync it wholesale on a vyakarana
+bump (`git archive <tag> grammars/`) rather than editing in place. Smoke
+checks `--list-languages` and per-grammar routing against it. A new grammar
+needs no wiring in owl.
 
-No FFI. Third-party deps: vyakarana (tokenizer) + sit (VCS).
+No FFI. Third-party deps: vyakarana (tokenizer), sit (VCS), cmdit (CLI).
 
 ## Consumers
 
@@ -1002,23 +1046,30 @@ At 1.4.7 on cyrius `6.5.35`:
 
 ## Next
 
-Forward work lives in [`roadmap.md`](roadmap.md): **1.6.x** is
-registry-based language routing, the `[test]` stdlib scope, colourised
-`--follow`, cmdit with completions, and `--diff-from`. URL support and AGNOS
-theming are blocked, with the reasons recorded there.
+Forward work lives in [`roadmap.md`](roadmap.md). What is left of **1.6.x**
+is blocked upstream:
+- shell completions, on a cmdit fix;
+- `--diff-from`, on a sit API that takes a ref;
+- retiring the routing supplement, on vyakarana gaining those routes.
+
+URL support and AGNOS theming are blocked too, with the reasons recorded
+there.
 
 Open follow-ups:
 
-- **Upstream, from the 2026-10-31 audit.** None of these is filed yet.
+- **Upstream, from the 2026-10-31 audit.** Drafted in
+  [`issues/`](issues/README.md), one file each with a repro, for the user to
+  carry upstream. None is filed yet.
   - **sit:** INFO-004, the tree-bomb `.git` (impact HIGH: resolve one path
     by its components instead of flattening HEAD's tree); INFO-005, an
     unbounded lock wait; INFO-006, unreadable vs unchanged; INFO-007,
     gitattributes; INFO-008, `commit_tree_hex`.
   - **vyakarana:** INFO-009, per-stream memory.
   - **cyrius:** INFO-010, argv via `/proc`.
-- **INFO-012, a decision:** should piped output (without `-p`) keep literal
-  tabs, as the design spec originally said? It expands them today, and
-  smoke pins that.
+- **Upstream, from 1.6.0** (also in [`issues/`](issues/README.md)):
+  - **vyakarana:** the 13 routes owl's supplement carries;
+  - **cmdit:** completion scripts that complete nothing in a verb-less
+    tool's first argument.
 - **cyrius stdlib constant collisions.** Filed
   (`cyrius/docs/development/issues/2026-06-14-stdlib-constant-value-collisions.md`).
 
@@ -1026,4 +1077,5 @@ Closed and kept for the record: INFO-002, the `getenv` 8 KB window
 (fixed in cyrius 6.5.36, re-verified at 1.4.9 and 1.5.1); sit-read
 adoption (1.4.7); the `_stream_grow` collision (vyakarana 2.4.2, at
 owl 1.4.8); the escape-classifier fuzz harness (1.4.7); the config and
-theme parser harness (1.5.3).
+theme parser harness (1.5.3); INFO-012 decided, INFO-013 / 014 closed
+(1.6.0).

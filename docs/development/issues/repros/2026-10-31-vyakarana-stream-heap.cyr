@@ -1,0 +1,38 @@
+# Repro: per-stream memory is never reclaimed. A consumer that tokenizes
+# one input after another (a viewer given many files) grows by roughly the
+# input size per stream, even reusing a single tokenbuf, because
+# tokenize_stream_free cannot release the stream's buffers under the bump
+# allocator. Prints heap bytes handed out (alloc_used) every 10 streams.
+include "lib/vyakarana.cyr"
+
+fn main() {
+    alloc_init();
+    var line = "fn f(x: u32) -> u32 { let y = x + 1; y * 2 } // a comment here\n";
+    var ll = strlen(line);
+    var cap = 94208;
+    var src = alloc(cap);
+    var n = 0;
+    while (n + ll <= cap) { memcpy(src + n, line, ll); n = n + ll; }
+    if (has_grammar("rust") == 0) { print("no rust grammar\n", 16); return 1; }
+    var tb = tokenbuf_new();
+    var base = alloc_used();
+    var i = 0;
+    while (i < 60) {
+        var s = tokenize_stream_new("rust");
+        tokenize_stream_feed(s, src, n);
+        _tokenbuf_reset(tb);
+        tokenize_stream_finish(s, tb);
+        tokenize_stream_free(s);
+        i = i + 1;
+        if (i % 10 == 0) {
+            print("streams=", 8); fmt_int(i);
+            print(" input_bytes=", 13); fmt_int(n);
+            print(" tokens=", 8); fmt_int(tokenbuf_count(tb));
+            print(" heap_growth_bytes=", 19); fmt_int(alloc_used() - base);
+            print("\n", 1);
+        }
+    }
+    return 0;
+}
+var _rc = main();
+syscall(SYS_EXIT, _rc);
