@@ -2400,7 +2400,7 @@ esac
     || fail "1.6.0 CLI: --color always and --color=always differ"
 mkdir -p "$TMPDIR/c160"
 printf 'dash file\n' > "$TMPDIR/c160/-x.txt"
-out=$(cd "$TMPDIR/c160" && "$BIN" -p -- -x.txt)
+out=$(cd "$TMPDIR/c160" && "$BIN_ABS" -p -- -x.txt)
 [ "$out" = "dash file" ] || fail "1.6.0 CLI: -- did not make -x.txt a file"
 cli_err() {   # args… ; sets rc and err
     set +e
