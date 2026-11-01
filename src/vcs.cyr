@@ -12,7 +12,7 @@
 # stable five-fn interface (`vcs_compute_markers`, `vcs_mark_for_line`,
 # `vcs_reset`, `vcs_enabled`, `set_style`), which is unchanged across the
 # swap. sit's library surface (ADR 0009) is the new backend:
-#   - sit_repo_open(cwd)        — open the repo at cwd, 1 / 0
+#   - sit_repo_open(root)       — open the repo at `root`, 1 / 0
 #   - sit_diff_path(repo, path) — HEAD-blob vs working-tree edit script,
 #                                 a vec of 32-byte annotated ops, or 0
 #   - sit_repo_close(repo)      — release the handle
@@ -39,15 +39,27 @@
 # This preserves the marker output the git scaffold produced, so the
 # gutter and `--diff` behaviour are unchanged.
 #
-# Known limits
-# ------------
-#   - sit 1.0.1's sit_repo_open does not search upward for a repo root:
-#     markers appear only when owl is run from the directory holding
-#     `.sit/`, with a repo-root-relative path. Outside a sit repo the
-#     module silently no-ops (same as git-not-a-repo before the swap).
+# Repo discovery and limits
+# -------------------------
+#   - owl, not sit, finds the repo (1.4.4): it walks UP from the file's own
+#     absolute path to the nearest ancestor holding a `.sit/HEAD` or
+#     `.git/HEAD` regular file, then opens sit at that root with a
+#     root-relative path. sit reads both `.sit/` and `.git/` repositories.
+#     Outside any repo the module no-ops (with a note under `--diff`).
+#   - The walk only ever stat()s — it never open()s a probe path, because
+#     open(2) on a FIFO planted as an ancestor's `.git/HEAD` blocks forever.
+#   - A `.git` that is a regular FILE (`gitdir:` — submodules, `git
+#     worktree add`) ends the walk with no markers: sit cannot follow the
+#     link, and walking on would diff against the superproject.
+#   - No markers for: a symlink (the VCS tracks the link, owl shows the
+#     target), a non-regular file, a path inside the repo's own `.git/` or
+#     `.sit/`, a `..` that follows a symlinked directory (lexical `..` would
+#     name a different file than the kernel opened), or a working-tree file
+#     over VCS_MAX_BYTES / VCS_MAX_LINES (sit's memory is per line).
+#   - The HEAD-side blob is bounded only by sit (16 MiB inflate cap): owl
+#     cannot size it without reading the object. Upstream concern.
 #   - The diff is bounded by sit's LCS cap (16M cells); a file whose
 #     diff table exceeds that yields no markers (sit returns 0).
-#   - No git fallback: a directory tracked only by git shows no markers.
 
 var VCS_MARK_NONE = 0;
 var VCS_MARK_ADD  = 1;
@@ -79,6 +91,16 @@ fn set_style(value) {
 # Render-time gate — is the gutter going to show markers for this file?
 # Called by main.cyr before allocating line-indexed state.
 fn vcs_enabled() {
+    # Plain mode is cat: no gutter, and render_chunk passes every byte
+    # straight through, so --diff's filter never runs — markers would be a
+    # full sit diff computed and thrown away (1.5.3 audit). The one plain
+    # path that reads them is --line-range, which routes plain output
+    # through _in_range() and with it the --diff filter.
+    if (g_flag_plain == 1) {
+        if (g_line_range_start == 0) {
+            if (g_line_range_end == 0) { return 0; }
+        }
+    }
     if (g_vcs_flag == 0) { return 0; }
     # 1.1.4 — --diff needs the marker table populated even when stdout
     # is piped (g_decorated == 0). The diff filter inside _in_range()
@@ -97,11 +119,25 @@ fn _vcs_mark(line, kind) {
     return 0;
 }
 
+# Working-tree ceilings, checked BEFORE sit is asked for a diff (1.5.3).
+# sit's diff path costs ~95 B per line per side (split records, the edit
+# script, its annotations) on top of both whole-file buffers, so the old
+# backstop alone (16M lines, checked only on sit's answer) let a 16 MB file
+# of newlines with a 1-byte edit cost 2.5 GB to show five lines. Measured
+# peak RSS with both ceilings hit (8 MiB, 512 Ki lines, one edit): ~120 MB,
+# against ~13 MB for owl on a small file; ~160 MB at worst when the edit
+# script also fills sit's own 16M-cell Myers cap, which is size-independent.
+#   VCS_MAX_BYTES — bounds sit's two file buffers and owl's counting read.
+#   VCS_MAX_LINES — bounds the per-line cost; also the FINDING-012 backstop
+#                   on the line numbers sit reports back (one marker byte
+#                   per line), since an honest answer cannot exceed it.
+# A file over either still renders; it just shows no change markers.
+var VCS_MAX_BYTES = 8388608;            # 8 MiB
+var VCS_MAX_LINES = 524288;             # 512 Ki lines
+
 # First pass over the edit script: highest working-tree (new) line number
 # touched, so we size the marker array exactly. Keep and add ops carry a
 # new-side line; deletes carry 0.
-var VCS_MAX_LINES = 16777216;
-
 fn _max_new_line(ops) {
     var n = vec_len(ops);
     var i = 0;
@@ -190,31 +226,93 @@ fn _apply_ops(ops) {
 # That keeps markers correct for a file in a different repo than cwd, for an
 # absolute path anywhere, and for agnos (which has no cwd at all).
 
-# `<path[0..slash]>` is a repo root iff it has a `.sit/HEAD` or `.git/HEAD`.
-fn _vcs_probe_repo(path, slash) {
-    var probe = alloc(slash + 11);          # <dir> + "/.sit/HEAD"|"/.git/HEAD"(10) + NUL
-    memcpy(probe, path, slash);
-    memcpy(probe + slash, "/.sit/HEAD", 10);
-    store8(probe + slash + 10, 0);
-    if (file_exists(probe) == 1) { return 1; }
-    memcpy(probe + slash, "/.git/HEAD", 10);
-    store8(probe + slash + 10, 0);
-    if (file_exists(probe) == 1) { return 1; }
-    return 0;
+# --- stat probes: never open() --------------------------------------------
+# Every path this module inspects before sit runs is classified by stat(2) /
+# lstat(2), which never block. file_exists() OPENS its argument, and open(2)
+# on a FIFO waits for a writer: a FIFO named `.git/HEAD` in any ancestor of
+# the viewed file hung owl forever (1.5.3 audit). st_mode is read through the
+# per-target STAT_MODE offset (24 x86_64-Linux, 16 aarch64-Linux, 0 agnos).
+var VCS_S_IFMT  = 0xF000;
+var VCS_S_IFDIR = 0x4000;
+var VCS_S_IFREG = 0x8000;
+var VCS_S_IFLNK = 0xA000;
+
+# lstat `path` into `st` (>= 256 bytes): the final component is not followed.
+# 0 on success, nonzero on failure.
+fn _vcs_lstat(path, st) {
+    #ifdef CYRIUS_TARGET_AGNOS
+    var n = strlen(path);
+    if (sys_lstat(path, n, st) == 0) { return 0; }
+    # agnos lstat#102 is ext2-only: FAT/exFAT answer -1 for every path. Those
+    # cannot hold a symlink, so the following stat IS the no-follow answer
+    # there (and on ext2 a path lstat cannot see, stat cannot either).
+    return sys_stat(path, n, st);
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
+    return sys_lstat(path, st);
+    #endif
+}
+
+# S_IFMT bits of `path` — following symlinks when `follow` is 1 (stat), not
+# following a final one when 0 (lstat) — or -1 if it can't be stat'd.
+fn _vcs_kind(path, follow) {
+    var st[256];
+    var rc = 0;
+    if (follow == 1) { rc = xstat(path, &st); } else { rc = _vcs_lstat(path, &st); }
+    if (rc != 0) { return 0 - 1; }
+    return load32(&st + STAT_MODE) & VCS_S_IFMT;
+}
+
+# What one directory on the walk up is, for repo discovery.
+var VCS_PROBE_NONE   = 0;    # no repository here — keep walking up
+var VCS_PROBE_ROOT   = 1;    # a repository sit can open
+var VCS_PROBE_LINKED = 2;    # `.git` is a gitdir: link — stop, no markers
+
+# Classify the directory `buf[0..slash]`. `buf` is a scratch copy of the path
+# with room for 11 bytes from `slash` on; the probe suffix is written there.
+# A root needs a REGULAR `HEAD` file (stat, so a symlinked HEAD to a regular
+# file still counts, as it does for sit). A HEAD that is a FIFO, socket or
+# device is no repository — sit's own probe agrees — and neither is one that
+# is a directory, which no real repository has.
+fn _vcs_probe_repo(buf, slash) {
+    memcpy(buf + slash, "/.sit/HEAD", 10);
+    store8(buf + slash + 10, 0);
+    if (_vcs_kind(buf, 1) == VCS_S_IFREG) { return VCS_PROBE_ROOT; }
+    # `.git` itself: a directory is a repository; a regular FILE is the
+    # `gitdir: <path>` pointer a submodule or `git worktree add` leaves. sit
+    # can't follow it, and walking on would reach the superproject, where the
+    # file is untracked and every line would read as added.
+    memcpy(buf + slash, "/.git", 5);
+    store8(buf + slash + 5, 0);
+    var gk = _vcs_kind(buf, 1);
+    if (gk == VCS_S_IFREG) { return VCS_PROBE_LINKED; }
+    if (gk != VCS_S_IFDIR) { return VCS_PROBE_NONE; }
+    memcpy(buf + slash, "/.git/HEAD", 10);
+    store8(buf + slash + 10, 0);
+    if (_vcs_kind(buf, 1) == VCS_S_IFREG) { return VCS_PROBE_ROOT; }
+    return VCS_PROBE_NONE;
 }
 
 # Nearest ancestor of ABSOLUTE `path` that is a repo root, heap, or 0 if the
-# file is under no repo (checked at the file's level and every level up).
+# file is under no repo (checked at the file's level and every level up), or
+# -1 if the walk stopped at a `.git` gitdir: link (no markers either way).
 fn _vcs_find_repo_root(path) {
     var len = strlen(path);
     if (len == 0) { return 0; }
     if (load8(path) != 47) { return 0; }    # need an absolute path (leading '/')
+    # One scratch buffer for every probe: the prefix up to `slash` is the
+    # path itself, and each level up only shortens it.
+    var buf = alloc(len + 16);
+    if (buf == 0) { return 0; }
+    memcpy(buf, path, len);
     var end = len;
     while (end > 1) {
         var slash = end - 1;
         while (slash > 0 && load8(path + slash) != 47) { slash = slash - 1; }
         if (slash == 0) { return 0; }        # reached '/'; no repo above
-        if (_vcs_probe_repo(path, slash) == 1) {
+        var pr = _vcs_probe_repo(buf, slash);
+        if (pr == VCS_PROBE_LINKED) { return 0 - 1; }
+        if (pr == VCS_PROBE_ROOT) {
             var root = alloc(slash + 1);
             memcpy(root, path, slash);
             store8(root + slash, 0);
@@ -241,9 +339,33 @@ fn _vcs_rel_to_root(path, root) {
     return rel;
 }
 
+# 1 when repo-relative `rel` is inside the repository's own metadata — its
+# first component is `.git` or `.sit` (e.g. `.git/config`). No HEAD tree
+# holds such a path, so sit would mark every line of it as added.
+fn _vcs_rel_is_meta(rel) {
+    if (load8(rel) != 46) { return 0; }                 # '.'
+    var n = 0;
+    while (load8(rel + n) != 0 && load8(rel + n) != 47) { n = n + 1; }
+    if (n != 4) { return 0; }
+    if (memeq(rel, ".git", 4) == 1) { return 1; }
+    if (memeq(rel, ".sit", 4) == 1) { return 1; }
+    return 0;
+}
+
+# Set by _vcs_normalize when it refuses a path (see there).
+var g_vcs_dotdot_link = 0;
+
 # Canonicalise an ABSOLUTE path: resolve "." and ".." so a relative arg that
 # escapes the repo (e.g. `../x`) walks up from its REAL location, not through
 # the cwd repo. Collapses to "/" when everything cancels. Heap, caller-owns.
+#
+# Lexical ".." is only right when the component it cancels is a real
+# directory. After a symlink the kernel goes to the parent of the link's
+# TARGET: with `R/lnk -> ../X/sub`, `R/lnk/../f` opens X/f while the lexical
+# answer is R/f — owl would show one file and mark another's changes. So
+# each ".." lstat()s the prefix it is about to drop, and anything but a
+# directory there returns 0 with g_vcs_dotdot_link set (no markers; the
+# kernel would have refused a non-directory, so in practice it's a symlink).
 fn _vcs_normalize(path) {
     var plen = strlen(path);
     var out = alloc(plen + 2);
@@ -264,6 +386,11 @@ fn _vcs_normalize(path) {
             if (dot == 0) {
                 if (dotdot == 1) {
                     if (olen > 1) {           # pop the last kept component
+                        store8(out + olen, 0);
+                        if (_vcs_kind(out, 0) != VCS_S_IFDIR) {
+                            g_vcs_dotdot_link = 1;
+                            return 0;
+                        }
                         var k = olen - 1;
                         while (k > 0 && load8(out + k) != 47) { k = k - 1; }
                         olen = k;
@@ -285,8 +412,8 @@ fn _vcs_normalize(path) {
 
 # Resolve `path` to a canonical absolute path. Linux: prepend cwd for a
 # relative arg (getcwd), then normalise. agnos: no cwd — require an absolute
-# path (owl is always handed one there), just normalise. 0 on getcwd failure
-# or a relative path on agnos.
+# path (owl is always handed one there), just normalise. 0 on getcwd failure,
+# a relative path on agnos, or a ".." after a symlink (_vcs_normalize).
 fn _vcs_abspath(path) {
     #ifndef CYRIUS_TARGET_AGNOS
     if (load8(path) != 47) {
@@ -317,6 +444,83 @@ fn _vcs_warn_outside() {
     if (g_flag_diff == 1) { eprint("owl: outside of repo - no diff\n", 31); }
 }
 
+# The same self-gating note for the other reasons a file gets no markers:
+# silent in gutter mode, one line on stderr under `--diff` so an empty diff
+# is not mistaken for "no changes".
+fn _vcs_warn(msg) {
+    if (g_flag_diff == 1) { eprint(msg, strlen(msg)); }
+}
+
+# --- working-tree guards ---------------------------------------------------
+var VCS_WT_OK       = 0;
+var VCS_WT_SYMLINK  = 1;     # the path names a symlink
+var VCS_WT_TOOLARGE = 2;     # over VCS_MAX_BYTES or VCS_MAX_LINES
+var VCS_WT_OTHER    = 3;     # not a regular file, or unreadable
+
+var VCS_RDBUF_SIZE = 65536;
+var g_vcs_rdbuf = 0;         # lazily allocated once, reused per file
+
+# Lines in the regular file `apath`, by a bounded read: at most
+# VCS_MAX_BYTES + 1 bytes are read, and counting stops as soon as the total
+# passes VCS_MAX_LINES. An unterminated last line counts. Returns the count
+# (VCS_MAX_LINES + 1 when over either ceiling), or -1 on a read error.
+fn _vcs_count_lines(apath) {
+    if (g_vcs_rdbuf == 0) { g_vcs_rdbuf = alloc(VCS_RDBUF_SIZE); }
+    if (g_vcs_rdbuf == 0) { return 0 - 1; }
+    var fd = file_open(apath, O_RDONLY, 0);
+    if (fd < 0) { return 0 - 1; }
+    var total = 0;
+    var lines = 0;
+    var last = 10;
+    var err = 0;
+    var go = 1;
+    while (go == 1) {
+        var want = VCS_MAX_BYTES + 1 - total;
+        if (want > VCS_RDBUF_SIZE) { want = VCS_RDBUF_SIZE; }
+        var n = 0;
+        if (want > 0) { n = file_read(fd, g_vcs_rdbuf, want); }
+        if (n < 0) { err = 1; }
+        if (n <= 0) {
+            go = 0;
+        } else {
+            var i = 0;
+            while (i < n) {
+                if (load8(g_vcs_rdbuf + i) == 10) { lines = lines + 1; }
+                i = i + 1;
+            }
+            last = load8(g_vcs_rdbuf + n - 1);
+            total = total + n;
+            if (lines > VCS_MAX_LINES) { go = 0; }
+        }
+    }
+    file_close(fd);
+    if (err == 1) { return 0 - 1; }
+    if (total > VCS_MAX_BYTES) { return VCS_MAX_LINES + 1; }   # grew since the stat
+    if (last != 10) { lines = lines + 1; }
+    return lines;
+}
+
+# Is the working-tree file at ABSOLUTE `apath` (the same file sit will read)
+# one owl should diff? One lstat answers symlink / regular / size; only a
+# file large enough to break the line ceiling (more bytes than
+# VCS_MAX_LINES) pays for the counting read.
+fn _vcs_worktree_check(apath) {
+    var st[256];
+    if (_vcs_lstat(apath, &st) != 0) { return VCS_WT_OTHER; }
+    var kind = load32(&st + STAT_MODE) & VCS_S_IFMT;
+    # A tracked symlink is stored as its target TEXT; owl shows the target's
+    # CONTENT, and sit reads through the link — so every line read as changed.
+    if (kind == VCS_S_IFLNK) { return VCS_WT_SYMLINK; }
+    if (kind != VCS_S_IFREG) { return VCS_WT_OTHER; }
+    var size = load64(&st + STAT_SIZE);
+    if (size > VCS_MAX_BYTES) { return VCS_WT_TOOLARGE; }
+    if (size <= VCS_MAX_LINES) { return VCS_WT_OK; }     # can't hold more lines than bytes
+    var lines = _vcs_count_lines(apath);
+    if (lines < 0) { return VCS_WT_OTHER; }
+    if (lines > VCS_MAX_LINES) { return VCS_WT_TOOLARGE; }
+    return VCS_WT_OK;
+}
+
 # Public entry — populate per-line markers for `path`. Silent on any
 # failure: gutter just shows no markers. Call exactly once per file,
 # before render begins.
@@ -330,12 +534,25 @@ fn vcs_compute_markers(path) {
     # the process cwd. Outside any repo: warn (under --diff) and show nothing,
     # rather than diffing against an unrelated repo, which marks the whole file
     # "added" (a name absent from HEAD but present on disk).
+    g_vcs_dotdot_link = 0;
     var abspath = _vcs_abspath(path);
-    if (abspath == 0) { return 0; }
+    if (abspath == 0) {
+        if (g_vcs_dotdot_link == 1) { _vcs_warn("owl: path has '..' after a symlink - no diff\n"); }
+        return 0;
+    }
     var root = _vcs_find_repo_root(abspath);
+    if (root == 0 - 1) { _vcs_warn("owl: linked worktree or submodule (.git file) - no diff\n"); return 0; }
     if (root == 0) { _vcs_warn_outside(); return 0; }
     var rel = _vcs_rel_to_root(abspath, root);
     if (rel == 0) { _vcs_warn_outside(); return 0; }
+    # The repo's own `.git/` / `.sit/` is not part of its work tree.
+    if (_vcs_rel_is_meta(rel) == 1) { _vcs_warn_outside(); return 0; }
+    # Bound what sit will be handed BEFORE it reads anything (see
+    # VCS_MAX_BYTES / VCS_MAX_LINES); also no symlinks, no special files.
+    var wt = _vcs_worktree_check(abspath);
+    if (wt == VCS_WT_SYMLINK)  { _vcs_warn("owl: symlink - no diff\n"); return 0; }
+    if (wt == VCS_WT_TOOLARGE) { _vcs_warn("owl: file too large to diff - no diff\n"); return 0; }
+    if (wt != VCS_WT_OK) { return 0; }
     sit_set_repo_root(root);
     var repo = sit_repo_open(root);
     if (repo == 0) { sit_set_repo_root(0); return 0; }
@@ -351,9 +568,9 @@ fn vcs_compute_markers(path) {
     # backend, and the gutter sizes an allocation from it. sit reads
     # `.git/` repos that may have been cloned from anywhere, so a corrupt
     # or hostile object can hand back a nonsense line count. Fail closed
-    # above a ceiling no real file reaches rather than trying to allocate
-    # and zero it. VCS_MAX_LINES is one byte per line, so this caps the
-    # marker table at 16 MB for a 16-million-line file.
+    # above the ceiling the working-tree file was already checked against
+    # (an honest answer can't exceed it) rather than allocate and zero it.
+    # One byte per line: the marker table is at most 512 KiB.
     if (max_line > VCS_MAX_LINES) { return 0; }
 
     g_vcs_marks = alloc(max_line);

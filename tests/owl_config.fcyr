@@ -1,0 +1,1137 @@
+# owl — fuzz harness for the config and theme line parsers
+#
+# Opened at 1.5.3: the 1.4.6 audit's other open recommendation
+# (tests/owl.fcyr covers the escape classifier). The config and theme
+# files are user input read at every startup, and the 1.5.3 audit found
+# five defects in their parsers by hand — a dangling theme-name pointer,
+# silent truncation with a cut last line, case-blind and first-wins
+# `ext.` keys, i64 wraparound in theme colours, and a theme name that
+# could leave its directory.
+#
+# `src/lang.cyr`, `src/theme.cyr` and `src/config.cyr` are included
+# directly. main.cyr cannot be (it ends in a top-level call), so the few
+# symbols config.cyr reaches in main.cyr / pager.cyr / vcs.cyr are stubbed
+# below. The stubs accept exactly what the real setters accept and LOG
+# every call, which is what lets the invariants talk about what the parser
+# handed over rather than only whether it crashed.
+#
+# ── Invariants ────────────────────────────────────────────────────────
+#
+#   1. **Hand-off is exact.** For every config line, the outcome code
+#      matches an independent reference model of the documented grammar
+#      (trim, first `=`, one quote pair, 63-byte cap, no NUL). A setter is
+#      called exactly once for an applied line and never otherwise, and
+#      what it receives is a NUL-terminated copy of at most 63 bytes equal
+#      to the model's value span — so it occurs verbatim in the line after
+#      the first `=`.
+#   2. **Theme colours stay in range.** After every theme line every slot
+#      is in -1..255 (header/lineno 0..255), the slot table equals the
+#      model's, and a value of more than three digits never lands
+#      (FINDING-010's wraparound lesson; `2^64 + 100` is not 100).
+#   3. **Theme names stay in their directory.** Any name with `/`, and
+#      "", ".", "..", is refused; the slot's name is a private copy, so
+#      reusing the caller's buffer cannot rename the loaded theme.
+#   4. **ext overrides.** Stored extensions are lowercase with one leading
+#      dot; re-registering an extension replaces it in place; the 17th
+#      distinct one reports "too many", and the table equals the model's.
+#   5. **Parsing is total and ordered.** A multi-line buffer applies each
+#      line exactly once, in file order — the setter-call log equals the
+#      model's — so the last occurrence of a key wins, and the reported
+#      error count matches. A truncated buffer never applies its tail.
+#   6. **The reader reads only regular files, boundedly.** A directory, a
+#      character device and a FIFO are refused without blocking; a regular
+#      file is read up to the cap, with "more follows" reported exactly
+#      when bytes beyond cap + its newline exist.
+#
+# Pseudorandom lines from a fixed xorshift seed (same generator as
+# tests/owl.fcyr), so a failure reproduces exactly. The generator is
+# biased toward the bytes the grammar turns on — `=`, `"`, whitespace,
+# `#`, CR, NUL — plus digit runs, values around the 63-byte cap, known
+# keys and `ext.` keys from a small, case-mixed pool so collisions and a
+# full table are common. Run under `cyrius fuzz --poison` too: every
+# buffer here is alloc()'d, so an out-of-bounds write hits a redzone.
+
+include "src/lang.cyr"
+include "src/theme.cyr"
+include "src/config.cyr"
+
+var CFG_LINES   = 20000;
+var THEME_LINES = 20000;
+var MULTI_BUFS  = 3000;
+
+var g_rng = 0x2545F4914F6CDD1D;
+
+fn _rnd() {
+    var x = g_rng;
+    x = x ^ (x * 8192);          # x ^= x << 13
+    x = x ^ (x / 128);           # x ^= x >> 7
+    x = x ^ (x * 262144);        # x ^= x << 17
+    if (x == 0) { x = 88172645463325252; }
+    g_rng = x;
+    if (x < 0) { return 0 - x; }
+    return x;
+}
+
+fn _fail(msg) {
+    eprint("owl config fuzz: ", 17);
+    eprint(msg, strlen(msg));
+    eprint("\n", 1);
+    return 1;
+}
+
+# Bounded strlen: never reads more than `cap` bytes, so a missing NUL is a
+# length mismatch here rather than a wild read.
+fn _blen(p, cap) {
+    var n = 0;
+    var going = 1;
+    while (going == 1) {
+        if (n >= cap) { going = 0; continue; }
+        if (load8(p + n) == 0) { going = 0; continue; }
+        n = n + 1;
+    }
+    return n;
+}
+
+# ── Stubs for main.cyr / pager.cyr / vcs.cyr ─────────────────────────────
+
+var g_active_theme = 0;
+
+var LOG_MAX  = 256;
+var LOG_REC  = 80;          # 8 which + 8 len + 64 bytes
+var g_log    = 0;
+var g_log_n  = 0;
+var g_log_overflow = 0;
+
+fn _log_reset() { g_log_n = 0; g_log_overflow = 0; return 0; }
+
+fn _rec(which, value) {
+    if (g_log_n >= LOG_MAX) { g_log_overflow = 1; return 0; }
+    var r = g_log + g_log_n * LOG_REC;
+    var n = _blen(value, 72);
+    store64(r, which);
+    store64(r + 8, n);
+    var k = 0;
+    while (k < n) {
+        if (k < 64) { store8(r + 16 + k, load8(value + k)); }
+        k = k + 1;
+    }
+    g_log_n = g_log_n + 1;
+    return 0;
+}
+
+var W_PAGING = 1;
+var W_STYLE  = 2;
+var W_TABS   = 3;
+var W_WRAP   = 4;
+var W_THEME  = 5;
+var W_EXT    = 6;
+
+fn _acc(which, v) {
+    if (which == W_PAGING) {
+        if (streq(v, "auto") == 1)   { return 1; }
+        if (streq(v, "always") == 1) { return 1; }
+        if (streq(v, "never") == 1)  { return 1; }
+        return 0;
+    }
+    if (which == W_STYLE) {
+        if (streq(v, "auto") == 1)       { return 1; }
+        if (streq(v, "changes") == 1)    { return 1; }
+        if (streq(v, "no-changes") == 1) { return 1; }
+        return 0;
+    }
+    if (which == W_WRAP) {
+        if (streq(v, "auto") == 1)      { return 1; }
+        if (streq(v, "never") == 1)     { return 1; }
+        if (streq(v, "character") == 1) { return 1; }
+        return 0;
+    }
+    # W_TABS — main.cyr set_tabs: 1..3 digits, value <= 64.
+    var n = strlen(v);
+    if (n == 0) { return 0; }
+    if (n > 3)  { return 0; }
+    var t = 0;
+    var p = 0;
+    while (p < n) {
+        var c = load8(v + p);
+        if (c < 48) { return 0; }
+        if (c > 57) { return 0; }
+        t = t * 10 + (c - 48);
+        p = p + 1;
+    }
+    if (t > 64) { return 0; }
+    return 1;
+}
+
+fn set_paging(v) { _rec(W_PAGING, v); if (_acc(W_PAGING, v) == 1) { return 0; } return 1; }
+fn set_style(v)  { _rec(W_STYLE, v);  if (_acc(W_STYLE, v) == 1)  { return 0; } return 1; }
+fn set_tabs(v)   { _rec(W_TABS, v);   if (_acc(W_TABS, v) == 1)   { return 0; } return 1; }
+fn set_wrap(v)   { _rec(W_WRAP, v);   if (_acc(W_WRAP, v) == 1)   { return 0; } return 1; }
+
+# main.cyr's version replaces control bytes; the harness silences fd 2
+# around the only phase that prints, so a plain write is enough.
+fn eprint_sanitized(s, n) { eprint(s, n); return 0; }
+
+var g_saved_err = 0 - 1;
+fn _quiet_on() {
+    g_saved_err = syscall(SYS_DUP, 2);
+    var fd = file_open("/dev/null", O_WRONLY, 0);
+    if (fd >= 0) { sys_dup2(fd, 2); file_close(fd); }
+    return 0;
+}
+fn _quiet_off() {
+    if (g_saved_err >= 0) { sys_dup2(g_saved_err, 2); file_close(g_saved_err); }
+    g_saved_err = 0 - 1;
+    return 0;
+}
+
+# ── Line generator ──────────────────────────────────────────────────────
+
+var g_line  = 0;            # current line buffer (LINE_CAP bytes)
+var LINE_CAP = 512;
+var g_ln    = 0;            # its length
+var g_hermetic = 0;         # 1 → theme values never trigger a disk lookup
+
+fn _putc(c) {
+    if (g_ln < LINE_CAP) { store8(g_line + g_ln, c); g_ln = g_ln + 1; }
+    return 0;
+}
+fn _puts(s) {
+    var n = strlen(s);
+    var k = 0;
+    while (k < n) { _putc(load8(s + k)); k = k + 1; }
+    return 0;
+}
+fn _put_ws() {
+    var r = _rnd() % 10;
+    if (r < 4) { return 0; }
+    if (r < 6) { return _putc(32); }
+    if (r < 7) { return _putc(9); }
+    if (r < 8) { return _putc(13); }
+    _putc(32); _putc(32);
+    return 0;
+}
+# A byte from the alphabet the grammar cares about. Never LF: lines are
+# split on LF before the parser sees them.
+fn _junk_byte() {
+    var r = _rnd() % 100;
+    if (r < 12) { return 61; }          # =
+    if (r < 22) { return 34; }          # "
+    if (r < 30) { return 32; }
+    if (r < 35) { return 9; }
+    if (r < 40) { return 13; }
+    if (r < 45) { return 35; }          # #
+    if (r < 49) { return 0; }           # NUL
+    if (r < 56) { return 46; }          # .
+    if (r < 60) { return 47; }          # /
+    if (r < 75) { return 48 + (_rnd() % 10); }
+    if (r < 90) { return 97 + (_rnd() % 26); }
+    var b = _rnd() % 256;
+    if (b == 10) { b = 65; }
+    return b;
+}
+fn _put_junk(n) {
+    var k = 0;
+    while (k < n) { _putc(_junk_byte()); k = k + 1; }
+    return 0;
+}
+
+fn _ext_base(i) {
+    if (i == 0) { return "conf"; }
+    if (i == 1) { return "md"; }
+    if (i == 2) { return "x1"; }
+    if (i == 3) { return "cfg"; }
+    if (i == 4) { return "tpl"; }
+    if (i == 5) { return "rc"; }
+    if (i == 6) { return "zz"; }
+    if (i == 7) { return "in"; }
+    if (i == 8) { return "py"; }
+    if (i == 9) { return "j2"; }
+    if (i == 10) { return "abc"; }
+    if (i == 11) { return "q"; }
+    if (i == 12) { return "log"; }
+    if (i == 13) { return "lst"; }
+    if (i == 14) { return "def"; }
+    if (i == 15) { return "w"; }
+    if (i == 16) { return "kk"; }
+    if (i == 17) { return "mm"; }
+    if (i == 18) { return "nn"; }
+    if (i == 19) { return "oo"; }
+    return "pp";
+}
+
+fn _put_ext_key() {
+    _puts("ext.");
+    var r = _rnd() % 100;
+    if (r < 6) { return _put_junk(_rnd() % 8); }
+    if (r < 9) {
+        var m = 60 + (_rnd() % 8);
+        var k = 0;
+        while (k < m) { _putc(101); k = k + 1; }
+        return 0;
+    }
+    if (r < 25) { _putc(46); }          # leading dot: "ext..conf"
+    var b = _ext_base(_rnd() % 21);
+    var n = strlen(b);
+    var k2 = 0;
+    while (k2 < n) {
+        var c = load8(b + k2);
+        if (_rnd() % 3 == 0) { if (c >= 97) { if (c <= 122) { c = c - 32; } } }
+        _putc(c);
+        k2 = k2 + 1;
+    }
+    return 0;
+}
+
+fn _put_key() {
+    var r = _rnd() % 100;
+    if (r < 12) { return _puts("tabs"); }
+    if (r < 22) { return _puts("paging"); }
+    if (r < 32) { return _puts("style"); }
+    if (r < 42) { return _puts("wrap"); }
+    if (r < 52) { return _puts("theme"); }
+    if (r < 75) { return _put_ext_key(); }
+    if (r < 78) { return _puts("Tabs"); }
+    if (r < 80) { return _puts("ext."); }
+    if (r < 82) { return _puts("bogus"); }
+    if (r < 84) { _puts("ta"); _putc(0); return _puts("bs"); }
+    return _put_junk(_rnd() % 10);
+}
+
+# Value biased by the kind of key just written: K_THEME, K_EXT, K_TABS,
+# K_WORD (paging/style/wrap), or K_OTHER. Each kind mostly gets values
+# its key could accept, so lines get past the setter often enough for
+# the hand-off invariants to bite, and ext lines fill the table.
+var K_OTHER = 0;
+var K_THEME = 1;
+var K_EXT   = 2;
+var K_TABS  = 3;
+var K_WORD  = 4;
+
+fn _put_value_core(kind) {
+    var r = _rnd() % 100;
+    if (kind == K_EXT) {
+        if (r < 30) { return _puts("shell"); }
+        if (r < 45) { return _puts("python"); }
+        if (r < 55) { return _puts("ini"); }
+        if (r < 62) { return _puts("markdown"); }
+        if (r < 66) { return _puts("bogus-lang"); }
+        r = _rnd() % 100;
+    }
+    if (kind == K_TABS) {
+        if (r < 60) {
+            var dd = 1 + (_rnd() % 3);
+            var kk = 0;
+            while (kk < dd) { _putc(48 + (_rnd() % 10)); kk = kk + 1; }
+            return 0;
+        }
+        r = _rnd() % 100;
+    }
+    if (kind == K_WORD) {
+        if (r < 60) { r = _rnd() % 30; }
+        else { r = _rnd() % 100; }
+    }
+    if (kind == K_THEME) {
+        if (r < 30) { return _puts("dark"); }
+        if (r < 55) { return _puts("light"); }
+        if (r < 62) { return _puts("../x"); }
+        if (r < 67) { return _puts("a/b"); }
+        if (r < 70) { return _puts(".."); }
+        if (r < 72) { return _puts("."); }
+        if (g_hermetic == 1) { return _puts("dark/"); }
+        if (r < 76) { return _puts("owl-fuzz-no-such-theme"); }
+    }
+    if (r < 8)  { return _puts("auto"); }
+    if (r < 13) { return _puts("always"); }
+    if (r < 18) { return _puts("never"); }
+    if (r < 22) { return _puts("changes"); }
+    if (r < 26) { return _puts("no-changes"); }
+    if (r < 30) { return _puts("character"); }
+    if (r < 35) { return _puts("shell"); }
+    if (r < 38) { return _puts("python"); }
+    if (r < 40) { return _puts("ini"); }
+    if (r < 42) { return _puts("bogus-lang"); }
+    if (r < 55) {
+        var d = 1 + (_rnd() % 4);
+        if (_rnd() % 8 == 0) { d = 5 + (_rnd() % 20); }
+        var k = 0;
+        while (k < d) { _putc(48 + (_rnd() % 10)); k = k + 1; }
+        return 0;
+    }
+    if (r < 63) {
+        # around the 63-byte cap
+        var m = 60 + (_rnd() % 8);
+        var k3 = 0;
+        while (k3 < m) { _putc(120); k3 = k3 + 1; }
+        return 0;
+    }
+    if (r < 66) {
+        var m4 = 100 + (_rnd() % 200);
+        var k4 = 0;
+        while (k4 < m4) { _putc(121); k4 = k4 + 1; }
+        return 0;
+    }
+    if (r < 70) { _puts("8"); _putc(0); return _puts("junk"); }
+    return _put_junk(_rnd() % 14);
+}
+
+# Build one config line into g_line / g_ln.
+fn _gen_cfg_line() {
+    g_ln = 0;
+    var r = _rnd() % 100;
+    if (r < 3) { return _put_junk(_rnd() % 40); }
+    if (r < 5) { _put_ws(); _putc(35); return _put_junk(_rnd() % 20); }
+    if (r < 6) { return _put_ws(); }
+    _put_ws();
+    var key_start = g_ln;
+    _put_key();
+    var kl = g_ln - key_start;
+    var kind = K_OTHER;
+    if (kl == 5) { if (memeq(g_line + key_start, "theme", 5) == 1) { kind = K_THEME; } }
+    if (kl == 4) { if (memeq(g_line + key_start, "tabs", 4) == 1)  { kind = K_TABS; } }
+    if (kl == 4) { if (memeq(g_line + key_start, "wrap", 4) == 1)  { kind = K_WORD; } }
+    if (kl == 5) { if (memeq(g_line + key_start, "style", 5) == 1) { kind = K_WORD; } }
+    if (kl == 6) { if (memeq(g_line + key_start, "paging", 6) == 1) { kind = K_WORD; } }
+    if (kl > 4)  { if (memeq(g_line + key_start, "ext.", 4) == 1)  { kind = K_EXT; } }
+    _put_ws();
+    var e = _rnd() % 100;
+    if (e < 92) { _putc(61); }
+    if (e >= 97) { _putc(61); _putc(61); }
+    _put_ws();
+    var q = _rnd() % 100;
+    if (q < 15) { _putc(34); }
+    _put_value_core(kind);
+    if (q < 12) { _putc(34); }
+    if (q >= 15) { if (q < 18) { _putc(34); } }
+    _put_ws();
+    if (_rnd() % 25 == 0) { _puts(" # c"); }
+    return 0;
+}
+
+# ── Reference model: config line ────────────────────────────────────────
+
+var g_m_which = 0;          # W_* reached, 0 = none
+var g_m_vs = 0;
+var g_m_ve = 0;
+var g_m_theme_idx = 0;
+var M_EITHER = 99;          # theme name that may or may not exist on disk
+
+# The model's own ext table, kept in step with lang.cyr's.
+var g_mx_keys = 0;          # 16 * 72
+var g_mx_lang = 0;          # 16 * 8
+var g_mx_n = 0;
+var g_mtmp = 0;             # 128-byte scratch
+
+fn _m_ws(c) {
+    if (c == 9)  { return 1; }
+    if (c == 10) { return 1; }
+    if (c == 13) { return 1; }
+    if (c == 32) { return 1; }
+    return 0;
+}
+
+fn _m_keyis(line, ks, ke, s) {
+    var n = strlen(s);
+    if (ke - ks != n) { return 0; }
+    return memeq(line + ks, s, n);
+}
+
+fn _m_has_nul(p, a, b) {
+    var k = a;
+    while (k < b) { if (load8(p + k) == 0) { return 1; } k = k + 1; }
+    return 0;
+}
+
+# Normalised ext (leading dot, lowercase) of line[a..b) into g_mtmp.
+fn _m_norm_ext(line, a, b) {
+    var o = 0;
+    if (load8(line + a) != 46) { store8(g_mtmp, 46); o = 1; }
+    var k = a;
+    while (k < b) {
+        var c = load8(line + k);
+        if (c >= 65) { if (c <= 90) { c = c + 32; } }
+        store8(g_mtmp + o, c);
+        o = o + 1;
+        k = k + 1;
+    }
+    store8(g_mtmp + o, 0);
+    return o;
+}
+
+fn _m_theme_name_ok(p, n) {
+    if (n == 0) { return 0; }
+    if (n > 250) { return 0; }
+    var k = 0;
+    while (k < n) { if (load8(p + k) == 47) { return 0; } k = k + 1; }
+    if (n == 1) { if (load8(p) == 46) { return 0; } }
+    if (n == 2) { if (load8(p) == 46) { if (load8(p + 1) == 46) { return 0; } } }
+    return 1;
+}
+
+# Expected outcome of _cfg_parse_line on line[0..n). Updates the model's
+# ext table exactly as the real one should change.
+fn _model_cfg(line, n) {
+    g_m_which = 0;
+    var first = 0 - 1;
+    var last = 0 - 1;
+    var i = 0;
+    while (i < n) {
+        if (_m_ws(load8(line + i)) == 0) {
+            if (first < 0) { first = i; }
+            last = i;
+        }
+        i = i + 1;
+    }
+    if (first < 0) { return 0; }
+    if (load8(line + first) == 35) { return 0; }
+    var eq = 0 - 1;
+    i = 0;
+    while (i < n) {
+        if (eq < 0) { if (load8(line + i) == 61) { eq = i; } }
+        i = i + 1;
+    }
+    if (eq < 0) { return CFG_E_SYNTAX; }
+    var ke = eq;
+    var going = 1;
+    while (going == 1) {
+        if (ke <= first) { going = 0; continue; }
+        if (_m_ws(load8(line + ke - 1)) == 0) { going = 0; continue; }
+        ke = ke - 1;
+    }
+    if (ke <= first) { return CFG_E_NOKEY; }
+    var vs = eq + 1;
+    var ve = last + 1;
+    going = 1;
+    while (going == 1) {
+        if (vs >= ve) { going = 0; continue; }
+        if (_m_ws(load8(line + vs)) == 0) { going = 0; continue; }
+        vs = vs + 1;
+    }
+    if (ve - vs >= 2) {
+        if (load8(line + vs) == 34) {
+            if (load8(line + ve - 1) == 34) { vs = vs + 1; ve = ve - 1; }
+        }
+    }
+    if (vs >= ve) { return CFG_E_NOVAL; }
+    g_m_vs = vs;
+    g_m_ve = ve;
+    var vlen = ve - vs;
+    if (vlen > 63) { return CFG_E_VALUE; }
+    if (_m_has_nul(line, vs, ve) == 1) { return CFG_E_VALUE; }
+    # NUL-terminated copy of the value for the acceptance oracles.
+    var vcopy = g_mtmp + 64;
+    var k = 0;
+    while (k < vlen) { store8(vcopy + k, load8(line + vs + k)); k = k + 1; }
+    store8(vcopy + vlen, 0);
+
+    if (_m_keyis(line, first, ke, "theme") == 1) {
+        g_m_which = W_THEME;
+        if (streq(vcopy, "dark") == 1)  { g_m_theme_idx = 0; return 0; }
+        if (streq(vcopy, "light") == 1) { g_m_theme_idx = 1; return 0; }
+        if (_m_theme_name_ok(vcopy, vlen) == 0) { return CFG_E_VALUE; }
+        return M_EITHER;
+    }
+    var w = 0;
+    if (_m_keyis(line, first, ke, "paging") == 1) { w = W_PAGING; }
+    if (_m_keyis(line, first, ke, "style") == 1)  { w = W_STYLE; }
+    if (_m_keyis(line, first, ke, "tabs") == 1)   { w = W_TABS; }
+    if (_m_keyis(line, first, ke, "wrap") == 1)   { w = W_WRAP; }
+    if (w != 0) {
+        g_m_which = w;
+        if (_acc(w, vcopy) == 1) { return 0; }
+        return CFG_E_VALUE;
+    }
+    var klen = ke - first;
+    if (klen > 4) {
+        if (memeq(line + first, "ext.", 4) == 1) {
+            if (klen - 4 >= 63) { return CFG_E_VALUE; }
+            if (_m_has_nul(line, first + 4, ke) == 1) { return CFG_E_VALUE; }
+            g_m_which = W_EXT;
+            var li = lang_index(vcopy);
+            if (li < 0) { return CFG_E_VALUE; }
+            _m_norm_ext(line, first + 4, ke);
+            var x = 0;
+            while (x < g_mx_n) {
+                if (streq(g_mx_keys + x * 72, g_mtmp) == 1) {
+                    store64(g_mx_lang + x * 8, li);
+                    return 0;
+                }
+                x = x + 1;
+            }
+            if (g_mx_n >= 16) { return CFG_E_EXTFULL; }
+            var dst = g_mx_keys + g_mx_n * 72;
+            var y = 0;
+            while (y <= strlen(g_mtmp)) { store8(dst + y, load8(g_mtmp + y)); y = y + 1; }
+            store64(g_mx_lang + g_mx_n * 8, li);
+            g_mx_n = g_mx_n + 1;
+            return 0;
+        }
+    }
+    return CFG_E_KEY;
+}
+
+fn _ext_reset() {
+    g_user_ext_count = 0;
+    g_mx_n = 0;
+    return 0;
+}
+
+# lang.cyr's table must equal the model's, entry for entry, all lowercase.
+fn _check_ext_table() {
+    if (g_user_ext_count != g_mx_n) { return _fail("ext table size differs from the model (replace / limit)"); }
+    var i = 0;
+    while (i < g_mx_n) {
+        var k = load64(g_user_ext_keys + i * 8);
+        var n = _blen(k, 80);
+        var j = 0;
+        while (j < n) {
+            var c = load8(k + j);
+            if (c >= 65) { if (c <= 90) { return _fail("ext key stored with an uppercase byte"); } }
+            j = j + 1;
+        }
+        if (load8(k) != 46) { return _fail("ext key stored without its leading dot"); }
+        if (streq(k, g_mx_keys + i * 72) == 0) { return _fail("ext key differs from the model"); }
+        if (load64(g_user_ext_langs + i * 8) != load64(g_mx_lang + i * 8)) {
+            return _fail("ext language differs from the model (re-register must replace)");
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Compare one log record with the model's value span on `line`.
+fn _check_rec(r, which, line) {
+    if (load64(r) != which) { return _fail("value handed to the wrong setter"); }
+    var n = load64(r + 8);
+    var want = g_m_ve - g_m_vs;
+    if (n > 63) { return _fail("setter value longer than 63 bytes / not NUL-terminated"); }
+    if (n != want) { return _fail("setter value length differs from the trimmed span"); }
+    if (memeq(r + 16, line + g_m_vs, n) == 0) { return _fail("setter value bytes differ from the input span"); }
+    return 0;
+}
+
+# Invariants 1 + 4, one random line at a time.
+fn _fuzz_cfg_lines() {
+    var round = 0;
+    _ext_reset();
+    while (round < CFG_LINES) {
+        if (round % 509 == 0) { _ext_reset(); }
+        _gen_cfg_line();
+        _log_reset();
+        var theme_before = g_active_theme;
+        var want = _model_cfg(g_line, g_ln);
+        var got = _cfg_parse_line(g_line, 0, g_ln);
+        if (want == M_EITHER) {
+            if (got != 0) { if (got != CFG_E_VALUE) { return _fail("theme line: unexpected outcome code"); } }
+            if (got == 0) {
+                if (g_active_theme != THEME_USER_INDEX) { return _fail("user theme accepted but not activated"); }
+            }
+        } else {
+            if (got != want) { return _fail("config line outcome differs from the reference model"); }
+        }
+        if (g_log_overflow == 1) { return _fail("log overflow"); }
+        var reach = 0;
+        if (g_m_which >= W_PAGING) { if (g_m_which <= W_WRAP) { reach = 1; } }
+        if (reach == 1) {
+            if (g_log_n != 1) { return _fail("an applied line did not call its setter exactly once"); }
+            if (_check_rec(g_log, g_m_which, g_line) != 0) { return 1; }
+        } else {
+            if (g_log_n != 0) { return _fail("a setter was called for a line that names no setter"); }
+        }
+        if (g_m_which == W_THEME) {
+            if (want == 0) {
+                if (g_active_theme != g_m_theme_idx) { return _fail("theme line activated the wrong theme"); }
+            }
+            if (got != 0) {
+                if (g_active_theme != theme_before) { return _fail("refused theme line changed the active theme"); }
+            }
+        }
+        if (_check_ext_table() != 0) { return 1; }
+        round = round + 1;
+    }
+    return 0;
+}
+
+# ── Theme lines ─────────────────────────────────────────────────────────
+
+var g_tsnap = 0;            # 15 * 8: header, lineno, tokens[10], vcs 1..3
+var g_tmod  = 0;            # the model's 15 slots
+
+fn _theme_key_name(i) {
+    if (i == 0)  { return "header_color"; }
+    if (i == 1)  { return "lineno_color"; }
+    if (i == 2)  { return "token.ident"; }
+    if (i == 3)  { return "token.keyword"; }
+    if (i == 4)  { return "token.string"; }
+    if (i == 5)  { return "token.number"; }
+    if (i == 6)  { return "token.comment"; }
+    if (i == 7)  { return "token.operator"; }
+    if (i == 8)  { return "token.punctuation"; }
+    if (i == 9)  { return "token.whitespace"; }
+    if (i == 10) { return "token.preprocessor"; }
+    if (i == 11) { return "token.error"; }
+    if (i == 12) { return "vcs.add"; }
+    if (i == 13) { return "vcs.mod"; }
+    if (i == 14) { return "vcs.del"; }
+    if (i == 15) { return "token."; }
+    if (i == 16) { return "Header_color"; }
+    return "bogus";
+}
+
+fn _snap(dst) {
+    store64(dst, g_user_theme_header);
+    store64(dst + 8, g_user_theme_lineno);
+    var i = 0;
+    while (i < 10) { store64(dst + 16 + i * 8, load64(g_user_theme_tokens + i * 8)); i = i + 1; }
+    i = 1;
+    while (i < 4) { store64(dst + 96 + (i - 1) * 8, load64(g_user_theme_vcs + i * 8)); i = i + 1; }
+    return 0;
+}
+
+fn _gen_theme_line() {
+    g_ln = 0;
+    var r = _rnd() % 100;
+    if (r < 3) { return _put_junk(_rnd() % 30); }
+    if (r < 5) { _putc(35); return _put_junk(_rnd() % 10); }
+    _put_ws();
+    _puts(_theme_key_name(_rnd() % 18));
+    _put_ws();
+    if (_rnd() % 20 != 0) { _putc(61); }
+    _put_ws();
+    var v = _rnd() % 100;
+    if (v < 4)  { _puts("-1"); }
+    if (v >= 4)  { if (v < 6)  { _puts("-0"); } }
+    if (v >= 6)  { if (v < 8)  { _puts("007"); } }
+    if (v >= 8)  { if (v < 10) { _puts("0100"); } }
+    if (v >= 10) { if (v < 12) { _puts("18446744073709551716"); } }
+    if (v >= 12) { if (v < 14) { _puts("-18446744073709551516"); } }
+    if (v >= 14) { if (v < 16) { _puts("256"); } }
+    if (v >= 16) { if (v < 18) { _puts("-2"); } }
+    if (v >= 18) { if (v < 20) { _putc(34); _puts("100"); _putc(34); } }
+    if (v >= 20) { if (v < 22) { _puts("1"); _putc(0); _puts("00"); } }
+    if (v >= 22) { if (v < 24) { _puts("+5"); } }
+    if (v >= 24) { if (v < 26) { _puts("-"); } }
+    if (v >= 26) {
+        if (v < 80) {
+            if (_rnd() % 4 == 0) { _putc(45); }
+            var d = 1 + (_rnd() % 3);
+            if (_rnd() % 6 == 0) { d = 4 + (_rnd() % 30); }
+            var k = 0;
+            while (k < d) { _putc(48 + (_rnd() % 10)); k = k + 1; }
+        }
+    }
+    if (v >= 80) { _put_junk(_rnd() % 8); }
+    _put_ws();
+    return 0;
+}
+
+fn _mt_ws(c) {
+    if (c == 9)  { return 1; }
+    if (c == 13) { return 1; }
+    if (c == 32) { return 1; }
+    return 0;
+}
+
+# Apply line[0..n) to the model slots g_tmod.
+fn _model_theme(line, n) {
+    var first = 0 - 1;
+    var last = 0 - 1;
+    var i = 0;
+    while (i < n) {
+        if (_mt_ws(load8(line + i)) == 0) {
+            if (first < 0) { first = i; }
+            last = i;
+        }
+        i = i + 1;
+    }
+    if (first < 0) { return 0; }
+    if (load8(line + first) == 35) { return 0; }
+    var eq = 0 - 1;
+    i = first;
+    while (i <= last) {
+        if (eq < 0) { if (load8(line + i) == 61) { eq = i; } }
+        i = i + 1;
+    }
+    if (eq < 0) { return 0; }
+    var ke = eq;
+    var going = 1;
+    while (going == 1) {
+        if (ke <= first) { going = 0; continue; }
+        if (_mt_ws(load8(line + ke - 1)) == 0) { going = 0; continue; }
+        ke = ke - 1;
+    }
+    if (ke <= first) { return 0; }
+    var vs = eq + 1;
+    var ve = last + 1;
+    going = 1;
+    while (going == 1) {
+        if (vs >= ve) { going = 0; continue; }
+        if (_mt_ws(load8(line + vs)) == 0) { going = 0; continue; }
+        vs = vs + 1;
+    }
+    if (vs >= ve) { return 0; }
+    # [-]D{1,3}, nothing else.
+    var neg = 0;
+    var p = vs;
+    if (load8(line + p) == 45) { neg = 1; p = p + 1; }
+    var nd = ve - p;
+    if (nd < 1) { return 0; }
+    if (nd > 3) { return 0; }
+    var v = 0;
+    while (p < ve) {
+        var c = load8(line + p);
+        if (c < 48) { return 0; }
+        if (c > 57) { return 0; }
+        v = v * 10 + (c - 48);
+        p = p + 1;
+    }
+    if (neg == 1) { v = 0 - v; }
+    if (v < 0 - 1) { return 0; }
+    if (v > 255) { return 0; }
+    var slot = 0 - 1;
+    var s = 0;
+    while (s < 15) {
+        if (_m_keyis(line, first, ke, _theme_key_name(s)) == 1) { slot = s; }
+        s = s + 1;
+    }
+    if (slot < 0) { return 0; }
+    if (slot < 2) { if (v < 0) { return 0; } }
+    store64(g_tmod + slot * 8, v);
+    return 0;
+}
+
+fn _model_theme_reset() {
+    store64(g_tmod, 7);
+    store64(g_tmod + 8, 7);
+    var i = 2;
+    while (i < 15) { store64(g_tmod + i * 8, 0 - 1); i = i + 1; }
+    return 0;
+}
+
+fn _check_theme_slots() {
+    _snap(g_tsnap);
+    var i = 0;
+    while (i < 15) {
+        var v = load64(g_tsnap + i * 8);
+        if (v > 255) { return _fail("theme colour above 255 accepted"); }
+        if (i < 2) {
+            if (v < 0) { return _fail("header/lineno colour below 0 accepted"); }
+        } else {
+            if (v < 0 - 1) { return _fail("theme colour below -1 accepted"); }
+        }
+        if (v != load64(g_tmod + i * 8)) { return _fail("theme slots differ from the reference model"); }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Invariant 2.
+fn _fuzz_theme_lines() {
+    if (_user_theme_init() != 0) { return _fail("theme slot init failed"); }
+    _user_theme_reset();
+    _model_theme_reset();
+    var round = 0;
+    while (round < THEME_LINES) {
+        if (round % 211 == 0) { _user_theme_reset(); _model_theme_reset(); }
+        _gen_theme_line();
+        _model_theme(g_line, g_ln);
+        _theme_parse_line(g_line, 0, g_ln);
+        if (_check_theme_slots() != 0) { return 1; }
+        round = round + 1;
+    }
+    # Deterministic: the wraparound value and a 4-digit value never land.
+    _user_theme_reset();
+    g_ln = 0; _puts("lineno_color = 18446744073709551716");
+    _theme_parse_line(g_line, 0, g_ln);
+    if (g_user_theme_lineno != 7) { return _fail("2^64+100 wrapped into a colour (FINDING-010 class)"); }
+    g_ln = 0; _puts("lineno_color = 0100");
+    _theme_parse_line(g_line, 0, g_ln);
+    if (g_user_theme_lineno != 7) { return _fail("a 4-digit colour was accepted"); }
+    g_ln = 0; _puts("lineno_color = 100");
+    _theme_parse_line(g_line, 0, g_ln);
+    if (g_user_theme_lineno != 100) { return _fail("a valid colour was refused"); }
+    return 0;
+}
+
+# ── Theme names ─────────────────────────────────────────────────────────
+
+fn _set_name_from_stack() {
+    var nb[32];
+    var s = "owl-fuzz-slot-name";
+    var n = strlen(s);
+    var k = 0;
+    while (k <= n) { store8(&nb + k, load8(s + k)); k = k + 1; }
+    if (_user_theme_set_name(&nb) != 0) { return 1; }
+    g_user_theme_loaded = 1;
+    # The caller's buffer is reused, as config.cyr's stack scratch is by
+    # the next line: the slot must not notice.
+    k = 0;
+    while (k < 32) { store8(&nb + k, 52); k = k + 1; }
+    return 0;
+}
+
+# Invariant 3.
+fn _fuzz_theme_names() {
+    var nb = alloc(300);
+    var round = 0;
+    while (round < 4000) {
+        var n = _rnd() % 7;
+        if (_rnd() % 50 == 0) { n = 245 + (_rnd() % 12); }
+        var k = 0;
+        while (k < n) {
+            var r = _rnd() % 6;
+            var c = 97;
+            if (r == 1) { c = 46; }
+            if (r == 2) { c = 47; }
+            if (r == 3) { c = 98; }
+            if (r == 4) { c = 45; }
+            store8(nb + k, c);
+            k = k + 1;
+        }
+        store8(nb + n, 0);
+        if (_theme_name_ok(nb) != _m_theme_name_ok(nb, n)) {
+            return _fail("theme name validation differs from the model (/, \"\", ., .., length)");
+        }
+        round = round + 1;
+    }
+    var before = g_user_theme_name;
+    if (theme_index("../../x") != 0 - 1) { return _fail("theme name with ../ accepted"); }
+    if (theme_index("a/b") != 0 - 1)     { return _fail("theme name with / accepted"); }
+    if (theme_index("..") != 0 - 1)      { return _fail("theme name .. accepted"); }
+    if (theme_index("") != 0 - 1)        { return _fail("empty theme name accepted"); }
+    if (g_user_theme_name != before)     { return _fail("refused theme name touched the slot"); }
+
+    if (_set_name_from_stack() != 0) { return _fail("could not set slot name"); }
+    _fuzz_scrub_stack();
+    if (streq(g_user_theme_name, "owl-fuzz-slot-name") == 0) {
+        return _fail("slot name follows the caller's buffer (dangling pointer)");
+    }
+    if (theme_index("owl-fuzz-slot-name") != THEME_USER_INDEX) {
+        return _fail("loaded user theme no longer resolves by its own name");
+    }
+    g_user_theme_loaded = 0;
+    return 0;
+}
+
+# Overwrite a deep stretch of stack the way any later call would.
+fn _fuzz_scrub_stack() {
+    var junk[512];
+    var k = 0;
+    while (k < 512) { store8(&junk + k, 90); k = k + 1; }
+    return load8(&junk + 7);
+}
+
+# ── Multi-line buffers ──────────────────────────────────────────────────
+
+var g_mbuf = 0;             # assembled buffer
+var MBUF_CAP = 24576;       # 40 lines * (LINE_CAP + LF) fits
+var g_want_log = 0;         # model's expected log, LOG_REC records
+var g_want_n = 0;
+
+# Invariant 5: whole buffers, in order, last-wins, tail rule.
+fn _fuzz_multi() {
+    g_hermetic = 1;
+    var round = 0;
+    while (round < MULTI_BUFS) {
+        _ext_reset();
+        _log_reset();
+        g_want_n = 0;
+        var want_errs = 0;
+        var nlines = 1 + (_rnd() % 40);
+        var trunc = 0;
+        if (_rnd() % 4 == 0) { trunc = 1; }
+        var final_lf = _rnd() % 2;
+        var total = 0;
+        var li = 0;
+        while (li < nlines) {
+            _gen_cfg_line();
+            var ls = total;
+            var k = 0;
+            while (k < g_ln) {
+                store8(g_mbuf + total, load8(g_line + k));
+                total = total + 1;
+                k = k + 1;
+            }
+            var terminated = 1;
+            if (li == nlines - 1) { terminated = final_lf; }
+            if (terminated == 1) { store8(g_mbuf + total, 10); total = total + 1; }
+            # The model sees the line only if the parser should apply it.
+            var applies = 1;
+            if (terminated == 0) { if (trunc == 1) { applies = 0; } }
+            if (total - ls == 0) { applies = 0; }
+            if (applies == 1) {
+                var m = _model_cfg(g_mbuf + ls, total - ls - terminated);
+                if (m != 0) { want_errs = want_errs + 1; }
+                var reach = 0;
+                if (g_m_which >= W_PAGING) { if (g_m_which <= W_WRAP) { reach = 1; } }
+                if (reach == 1) {
+                    if (g_want_n < LOG_MAX) {
+                        var r = g_want_log + g_want_n * LOG_REC;
+                        store64(r, g_m_which);
+                        store64(r + 8, g_m_ve - g_m_vs);
+                        var q = 0;
+                        while (q < g_m_ve - g_m_vs) {
+                            if (q < 64) { store8(r + 16 + q, load8(g_mbuf + ls + g_m_vs + q)); }
+                            q = q + 1;
+                        }
+                        g_want_n = g_want_n + 1;
+                    }
+                }
+            }
+            li = li + 1;
+        }
+        g_user_ext_count = 0;   # the model ran ahead; the parser starts empty
+        _quiet_on();
+        var errs = _cfg_parse_buf("fuzz.cyml", g_mbuf, total, trunc);
+        _quiet_off();
+        if (g_log_n != g_want_n) { return _fail("lines not applied exactly once, in order"); }
+        var x = 0;
+        while (x < g_log_n) {
+            var a = g_log + x * LOG_REC;
+            var b = g_want_log + x * LOG_REC;
+            if (load64(a) != load64(b)) { return _fail("setter order differs from file order"); }
+            if (load64(a + 8) != load64(b + 8)) { return _fail("setter value differs in multi-line buffer"); }
+            if (memeq(a + 16, b + 16, load64(a + 8)) == 0) { return _fail("setter bytes differ in multi-line buffer"); }
+            x = x + 1;
+        }
+        if (errs != want_errs) { return _fail("reported error count differs from the model"); }
+        if (_check_ext_table() != 0) { return 1; }
+        round = round + 1;
+    }
+    g_hermetic = 0;
+
+    # Deterministic tail rule: an unterminated last line applies only
+    # when the buffer is the whole file.
+    g_ln = 0; _puts("tabs = 6\ntabs = 64");
+    _log_reset();
+    _cfg_parse_buf("t", g_line, g_ln, 1);
+    if (g_log_n != 1) { return _fail("truncated buffer applied its unterminated tail"); }
+    _log_reset();
+    _cfg_parse_buf("t", g_line, g_ln, 0);
+    if (g_log_n != 2) { return _fail("complete buffer dropped its unterminated last line"); }
+    return 0;
+}
+
+# Deterministic ext checks the random walk might reach only rarely.
+fn _fuzz_ext_fixed() {
+    _ext_reset();
+    if (lang_register_ext_override("CONF", "shell") != 0) { return _fail("ext CONF refused"); }
+    if (streq(detect_language_from_path("x.conf"), "shell") == 0) { return _fail("ext.CONF did not match x.conf"); }
+    if (lang_register_ext_override(".conf", "python") != 0) { return _fail("ext re-register refused"); }
+    if (g_user_ext_count != 1) { return _fail("ext re-register used a second slot"); }
+    if (streq(detect_language_from_path("X.CONF"), "python") == 0) { return _fail("ext re-register did not replace"); }
+    var i = 1;
+    var nb[16];
+    while (i < 16) {
+        store8(&nb, 101); store8(&nb + 1, 97 + i); store8(&nb + 2, 0);
+        if (lang_register_ext_override(&nb, "shell") != 0) { return _fail("ext slot refused before the limit"); }
+        i = i + 1;
+    }
+    if (lang_register_ext_override("full", "shell") != 1) {
+        return _fail("17th distinct ext not reported as table full");
+    }
+    if (lang_register_ext_override("Conf", "ini") != 0) { return _fail("replacing in a full table refused"); }
+    if (lang_register_ext_override("ok", "no-such-lang") != 2) { return _fail("unknown language not reported"); }
+    g_ln = 0; _puts("ext.another = shell");
+    if (_cfg_parse_line(g_line, 0, g_ln) != CFG_E_EXTFULL) {
+        return _fail("config did not map table-full to 'too many'");
+    }
+    if (streq(_cfg_reason(CFG_E_EXTFULL), "too many ext overrides (max 16)") == 0) {
+        return _fail("too-many message changed");
+    }
+    _ext_reset();
+    return 0;
+}
+
+# ── Reader ──────────────────────────────────────────────────────────────
+
+fn _fuzz_reader() {
+    var res = alloc(16);
+    var full = cfg_read_regular("src/config.cyr", 1048576, res);
+    if (full == 0) { return _fail("cannot read src/config.cyr (run from the project root)"); }
+    var size = load64(res);
+    if (load64(res + 8) != 0) { return _fail("reader reported truncation on a small file"); }
+    if (load8(full + size - 1) != 10) { return _fail("fixture must end in a newline"); }
+    # cap >= size, cap = size - 1 (only the final newline past cap), and a
+    # spread of real truncations.
+    var caps = alloc(8 * 8);
+    store64(caps, size); store64(caps + 8, size - 1); store64(caps + 16, size - 2);
+    store64(caps + 24, 1); store64(caps + 32, 100); store64(caps + 40, size / 2);
+    store64(caps + 48, 0); store64(caps + 56, size + 7);
+    var ci = 0;
+    while (ci < 8) {
+        var cap = load64(caps + ci * 8);
+        var b = cfg_read_regular("src/config.cyr", cap, res);
+        if (b == 0) { return _fail("reader refused a regular file"); }
+        var n = load64(res);
+        var t = load64(res + 8);
+        var want_n = size;
+        if (want_n > cap + 1) { want_n = cap + 1; }
+        if (n != want_n) { return _fail("reader returned the wrong byte count for its cap"); }
+        if (memeq(b, full, n) == 0) { return _fail("reader bytes differ from the file prefix"); }
+        var want_t = 0;
+        if (size > cap + 1) { want_t = 1; }
+        if (size == cap + 1) { if (load8(full + cap) != 10) { want_t = 1; } }
+        if (t != want_t) { return _fail("reader 'more follows' flag wrong at the cap boundary"); }
+        ci = ci + 1;
+    }
+    if (cfg_read_regular("/", 64, res) != 0)         { return _fail("reader accepted a directory"); }
+    if (cfg_read_regular("/dev/null", 64, res) != 0) { return _fail("reader accepted a character device"); }
+    if (cfg_read_regular("/nonexistent/owl-fuzz", 64, res) != 0) { return _fail("reader accepted a missing path"); }
+    # A FIFO must be refused WITHOUT opening it (open would block forever,
+    # so a regression here hangs and the fuzz timeout reports it).
+    # Per-process name: a run killed mid-check (the hang case) leaves its
+    # FIFO behind, and two concurrent runs must not share one.
+    var fp = alloc(64);
+    var pre = "/tmp/owl-config-fuzz-";
+    var o = 0;
+    while (o < strlen(pre)) { store8(fp + o, load8(pre + o)); o = o + 1; }
+    var pid = sys_getpid();
+    var dig = alloc(24);
+    var dn = 0;
+    if (pid <= 0) { pid = 1; }
+    while (pid > 0) { store8(dig + dn, 48 + pid % 10); dn = dn + 1; pid = pid / 10; }
+    while (dn > 0) { dn = dn - 1; store8(fp + o, load8(dig + dn)); o = o + 1; }
+    store8(fp + o, 0);
+    sys_unlink(fp);
+    if (sys_mknodat(AT_FDCWD, fp, 0x1000 | 0x180, 0) == 0) {
+        var got = cfg_read_regular(fp, 64, res);
+        sys_unlink(fp);
+        if (got != 0) { return _fail("reader accepted a FIFO"); }
+    } else {
+        var note = "owl config fuzz: note: mkfifo failed, FIFO case skipped\n";
+        eprint(note, strlen(note));
+    }
+    return 0;
+}
+
+fn fuzz_main(data, len) {
+    if (_fuzz_reader() != 0)      { return 1; }
+    if (_fuzz_ext_fixed() != 0)   { return 1; }
+    if (_fuzz_cfg_lines() != 0)   { return 1; }
+    if (_fuzz_theme_lines() != 0) { return 1; }
+    if (_fuzz_theme_names() != 0) { return 1; }
+    if (_fuzz_multi() != 0)       { return 1; }
+    return 0;
+}
+
+fn _harness_main() {
+    alloc_init();
+    g_log      = alloc(LOG_MAX * LOG_REC);
+    g_want_log = alloc(LOG_MAX * LOG_REC);
+    g_line     = alloc(LINE_CAP + 8);
+    g_mbuf     = alloc(MBUF_CAP);
+    g_mx_keys  = alloc(16 * 72);
+    g_mx_lang  = alloc(16 * 8);
+    g_mtmp     = alloc(256);
+    g_tsnap    = alloc(15 * 8);
+    g_tmod     = alloc(15 * 8);
+    if (fuzz_main("x", 1) != 0) {
+        eprint("config fuzz: FAIL\n", 18);
+        return 1;
+    }
+    print("config fuzz: OK (6 invariants)\n", 31);
+    return 0;
+}
+
+var _ec = _harness_main();
+syscall(60, _ec);

@@ -6,6 +6,153 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.5.3] - 2026-10-31
+
+**A P(−1) audit, hardening and repair pass** over everything since the
+1.4.6 audit. Five independent reviews (render paths, parsers,
+processes and I/O, the VCS path, memory, performance and tests) found 26
+defects in owl and 12 informational items, each reproduced twice before it
+was accepted. Every repair has a smoke gate that fails against 1.5.2. Full
+report: [`docs/audit/2026-10-31-audit.md`](docs/audit/2026-10-31-audit.md).
+Pins and toolchain are unchanged from 1.5.2.
+
+### Security
+
+- **HIGH — file escapes reached the terminal whenever colour was off
+  (FINDING-014).** `NO_COLOR`, `--color=never` and `-n` on a pipe all
+  turned escape stripping off while owl still drew its frame, so an OSC 52
+  clipboard write or a screen clear in a file went straight to the
+  terminal. This re-opened FINDING-001 under a common setting. Stripping now
+  follows the frame, not the colour.
+- **MEDIUM — the `File:` header printed the file name raw (FINDING-015).**
+  A name from a glob over a hostile tree (`owl src/*` in a clone) injected
+  escapes. It now gets the same control-byte filter as stderr.
+- **MEDIUM — stdin ignored `--format=ndjson` and `--hex` (FINDING-016).**
+  Raw input reached an ndjson consumer, so a JSON-looking line became a
+  forged record.
+- **MEDIUM — heap overflow building the user-grammar path from `$HOME` /
+  `$XDG_CONFIG_HOME` (FINDING-017),** a sibling of FINDING-007. Proven with
+  the poisoned allocator; invisible on stock builds.
+- **MEDIUM — a 16 MiB input was tokenized for its first 64 KiB
+  (FINDING-018).** ndjson exited 0 with a stream that silently ended at
+  64 KiB. The cap is now the stream's real capacity and every feed is
+  checked.
+- **MEDIUM — a FIFO named `.git/HEAD` or `.sit/HEAD` in any ancestor
+  directory hung owl (FINDING-019).** The repo probe no longer opens
+  anything.
+- **MEDIUM — viewing a file in a repo could cost gigabytes
+  (FINDING-020):** 2.5 GB to show five lines of a large file of newlines.
+  Files over 8 MiB or 512 Ki lines now skip change markers.
+- **MEDIUM — the gutter wrote below a stack buffer from line 1,000,000 on
+  (FINDING-023),** and showed line numbers mod 10^6.
+- **LOW:**
+  - theme names could escape the themes directory, and theme integers
+    wrapped i64 (FINDING-031);
+  - the user-theme name pointed into a dead stack frame (FINDING-026).
+
+### Fixed
+
+- **Write errors end owl with exit 3 (FINDING-021,** design-spec §9).
+  `owl f > /dev/full` and a closed stdout used to exit 0, and with SIGPIPE
+  ignored owl spun forever after its reader quit.
+- **Memory no longer grows with every highlighted file (FINDING-022).** 60
+  files peaked at 238 MB and now peak at 62.5 MB.
+- **Flags apply to every file, wherever they appear,** and all are checked
+  before anything renders (FINDING-024). `owl a.c -p b.c` highlighted b.c,
+  and `owl FILE --bogus` rendered FILE before failing.
+- **The pager:**
+  - it is no longer orphaned on Ctrl-C;
+  - it gets its input when owl starts with fd 0 closed;
+  - it receives the whole environment (TERM etc. were dropped past 16 KB);
+  - it gets `LESS=FRX` when `LESS` is unset (FINDING-025).
+- **Config and theme files:**
+  - an 8 KB truncation is now announced and never applies a cut line
+    (FINDING-029);
+  - `ext.<X>` keys are case-insensitive and last-wins (FINDING-030);
+  - a FIFO config or theme no longer hangs owl (FINDING-031).
+- **Errors say what happened:** "Permission denied", "Not a directory", "Is
+  a directory"; a stdin read failure is reported (FINDING-032).
+- **Shebangs with CRLF line endings or a tab separator route**
+  (FINDING-033).
+- **`--follow`** survives truncation like `tail -f` and says so
+  (FINDING-034).
+- **No VCS markers for the wrong file:** symlinks, `gitdir:` worktrees and
+  submodules, files inside `.git/`, and `..` across a symlink (FINDING-035).
+- **Rendering:**
+  - no colour codes for lines outside `--line-range`;
+  - no stale colour across files;
+  - no phantom wrap row on CRLF lines;
+  - `-N` wrap rows fit the terminal;
+  - the bottom rule starts its own line after a file with no trailing
+    newline (FINDING-036).
+- **ndjson is valid JSON for any input:** invalid UTF-8 becomes U+FFFD
+  (FINDING-037).
+- **An unreadable command line** (no `/proc`) is an error rather than a
+  silent read of stdin (FINDING-038).
+- **The byte at the highlight cap is no longer dropped** in the plain
+  fallback (FINDING-028).
+
+### Changed
+
+Behaviour changes, each a fix:
+
+- **Every flag applies to every file** and is validated first;
+  `--version` / `--help` anywhere print and exit without rendering.
+- **Decorated output strips file escapes whether or not colour is on.**
+  Use `-r` for trusted ANSI.
+- **A stdout write error exits 3.** EPIPE does so silently.
+- **`--follow` takes exactly one file,** not stdin.
+- **`--line-range`:** `0`, `0:`, `:0` and numbers over 18 digits are
+  rejected (exit 2).
+- **Config and theme files must be regular files.** A NUL in a config value
+  is a "bad value", and `too many ext overrides (max 16)` is its own
+  message.
+- **Theme names may not contain `/`.**
+- **Change markers are skipped** for files over 8 MiB or 512 Ki lines, for
+  symlinks, for files under a `.git` *file*, inside `.git/` or `.sit/`, and
+  for paths with `..` after a symlink. `--diff` names the reason.
+- **`-p --diff` no longer computes markers** (it never showed them), except
+  with `--line-range`, where `--diff` filters.
+- **Line numbers of 1,000,000 and up print in full,** one column wider.
+
+### Performance
+
+All output goes through one buffer (`src/out.cyr`), highlight colours come
+from a per-render table, an over-cap file is not tokenized first, and an
+absent user-grammar directory is probed once instead of 49 times. On the
+shipped binary:
+- piped output is ~18× faster;
+- decorated output ~14×;
+- highlighted output ~4×;
+- `--format=ndjson` ~6×;
+- `-p` is unchanged.
+
+### Tests
+
+- **Every finding has a smoke gate that fails against 1.5.2.** FINDING-017
+  needs `OWL_POISON_BIN`, a `cyrius build -D CYRIUS_POISON` binary, and
+  NOTE-skips without one.
+- **Two vacuous gates are rewritten.** The FINDING-001 gate now asserts the
+  exact stripped text; the FINDING-008 gate now requires that colour was
+  emitted.
+- **`tests/owl.fcyr` gains invariant 6, precision.** Two classifier mutants
+  that passed all five old invariants, and smoke, fail it.
+- **New `tests/owl_config.fcyr`:** a config and theme parser harness with
+  six invariants checked against reference models. It caught 11 planted
+  mutations.
+
+### Docs
+
+- **design-spec §3.3 / §3.4 / §4.2 match the shipped CLI.** The old text
+  documented `-P`, space-separated values, `--style` lists and `OWL_THEME`,
+  none of which exist.
+- **`--help` lists the `ext.<ext>` config key.**
+- **CLAUDE.md records the new rules:**
+  - all stdout goes through `out_write`;
+  - stripping follows the frame;
+  - highlight memory is ~13×, not 4×.
+- **The roadmap is reorganised** into 1.6.x and Beyond.
+
 ## [1.5.2] - 2026-10-31
 
 ### Fixed

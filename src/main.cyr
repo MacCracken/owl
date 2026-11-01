@@ -3,6 +3,7 @@
 
 include "lib/vyakarana.cyr"
 include "src/escape.cyr"
+include "src/out.cyr"
 include "src/lang.cyr"
 include "src/theme.cyr"
 include "src/pager.cyr"
@@ -11,7 +12,7 @@ include "src/config.cyr"
 
 # Keep OWL_VERSION in sync with the VERSION file.
 # A M8 CI check will enforce equality; for now, manual.
-var OWL_VERSION = "owl 1.5.2";
+var OWL_VERSION = "owl 1.5.3";
 
 var BUFSIZE = 65536;
 
@@ -33,7 +34,11 @@ var BUFSIZE = 65536;
 # density highlight comfortably. Allocation here is bump-allocator
 # virtual address space; physical pages commit lazily on write so
 # small files don't pay the 16 MB cost in practice.
-var HIGHLIGHT_MAX = 16777216;
+# One less than vyakarana's VYK_STREAM_CAP (16 MiB): the stream needs
+# len + n + 1 bytes, so an input of exactly 16 MiB never fit, and through
+# 1.5.2 it was tokenized for its first 64 KiB without a word (audit
+# 2026-10-31 FINDING-018). The feed result is also checked now.
+var HIGHLIGHT_MAX = 16777215;
 
 # Exit codes per design spec §9
 var EXIT_OK       = 0;
@@ -61,9 +66,10 @@ var g_flag_tabs     = 4;           # --tabs=N; 0 = preserve literal \t
 # "character" mode needs a TIOCGWINSZ col count — deferred to M8.
 var g_flag_wrap     = 0;           # 0 auto, 1 never, 2 character
 var g_flag_verbose  = 0;           # -v / --verbose; expands --version output
-# --strip-ansi=auto|always|never. 0=auto (current default: strip in
-# decorated/colored), 1=always (strip even in -p plain mode), 2=never
-# (alias of -r, passthrough). `-r` and `--raw-control-chars` remain the
+# --strip-ansi=auto|always|never. 0=auto (strip whenever the output is
+# decorated or coloured), 1=always (strip in undecorated piped output too;
+# never in -p, which stays byte-identical to cat), 2=never (alias of -r,
+# passthrough). `-r` and `--raw-control-chars` remain the
 # canonical opt-out; this flag mirrors `less -R` naming for muscle memory.
 var g_flag_strip_ansi = 0;
 # --hex / -x: force xxd-style hex dump for any file (binary or text).
@@ -85,7 +91,8 @@ var g_flag_follow = 0;
 var FOLLOW_POLL_MS = 200;
 var FORMAT_TEXT   = 0;
 var FORMAT_NDJSON = 1;
-# --diff: filter rendered output to lines with VCS markers (ADD/MOD).
+# --diff: filter rendered output to lines with VCS markers (ADD/MOD, and
+# the DEL anchor lines).
 # Forces VCS computation regardless of decoration state. Composes with
 # --line-range and --color (just gates emission via _in_range).
 var g_flag_diff = 0;
@@ -312,7 +319,7 @@ fn _gutter_divider_col() {
 fn _emit_dashes(n: i64) {
     var i: i64 = 0;
     while (i < n) {
-        syscall(1, 1, "─", 3);
+        out_write("─", 3);
         i = i + 1;
     }
     return 0;
@@ -327,10 +334,10 @@ fn _emit_rule(junction) {
     if (cols < div_col + 2) { cols = div_col + 2; }
     if (g_want_color == 1) { ansi_fg(theme_lineno_color(g_active_theme)); }
     _emit_dashes(div_col);
-    syscall(1, 1, junction, 3);
+    out_write(junction, 3);
     _emit_dashes(cols - div_col - 1);
     if (g_want_color == 1) { ansi_reset(); }
-    syscall(1, 1, "\n", 1);
+    out_write("\n", 1);
     return 0;
 }
 
@@ -346,22 +353,22 @@ fn emit_header(path) {
     if (g_want_color == 1) { ansi_fg(theme_lineno_color(g_active_theme)); }
     var pad = 0;
     while (pad < div_col) {
-        syscall(1, 1, " ", 1);
+        out_write(" ", 1);
         pad = pad + 1;
     }
-    syscall(1, 1, "│ ", 4);
+    out_write("│ ", 4);
     if (g_want_color == 1) { ansi_reset(); }
 
     if (g_want_color == 1) { ansi_fg(theme_header_color(g_active_theme)); }
-    syscall(1, 1, "File: ", 6);
-    syscall(1, 1, path, strlen(path));
+    out_write("File: ", 6);
+    out_write_sanitized(path, strlen(path));   # audit 2026-10-31 FINDING-015
     if (streq(g_active_lang, "plain") == 0) {
-        syscall(1, 1, " (", 2);
-        syscall(1, 1, g_active_lang, strlen(g_active_lang));
-        syscall(1, 1, ")", 1);
+        out_write(" (", 2);
+        out_write(g_active_lang, strlen(g_active_lang));
+        out_write(")", 1);
     }
     if (g_want_color == 1) { ansi_reset(); }
-    syscall(1, 1, "\n", 1);
+    out_write("\n", 1);
 
     _emit_rule("┼");
 
@@ -375,6 +382,13 @@ fn emit_header(path) {
 # the header never opened (plain mode, piped without -n, etc.).
 fn emit_footer() {
     if (g_header_open == 0) { return 0; }
+    # A file without a trailing newline left the cursor mid-line, and the
+    # rule was drawn onto its last line (`abc───┴…`).
+    if (g_at_line_start == 0) {
+        out_write("\n", 1);
+        g_at_line_start = 1;
+        g_wrap_col = 0;
+    }
     _emit_rule("┴");
     g_header_open = 0;
     return 0;
@@ -390,41 +404,47 @@ fn emit_footer() {
 # when we're outside a repo.
 fn emit_lineno(ln: i64) {
     if (_in_range() == 0) { return 0; }
-    var pbuf[8];
+    # Digits right-aligned in at least 6 columns, then a space. The buffer
+    # holds any i64 (19 digits). Through 1.5.2 an 8-byte buffer was filled
+    # downward from index 5 with no lower bound: from line 1,000,000 each
+    # extra digit was stored below the buffer, and the gutter showed the
+    # number mod 10^6 (audit 2026-10-31 FINDING-023). A 7+ digit number now
+    # prints whole; the gutter is one column wider for those lines.
+    var pbuf[32];
     var n = ln;
-    var pi: i64 = 5;
-    if (n == 0) { store8(&pbuf + pi, 48); pi = pi - 1; }
+    var pi: i64 = 23;
+    store8(&pbuf + 24, 32);
+    if (n <= 0) { store8(&pbuf + pi, 48); pi = pi - 1; }
     while (n > 0) {
         store8(&pbuf + pi, 48 + n % 10);
         pi = pi - 1;
         n = n / 10;
     }
-    while (pi >= 0) {
+    while (pi > 17) {
         store8(&pbuf + pi, 32);
         pi = pi - 1;
     }
-    store8(&pbuf + 6, 32);
 
     if (g_want_color == 1) { ansi_fg(theme_lineno_color(g_active_theme)); }
-    syscall(1, 1, &pbuf, 7);
+    out_write(&pbuf + pi + 1, 24 - pi);
     if (g_want_color == 1) { ansi_reset(); }
 
     if (vcs_enabled() == 1) {
         var mk = vcs_mark_for_line(ln);
         if (mk == VCS_MARK_NONE) {
-            syscall(1, 1, "  ", 2);
+            out_write("  ", 2);
         } else {
             var mcolor = theme_change_color(g_active_theme, mk);
             if (g_want_color == 1) {
                 if (mcolor != 0 - 1) { ansi_fg(mcolor); }
             }
-            if (mk == VCS_MARK_ADD) { syscall(1, 1, "+", 1); }
-            if (mk == VCS_MARK_MOD) { syscall(1, 1, "~", 1); }
-            if (mk == VCS_MARK_DEL) { syscall(1, 1, "-", 1); }
+            if (mk == VCS_MARK_ADD) { out_write("+", 1); }
+            if (mk == VCS_MARK_MOD) { out_write("~", 1); }
+            if (mk == VCS_MARK_DEL) { out_write("-", 1); }
             if (g_want_color == 1) {
                 if (mcolor != 0 - 1) { ansi_reset(); }
             }
-            syscall(1, 1, " ", 1);
+            out_write(" ", 1);
         }
     }
 
@@ -434,7 +454,7 @@ fn emit_lineno(ln: i64) {
     store8(&dbuf + 2, 0x82);
     store8(&dbuf + 3, 32);
     if (g_want_color == 1) { ansi_fg(theme_lineno_color(g_active_theme)); }
-    syscall(1, 1, &dbuf, 4);
+    out_write(&dbuf, 4);
     if (g_want_color == 1) { ansi_reset(); }
     return 0;
 }
@@ -464,7 +484,33 @@ fn eprint_sanitized(s, n) {
     return 0;
 }
 
+# Set by report_error, so a caller can tell "failed and said why" from
+# "failed silently" (stdin read errors used to exit 4 with no message).
+var g_err_reported = 0;
+var g_read_errno = 0;      # last negative read(2) result from render_fd_loop
+
+# Text for a negative errno from open(2) / read(2) (Linux numbering, which
+# aarch64 shares). Through 1.5.2 every open failure said "No such file or
+# directory" — EACCES, ENOTDIR, ELOOP alike — and a directory said "read
+# error" (audit 2026-10-31 FINDING-032).
+fn _errno_msg(e) {
+    if (e == (0 - 2))  { return "No such file or directory"; }
+    if (e == (0 - 13)) { return "Permission denied"; }
+    if (e == (0 - 20)) { return "Not a directory"; }
+    if (e == (0 - 21)) { return "Is a directory"; }
+    if (e == (0 - 40)) { return "Too many levels of symbolic links"; }
+    if (e == (0 - 36)) { return "File name too long"; }
+    if (e == (0 - 6))  { return "No such device or address"; }
+    if (e == (0 - 24)) { return "Too many open files"; }
+    if (e == (0 - 23)) { return "Too many open files in system"; }
+    if (e == (0 - 12)) { return "Cannot allocate memory"; }
+    if (e == (0 - 5))  { return "Input/output error"; }
+    return "read error";
+}
+
 fn report_error(path, reason) {
+    g_err_reported = 1;
+    out_flush();
     eprint("owl: ", 5);
     eprint_sanitized(path, strlen(path));
     eprint(": ", 2);
@@ -526,6 +572,7 @@ fn _join_grammars(base, base_len) {
     var slen = strlen(suffix);
     var total = base_len + slen + 1;
     var out = alloc(total);
+    if (out == 0) { return 0; }
     var k = 0;
     while (k < base_len) { store8(out + k, load8(base + k)); k = k + 1; }
     var j = 0;
@@ -560,6 +607,7 @@ fn _resolve_grammars_dir() {
 
     # Candidate 1: <exe-dir>/grammars/
     var c1 = _join_grammars(&link, slash);
+    if (c1 == 0) { g_grammars_dir = 0; return 0; }
     if (_grammar_dir_has_cyrius(c1) == 1) {
         g_grammars_dir = c1;
         return c1;
@@ -574,6 +622,7 @@ fn _resolve_grammars_dir() {
             parent_end = parent_end - 1;
         }
         var c2 = _join_grammars(&link, parent_end);
+        if (c2 == 0) { g_grammars_dir = 0; return 0; }
         if (_grammar_dir_has_cyrius(c2) == 1) {
             g_grammars_dir = c2;
             return c2;
@@ -587,84 +636,92 @@ fn _resolve_grammars_dir() {
     return 0;
 }
 
-# Build "<base>/owl/grammars/" given an absolute-prefix base. base_len
-# is the byte length of base (no trailing slash assumed).
-fn _join_user_grammars(base, base_len) {
-    var suffix = "/owl/grammars/";
+# Longest env-derived directory owl will build a grammar path from. The
+# user-overlay dir comes from $XDG_CONFIG_HOME / $HOME, so its length is
+# the environment's to choose.
+var GRAMMAR_DIR_MAX = 4096;
+
+# "<base><suffix>" in an allocation sized from both; 0 when base is empty,
+# longer than GRAMMAR_DIR_MAX, or the alloc fails.
+fn _join_dir(base, suffix) {
+    var blen = strlen(base);
+    if (blen == 0) { return 0; }
+    if (blen > GRAMMAR_DIR_MAX) { return 0; }
     var slen = strlen(suffix);
-    var total = base_len + slen + 1;
-    var out = alloc(total);
-    var k = 0;
-    while (k < base_len) { store8(out + k, load8(base + k)); k = k + 1; }
-    var j = 0;
-    while (j < slen) { store8(out + base_len + j, load8(suffix + j)); j = j + 1; }
-    store8(out + base_len + slen, 0);
+    var out = alloc(blen + slen + 1);
+    if (out == 0) { return 0; }
+    memcpy(out, base, blen);
+    memcpy(out + blen, suffix, slen);
+    store8(out + blen + slen, 0);
     return out;
 }
 
-# Resolve the user grammars dir. Tries $XDG_CONFIG_HOME first, falls
-# back to $HOME/.config. Returns 0 if neither exists or neither dir
-# contains any usable grammar (no need to error — user grammars are
-# strictly opt-in).
+# 1 when path names a directory. Opened O_DIRECTORY | O_NONBLOCK, so a FIFO
+# or a file at the path neither blocks nor counts. agnos has neither flag
+# and no external overlay to probe: report "maybe" and let loads decide.
+fn _is_dir(path) {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return 1;
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
+    var fd = file_open(path, O_RDONLY + O_DIRECTORY + O_NONBLOCK, 0);
+    if (fd < 0) { return 0; }
+    file_close(fd);
+    return 1;
+    #endif
+}
+
+# Resolve the user grammars dir: $XDG_CONFIG_HOME/owl/grammars/ when XDG is
+# set, else $HOME/.config/owl/grammars/. 0 when it is not a directory —
+# user grammars are opt-in, and probing 49 files in a dir that does not
+# exist cost 49 failed opens on every first highlight.
 fn _resolve_user_grammars_dir() {
     if (g_user_grammars_dir_resolved == 1) { return g_user_grammars_dir; }
     g_user_grammars_dir_resolved = 1;
-
-    var xdg = getenv("XDG_CONFIG_HOME");
-    if (xdg != 0) {
-        if (load8(xdg) != 0) {
-            var c = _join_user_grammars(xdg, strlen(xdg));
-            # Replace "/owl/grammars/" with "owl/grammars/" — the
-            # XDG var is already absolute, no leading slash needed.
-            # _join_user_grammars added one; rewrite to skip it.
-            # Easier path: build directly.
-            var xlen = strlen(xdg);
-            var suffix = "/owl/grammars/";
-            var slen = strlen(suffix);
-            var dir = alloc(xlen + slen + 1);
-            var k = 0;
-            while (k < xlen) { store8(dir + k, load8(xdg + k)); k = k + 1; }
-            var j = 0;
-            while (j < slen) { store8(dir + xlen + j, load8(suffix + j)); j = j + 1; }
-            store8(dir + xlen + slen, 0);
-            g_user_grammars_dir = dir;
-            return dir;
-        }
-    }
-
-    var home = getenv("HOME");
-    if (home != 0) {
-        if (load8(home) != 0) {
-            var hlen = strlen(home);
-            var suffix = "/.config/owl/grammars/";
-            var slen = strlen(suffix);
-            var dir = alloc(hlen + slen + 1);
-            var k = 0;
-            while (k < hlen) { store8(dir + k, load8(home + k)); k = k + 1; }
-            var j = 0;
-            while (j < slen) { store8(dir + hlen + j, load8(suffix + j)); j = j + 1; }
-            store8(dir + hlen + slen, 0);
-            g_user_grammars_dir = dir;
-            return dir;
-        }
-    }
-
     g_user_grammars_dir = 0;
+
+    var dir = 0;
+    var xdg = getenv("XDG_CONFIG_HOME");
+    var have_xdg = 0;
+    if (xdg != 0) { if (load8(xdg) != 0) { have_xdg = 1; } }
+    if (have_xdg == 1) { dir = _join_dir(xdg, "/owl/grammars/"); }
+    else {
+        var home = getenv("HOME");
+        if (home != 0) { dir = _join_dir(home, "/.config/owl/grammars/"); }
+    }
+    if (dir == 0) { return 0; }
+    if (_is_dir(dir) == 0) { return 0; }
+    g_user_grammars_dir = dir;
+    return dir;
+}
+
+# Load "<dir><name>.cyml" into the registry. `path` holds `cap` bytes;
+# a path that would not fit is skipped. Through 1.5.2 this copied an
+# env-derived dir into a fixed 1024-byte buffer with no check — a heap
+# overflow from a long $HOME / $XDG_CONFIG_HOME on any highlighted file
+# (audit 2026-10-31 FINDING-017, a sibling of FINDING-007).
+fn _owl_load_grammar(dir, path, cap, name) {
+    var dlen = strlen(dir);
+    var nlen = strlen(name);
+    if (dlen + nlen + 6 > cap) { return 0; }
+    memcpy(path, dir, dlen);
+    memcpy(path + dlen, name, nlen);
+    memcpy(path + dlen + nlen, ".cyml", 5);
+    store8(path + dlen + nlen + 5, 0);
+    var g = grammar_load(path);
+    if (g != 0) { registry_add(g); }
     return 0;
 }
 
-# Load one grammar by name (e.g. "shell.cyml") from the resolved dir.
-# Caller pre-allocates path_buf to avoid alloc-per-language churn.
-fn _owl_load_grammar(dir, path_buf, name) {
-    var dlen = strlen(dir);
-    var nlen = strlen(name);
-    var k = 0;
-    while (k < dlen) { store8(path_buf + k, load8(dir + k)); k = k + 1; }
-    var j = 0;
-    while (j < nlen) { store8(path_buf + dlen + j, load8(name + j)); j = j + 1; }
-    store8(path_buf + dlen + nlen, 0);
-    var g = grammar_load(path_buf);
-    if (g != 0) { registry_add(g); }
+# Every grammar owl knows, from one list: the language table (1.5.2 wired
+# markdown, the one bundled grammar it lacked; 1.5.3 made the table the
+# only list, so a grammar cannot again be bundled but unreachable).
+fn _owl_load_all(dir, path, cap) {
+    var i = 1;   # 0 is "plain"
+    while (i < LANG_COUNT) {
+        _owl_load_grammar(dir, path, cap, lang_name(i));
+        i = i + 1;
+    }
     return 0;
 }
 
@@ -679,114 +736,17 @@ fn _owl_bootstrap_grammars() {
     if (dir == 0) { return 0; }   # let vyakarana's relative path try
 
     registry_init();
-    var path = alloc(1024);
-
-    # User overlay first — vyakarana's registry is a vec, find_by_name
-    # returns first match, so user grammars win by name when present.
-    # Missing files are silently skipped (grammar_load returns 0).
     var udir = _resolve_user_grammars_dir();
-    if (udir != 0) {
-        _owl_load_grammar(udir, path, "shell.cyml");
-        _owl_load_grammar(udir, path, "toml.cyml");
-        _owl_load_grammar(udir, path, "json.cyml");
-        _owl_load_grammar(udir, path, "cyrius.cyml");
-        _owl_load_grammar(udir, path, "rust.cyml");
-        _owl_load_grammar(udir, path, "yaml.cyml");
-        _owl_load_grammar(udir, path, "markdown.cyml");
-        _owl_load_grammar(udir, path, "c.cyml");
-        _owl_load_grammar(udir, path, "typescript.cyml");
-        _owl_load_grammar(udir, path, "javascript.cyml");
-        _owl_load_grammar(udir, path, "python.cyml");
-        _owl_load_grammar(udir, path, "go.cyml");
-        _owl_load_grammar(udir, path, "zig.cyml");
-        _owl_load_grammar(udir, path, "asm_x86_64.cyml");
-        _owl_load_grammar(udir, path, "asm_aarch64.cyml");
-        _owl_load_grammar(udir, path, "java.cyml");
-        _owl_load_grammar(udir, path, "kotlin.cyml");
-        _owl_load_grammar(udir, path, "cpp.cyml");
-        _owl_load_grammar(udir, path, "csharp.cyml");
-        _owl_load_grammar(udir, path, "php.cyml");
-        _owl_load_grammar(udir, path, "ruby.cyml");
-        _owl_load_grammar(udir, path, "lua.cyml");
-        _owl_load_grammar(udir, path, "swift.cyml");
-        _owl_load_grammar(udir, path, "elixir.cyml");
-        _owl_load_grammar(udir, path, "ocaml.cyml");
-        _owl_load_grammar(udir, path, "haskell.cyml");
-        _owl_load_grammar(udir, path, "sql.cyml");
-        _owl_load_grammar(udir, path, "graphql.cyml");
-        _owl_load_grammar(udir, path, "protobuf.cyml");
-        _owl_load_grammar(udir, path, "html.cyml");
-        _owl_load_grammar(udir, path, "xml.cyml");
-        _owl_load_grammar(udir, path, "css.cyml");
-        _owl_load_grammar(udir, path, "scss.cyml");
-        _owl_load_grammar(udir, path, "dockerfile.cyml");
-        _owl_load_grammar(udir, path, "makefile.cyml");
-        _owl_load_grammar(udir, path, "ini.cyml");
-        _owl_load_grammar(udir, path, "cyml.cyml");
-        _owl_load_grammar(udir, path, "llvm_ir.cyml");
-        _owl_load_grammar(udir, path, "powershell.cyml");
-        _owl_load_grammar(udir, path, "crystal.cyml");
-        _owl_load_grammar(udir, path, "julia.cyml");
-        _owl_load_grammar(udir, path, "vue.cyml");
-        _owl_load_grammar(udir, path, "svelte.cyml");
-        _owl_load_grammar(udir, path, "nix.cyml");
-        _owl_load_grammar(udir, path, "terraform.cyml");
-        _owl_load_grammar(udir, path, "openqasm.cyml");
-        _owl_load_grammar(udir, path, "nasm.cyml");
-        _owl_load_grammar(udir, path, "mdx.cyml");
-        _owl_load_grammar(udir, path, "lean.cyml");
-    }
+    var cap = strlen(dir);
+    if (udir != 0) { if (strlen(udir) > cap) { cap = strlen(udir); } }
+    cap = cap + 64;               # longest name ("asm_aarch64") + ".cyml" + NUL
+    var path = alloc(cap);
+    if (path == 0) { return 0; }
 
-    # Bundled.
-    _owl_load_grammar(dir, path, "shell.cyml");
-    _owl_load_grammar(dir, path, "toml.cyml");
-    _owl_load_grammar(dir, path, "json.cyml");
-    _owl_load_grammar(dir, path, "cyrius.cyml");
-    _owl_load_grammar(dir, path, "rust.cyml");
-    _owl_load_grammar(dir, path, "yaml.cyml");
-    _owl_load_grammar(dir, path, "markdown.cyml");
-    _owl_load_grammar(dir, path, "c.cyml");
-    _owl_load_grammar(dir, path, "typescript.cyml");
-    _owl_load_grammar(dir, path, "javascript.cyml");
-    _owl_load_grammar(dir, path, "python.cyml");
-    _owl_load_grammar(dir, path, "go.cyml");
-    _owl_load_grammar(dir, path, "zig.cyml");
-    _owl_load_grammar(dir, path, "asm_x86_64.cyml");
-    _owl_load_grammar(dir, path, "asm_aarch64.cyml");
-    _owl_load_grammar(dir, path, "java.cyml");
-    _owl_load_grammar(dir, path, "kotlin.cyml");
-    _owl_load_grammar(dir, path, "cpp.cyml");
-    _owl_load_grammar(dir, path, "csharp.cyml");
-    _owl_load_grammar(dir, path, "php.cyml");
-    _owl_load_grammar(dir, path, "ruby.cyml");
-    _owl_load_grammar(dir, path, "lua.cyml");
-    _owl_load_grammar(dir, path, "swift.cyml");
-    _owl_load_grammar(dir, path, "elixir.cyml");
-    _owl_load_grammar(dir, path, "ocaml.cyml");
-    _owl_load_grammar(dir, path, "haskell.cyml");
-    _owl_load_grammar(dir, path, "sql.cyml");
-    _owl_load_grammar(dir, path, "graphql.cyml");
-    _owl_load_grammar(dir, path, "protobuf.cyml");
-    _owl_load_grammar(dir, path, "html.cyml");
-    _owl_load_grammar(dir, path, "xml.cyml");
-    _owl_load_grammar(dir, path, "css.cyml");
-    _owl_load_grammar(dir, path, "scss.cyml");
-    _owl_load_grammar(dir, path, "dockerfile.cyml");
-    _owl_load_grammar(dir, path, "makefile.cyml");
-    _owl_load_grammar(dir, path, "ini.cyml");
-    _owl_load_grammar(dir, path, "cyml.cyml");
-    _owl_load_grammar(dir, path, "llvm_ir.cyml");
-    _owl_load_grammar(dir, path, "powershell.cyml");
-    _owl_load_grammar(dir, path, "crystal.cyml");
-    _owl_load_grammar(dir, path, "julia.cyml");
-    _owl_load_grammar(dir, path, "vue.cyml");
-    _owl_load_grammar(dir, path, "svelte.cyml");
-    _owl_load_grammar(dir, path, "nix.cyml");
-    _owl_load_grammar(dir, path, "terraform.cyml");
-    _owl_load_grammar(dir, path, "openqasm.cyml");
-    _owl_load_grammar(dir, path, "nasm.cyml");
-    _owl_load_grammar(dir, path, "mdx.cyml");
-    _owl_load_grammar(dir, path, "lean.cyml");
+    # User overlay first — vyakarana's registry is a vec and find_by_name
+    # returns the first match, so a user grammar wins by name.
+    if (udir != 0) { _owl_load_all(udir, path, cap); }
+    _owl_load_all(dir, path, cap);
 
     _grammars_bootstrapped = 1;
     return 0;
@@ -877,7 +837,7 @@ fn _hex_emit_line(buf, n, base_offset) {
     pos = pos + 1;
     store8(&line + pos, 10);
     pos = pos + 1;
-    file_write(STDOUT, &line, pos);
+    out_write(&line, pos);
     return 0;
 }
 
@@ -900,7 +860,7 @@ fn _hex_dump_fd(fd, first_buf, first_n) {
         i = i + 1;
     }
 
-    var buf = alloc(BUFSIZE);
+    var buf = _buf_loop();
     if (buf == 0) { return 0 - 1; }
     var done = 0;
     while (done == 0) {
@@ -930,6 +890,7 @@ fn _hex_dump_fd(fd, first_buf, first_n) {
 
 fn render_reset() {
     g_line_no = 1;
+    g_render_active_color = 0 - 1;
     g_at_line_start = 1;
     escape_reset();
     g_render_done = 0;
@@ -964,15 +925,20 @@ fn _emit_wrap_break() {
     if (saved != 0 - 1) {
         if (g_want_color == 1) { ansi_reset(); }
     }
-    file_write(STDOUT, "\n", 1);
+    out_write("\n", 1);
     if (g_want_color == 1) { ansi_fg(theme_lineno_color(g_active_theme)); }
-    var div_col = _gutter_divider_col();
-    var pad = 0;
-    while (pad < div_col) {
-        syscall(1, 1, " ", 1);
-        pad = pad + 1;
+    # With line numbers the arrow sits under the gutter divider; without,
+    # there is no gutter to align with (and none was subtracted from the
+    # wrap budget), so it starts the row.
+    if (resolved_show_numbers() == 1) {
+        var div_col = _gutter_divider_col();
+        var pad = 0;
+        while (pad < div_col) {
+            out_write(" ", 1);
+            pad = pad + 1;
+        }
     }
-    syscall(1, 1, "↪ ", 4);
+    out_write("↪ ", 4);
     if (g_want_color == 1) { ansi_reset(); }
     if (saved != 0 - 1) {
         if (g_want_color == 1) { ansi_fg(saved); }
@@ -980,7 +946,7 @@ fn _emit_wrap_break() {
     return 0;
 }
 
-# Range-gated stdout write. Identical to file_write(STDOUT, …) when
+# Range-gated stdout write. Identical to out_write(…) when
 # no range is set; one comparison + branch overhead otherwise.
 fn _emit(buf, n) {
     if (_in_range() == 0) { return 0; }
@@ -989,8 +955,8 @@ fn _emit(buf, n) {
     # always; 1.1.8 --wrap=auto turns it on whenever the decorated
     # frame is rendering, so wrapped content stays inside the bottom
     # rule).
-    if (g_flag_plain == 1) { file_write(STDOUT, buf, n); return 0; }
-    if (g_wrap_cols == 0)  { file_write(STDOUT, buf, n); return 0; }
+    if (g_flag_plain == 1) { out_write(buf, n); return 0; }
+    if (g_wrap_cols == 0)  { out_write(buf, n); return 0; }
 
     # Wrap path: byte-by-byte with column tracking. Insert a wrap-\n
     # + continuation gutter before any UTF-8 leading byte that would
@@ -1002,8 +968,10 @@ fn _emit(buf, n) {
     while (k < n) {
         var c = load8(buf + k);
         if (c == 10) {
-            file_write(STDOUT, buf + k, 1);
+            out_write(buf + k, 1);
             g_wrap_col = 0;
+        } else { if (c == 13) {
+            out_write(buf + k, 1);
         } else {
             var is_cont = 0;
             if (c >= 0x80) {
@@ -1013,11 +981,12 @@ fn _emit(buf, n) {
                 if (g_wrap_col >= g_wrap_cols) {
                     _emit_wrap_break();
                     g_wrap_col = 0;
+                    if (resolved_show_numbers() == 0) { g_wrap_col = 2; }   # the "↪ "
                 }
                 g_wrap_col = g_wrap_col + 1;
             }
-            file_write(STDOUT, buf + k, 1);
-        }
+            out_write(buf + k, 1);
+        } }
         k = k + 1;
     }
     return 0;
@@ -1041,9 +1010,14 @@ fn _strip_active() {
     if (g_flag_strip_ansi == 1)   { return 1; }   # --strip-ansi=always
     if (g_flag_strip_ansi == 2)   { return 0; }   # --strip-ansi=never
     if (g_flag_raw_controls == 1) { return 0; }   # -r / --raw-control-chars
-    # Auto: strip in decorated/colored output (where owl emits its
-    # own SGR), passthrough otherwise.
-    if (g_want_color == 0)        { return 0; }
+    # Auto: strip whenever owl draws a frame or colour for a human — a
+    # decorated (TTY or -n) or coloured render. Passthrough only for the
+    # undecorated, uncoloured stream (piped output), which is cat-like by
+    # contract. Through 1.5.2 this keyed on colour alone, so NO_COLOR or
+    # --color=never on a terminal drew the frame and passed every file
+    # escape straight through (audit 2026-10-31 FINDING-014, re-opening
+    # FINDING-001).
+    if (g_want_color == 0) { if (g_decorated == 0) { return 0; } }
     return 1;
 }
 
@@ -1065,7 +1039,7 @@ fn render_chunk(buf, n) {
     if (g_flag_plain == 1) {
         if (g_line_range_start == 0) {
             if (g_line_range_end == 0) {
-                file_write(STDOUT, buf, n);
+                out_write(buf, n);
                 return 0;
             }
         }
@@ -1106,7 +1080,7 @@ fn render_chunk(buf, n) {
                 if (show_nums == 0) {
                     if (show_all == 0) {
                         if (tabs == 0) {
-                            file_write(STDOUT, buf, n);
+                            out_write(buf, n);
                             return 0;
                         }
                     }
@@ -1279,6 +1253,15 @@ fn _render_highlighted_with_tb(buf, n, tb) {
     var theme     = g_active_theme;
     g_render_active_color = 0 - 1;
     var strip     = _strip_active();
+    # Kind -> colour, computed once per render instead of per byte
+    # (theme_token_color is kind_name + up to 7 streq). Kinds past the table
+    # fall back to the direct lookup.
+    var kcol[128];
+    var kk = 0;
+    while (kk < 16) {
+        store64(&kcol + kk * 8, theme_token_color(theme, kk));
+        kk = kk + 1;
+    }
 
     var i = 0;
     while (i < n) {
@@ -1295,7 +1278,10 @@ fn _render_highlighted_with_tb(buf, n, tb) {
             }
         }
         var color = 0 - 1;
-        if (kind >= 0) { color = theme_token_color(theme, kind); }
+        if (kind >= 0) {
+            if (kind < 16) { color = load64(&kcol + kind * 8); }
+            else { color = theme_token_color(theme, kind); }
+        }
 
         var c = load8(buf + i);
 
@@ -1321,10 +1307,12 @@ fn _render_highlighted_with_tb(buf, n, tb) {
         if (c == 10) {
             if (g_render_active_color != 0 - 1) { ansi_reset(); g_render_active_color = 0 - 1; }
         } else {
-            if (color != g_render_active_color) {
-                if (g_render_active_color != 0 - 1) { ansi_reset(); }
-                if (color != 0 - 1) { ansi_fg(color); }
-                g_render_active_color = color;
+            if (_in_range() == 1) {
+                if (color != g_render_active_color) {
+                    if (g_render_active_color != 0 - 1) { ansi_reset(); }
+                    if (color != 0 - 1) { ansi_fg(color); }
+                    g_render_active_color = color;
+                }
             }
         }
 
@@ -1394,15 +1382,111 @@ fn _render_highlighted_with_tb(buf, n, tb) {
     }
 
     if (g_render_active_color != 0 - 1) { ansi_reset(); }
+    g_render_active_color = 0 - 1;
+    return 0;
+}
+
+# ── Shared buffers and the slurp (1.5.3) ──────────────────────────────
+# Allocated once and reused for every file. Through 1.5.2 each file took
+# its own read buffers and a fresh 16 MiB highlight buffer and tokenbuf on
+# the never-freed heap, so `owl src/*` on a terminal grew ~3.75 MB per
+# highlighted file (audit 2026-10-31 FINDING-022). Uses are sequential —
+# one file at a time — so sharing is safe.
+var g_loop_buf    = 0;    # BUFSIZE: render_fd_loop, _follow_loop, _hex_dump_fd
+var g_first_buf   = 0;    # BUFSIZE: render_path's first chunk
+var g_hl_buf      = 0;    # HIGHLIGHT_MAX + 1: the slurp buffer
+var g_hl_tb       = 0;    # the tokenbuf
+var g_hl_overflow = 0;    # set by _hl_slurp
+
+fn _buf_loop()  { if (g_loop_buf == 0)  { g_loop_buf  = alloc(BUFSIZE); } return g_loop_buf; }
+fn _buf_first() { if (g_first_buf == 0) { g_first_buf = alloc(BUFSIZE); } return g_first_buf; }
+fn _buf_hl()    { if (g_hl_buf == 0)    { g_hl_buf    = alloc(HIGHLIGHT_MAX + 1); } return g_hl_buf; }
+
+# The tokenbuf, emptied for reuse. `_tokenbuf_reset` is vyakarana-private
+# (as `_grammars_bootstrapped` is); a rename upstream fails the build
+# loudly rather than silently.
+fn _hl_tokenbuf() {
+    if (g_hl_tb == 0) { g_hl_tb = tokenbuf_new(); return g_hl_tb; }
+    _tokenbuf_reset(g_hl_tb);
+    return g_hl_tb;
+}
+
+# Slurp fd into the shared highlight buffer, feeding each chunk to stream
+# `s`. `pre`/`pre_n` are bytes already read (render_path's first chunk).
+# Returns the byte count in the buffer, -1 on a read error, -2 when the
+# buffer cannot be allocated. Sets g_hl_overflow = 1 when the input does
+# not fit — more than HIGHLIGHT_MAX bytes, or a feed the stream refused —
+# and then the stream must not be finished; every byte read so far,
+# including the overflow probe, is in the buffer for the caller's plain
+# fallback. Through 1.5.2 the probe byte was read and dropped (audit
+# 2026-10-31 FINDING-028) and feed results were ignored (FINDING-018).
+fn _hl_slurp(fd, s, pre, pre_n) {
+    g_hl_overflow = 0;
+    var big = _buf_hl();
+    if (big == 0) { return 0 - 2; }
+    var total = 0;
+    if (pre_n > 0) {
+        memcpy(big, pre, pre_n);
+        total = pre_n;
+        if (tokenize_stream_feed(s, big, pre_n) != VYK_OK) { g_hl_overflow = 1; return total; }
+    }
+    while (total < HIGHLIGHT_MAX) {
+        var got = file_read(fd, big + total, HIGHLIGHT_MAX - total);
+        if (got < 0) { return 0 - 1; }
+        if (got == 0) { return total; }
+        var fr = tokenize_stream_feed(s, big + total, got);
+        total = total + got;
+        if (fr != VYK_OK) { g_hl_overflow = 1; return total; }
+    }
+    # Exactly full: one more byte decides. It goes into the buffer (there is
+    # room for one) so the plain fallback still renders it.
+    var pr = file_read(fd, big + total, 1);
+    if (pr > 0) { g_hl_overflow = 1; total = total + 1; }
+    return total;
+}
+
+# Byte size of an open fd, or -1 when the kernel cannot say (a pipe, a
+# /proc file — both report something, so only trust a regular file's).
+fn _fd_size(fd) {
+    var st[256];
+    if (sys_fstat(fd, &st) != 0) { return 0 - 1; }
+    if ((load32(&st + STAT_MODE) & 0xF000) != 0x8000) { return 0 - 1; }
+    return load64(&st + STAT_SIZE);
+}
+
+# The one "too large to highlight" notice. `what` is ": file" or ": input".
+fn _too_large_notice(path, what) {
+    out_flush();
+    eprint("owl: ", 5);
+    eprint_sanitized(path, strlen(path));
+    eprint(what, strlen(what));
+    var msg = " too large for highlighting (> ";
+    eprint(msg, strlen(msg));
+    var mb_buf[12];
+    var mb = (HIGHLIGHT_MAX + 1) / 1048576;
+    var mpi = 11;
+    store8(&mb_buf + mpi, 0);
+    mpi = mpi - 1;
+    if (mb == 0) { store8(&mb_buf + mpi, 48); mpi = mpi - 1; }
+    while (mb > 0) {
+        store8(&mb_buf + mpi, 48 + mb % 10);
+        mpi = mpi - 1;
+        mb = mb / 10;
+    }
+    mpi = mpi + 1;
+    eprint(&mb_buf + mpi, 11 - mpi);
+    var tail = " MB), rendering without color\n";
+    eprint(tail, strlen(tail));
     return 0;
 }
 
 fn render_fd_loop(fd) {
-    var buf = alloc(BUFSIZE);
+    var buf = _buf_loop();
+    if (buf == 0) { return 0 - 1; }
     while (1 == 1) {
         if (g_render_done == 1) { return 0; }
         var n = file_read(fd, buf, BUFSIZE);
-        if (n < 0) { return 0 - 1; }
+        if (n < 0) { g_read_errno = n; return 0 - 1; }
         if (n == 0) { return 0; }
         render_chunk(buf, n);
     }
@@ -1416,6 +1500,20 @@ fn render_fd(fd, path_for_header) {
     var lang = "plain";
     if (g_flag_lang != 0) { lang = g_flag_lang; }
     g_active_lang = lang;
+
+    # Stdin gets the output formats a file does. Through 1.5.2 render_fd had
+    # no ndjson or hex branch, so `owl --format=ndjson -` passed the input
+    # through raw — a forged JSON line reached the consumer as a token
+    # record — and `--hex -` printed raw bytes (audit 2026-10-31 FINDING-016).
+    if (g_flag_format == FORMAT_NDJSON) {
+        return _render_ndjson(fd, path_for_header, lang, 0, 0);
+    }
+    if (g_flag_hex == 1) {
+        if (g_flag_plain == 0) {
+            if (resolved_show_header() == 1) { emit_header(path_for_header); }
+            return _hex_dump_fd(fd, 0, 0);
+        }
+    }
 
     if (resolved_show_header() == 1) { emit_header(path_for_header); }
 
@@ -1452,31 +1550,14 @@ fn render_fd(fd, path_for_header) {
         # plain streaming — same shape as highlight_ok == 0 above.
         return render_fd_loop(fd);
     }
-    var tb = tokenbuf_new();
-    # Audit FINDING-011: alloc() returns 0 on failure and owl checked none
-    # of its ~27 call sites. This is the biggest request owl makes (16 MB);
-    # on failure the writes below would go through a null pointer. Fall back
-    # to the plain streaming path, which is what every other "cannot
-    # highlight" condition already does.
-    var big = alloc(HIGHLIGHT_MAX + 1);
-    if (big == 0) { tokenize_stream_free(s); return render_fd_loop(fd); }
-    var total = 0;
-    while (total < HIGHLIGHT_MAX) {
-        var got = file_read(fd, big + total, HIGHLIGHT_MAX - total);
-        if (got < 0) { tokenize_stream_free(s); return 0 - 1; }
-        if (got == 0) { break; }
-        tokenize_stream_feed(s, big + total, got);
-        total = total + got;
-    }
-    var overflow = 0;
-    if (total >= HIGHLIGHT_MAX) {
-        var probe[1];
-        var pr = file_read(fd, &probe, 1);
-        if (pr > 0) { overflow = 1; }
-    }
-    store8(big + total, 0);
+    var total = _hl_slurp(fd, s, 0, 0);
+    if (total == (0 - 1)) { tokenize_stream_free(s); return 0 - 1; }
+    if (total == (0 - 2)) { tokenize_stream_free(s); return render_fd_loop(fd); }   # FINDING-011
+    var big = g_hl_buf;
 
-    if (overflow == 0) {
+    if (g_hl_overflow == 0) {
+        store8(big + total, 0);
+        var tb = _hl_tokenbuf();
         tokenize_stream_finish(s, tb);
         tokenize_stream_free(s);
         var hrc = _render_highlighted_with_tb(big, total, tb);
@@ -1485,28 +1566,8 @@ fn render_fd(fd, path_for_header) {
     }
     tokenize_stream_free(s);
 
-    # Overflow — same fallback notice render_path uses, then stream
-    # the remainder plainly.
-    eprint("owl: ", 5);
-    eprint_sanitized(path_for_header, strlen(path_for_header));
-    var msg = ": input too large for highlighting (> ";
-    eprint(msg, strlen(msg));
-    var mb_buf[12];
-    var mb = HIGHLIGHT_MAX / 1048576;
-    var mpi = 11;
-    store8(&mb_buf + mpi, 0);
-    mpi = mpi - 1;
-    if (mb == 0) { store8(&mb_buf + mpi, 48); mpi = mpi - 1; }
-    while (mb > 0) {
-        store8(&mb_buf + mpi, 48 + mb % 10);
-        mpi = mpi - 1;
-        mb = mb / 10;
-    }
-    mpi = mpi + 1;
-    eprint(&mb_buf + mpi, 11 - mpi);
-    var tail = " MB), rendering without color\n";
-    eprint(tail, strlen(tail));
-
+    # Too large: say so, then render what was read and the rest plainly.
+    _too_large_notice(path_for_header, ": input");
     render_chunk(big, total);
     var rc_big = render_fd_loop(fd);
     if (rc_big < 0) { return 0 - 1; }
@@ -1530,14 +1591,31 @@ fn render_fd(fd, path_for_header) {
 # `-A` glyphs, wrap, and — the one that matters — escape stripping, so a
 # log line carrying a terminal escape is filtered exactly as it is in the
 # normal viewer.
-fn _follow_loop(fd) {
-    var buf = alloc(BUFSIZE);
+fn _follow_loop(fd, path) {
+    var buf = _buf_loop();
     if (buf == 0) { return 0 - 1; }
     var quiet = 0;
     while (quiet == 0) {
         var n = file_read(fd, buf, BUFSIZE);
         if (n < 0) { return 0 - 1; }
         if (n == 0) {
+            # Truncated under us (logrotate copytruncate, `: > log`): start
+            # over from the top, as `tail -f` does. Through 1.5.2 owl went
+            # silent and later printed a torn fragment (audit 2026-10-31).
+            var sz = _fd_size(fd);
+            if (sz >= 0) {
+                var cur = sys_lseek(fd, 0, 1);
+                if (cur > sz) {
+                    sys_lseek(fd, 0, 0);
+                    escape_reset();
+                    out_flush();
+                    eprint("owl: ", 5);
+                    eprint_sanitized(path, strlen(path));
+                    eprint(": file truncated\n", 17);
+                    continue;
+                }
+            }
+            out_flush();
             sleep_ms(FOLLOW_POLL_MS);
             continue;
         }
@@ -1566,40 +1644,35 @@ fn _render_ndjson(fd, path, lang, first_buf, first_n) {
         report_error(path, "tokenizer unavailable");
         return 0 - 1;
     }
-    var tb = tokenbuf_new();
-    var big = alloc(HIGHLIGHT_MAX + 1);
-    if (big == 0) {
+    # A regular file larger than the cap is refused before tokenizing it.
+    if (_fd_size(fd) > HIGHLIGHT_MAX) {
+        tokenize_stream_free(s);
+        report_error(path, "input too large for --format=ndjson");
+        return 0 - 1;
+    }
+    var total = _hl_slurp(fd, s, first_buf, first_n);
+    if (total == (0 - 2)) {
         tokenize_stream_free(s);
         report_error(path, "out of memory");
         return 0 - 1;
     }
-    var j = 0;
-    while (j < first_n) { store8(big + j, load8(first_buf + j)); j = j + 1; }
-    if (first_n > 0) { tokenize_stream_feed(s, big, first_n); }
-    var total = first_n;
-    while (total < HIGHLIGHT_MAX) {
-        var got = file_read(fd, big + total, HIGHLIGHT_MAX - total);
-        if (got < 0) {
-            tokenize_stream_free(s);
-            report_error(path, "read error");
-            return 0 - 1;
-        }
-        if (got == 0) { break; }
-        tokenize_stream_feed(s, big + total, got);
-        total = total + got;
+    if (total == (0 - 1)) {
+        tokenize_stream_free(s);
+        report_error(path, "read error");
+        return 0 - 1;
     }
     # Oversized input is a hard error here rather than the viewer's
     # quiet degrade-to-plain: a truncated token stream that still looks
-    # well-formed is worse for a consumer than no stream at all.
-    if (total >= HIGHLIGHT_MAX) {
-        var probe[1];
-        if (file_read(fd, &probe, 1) > 0) {
-            tokenize_stream_free(s);
-            report_error(path, "input too large for --format=ndjson");
-            return 0 - 1;
-        }
+    # well-formed is worse for a consumer than no stream at all. That now
+    # includes a feed the stream refused (FINDING-018).
+    if (g_hl_overflow == 1) {
+        tokenize_stream_free(s);
+        report_error(path, "input too large for --format=ndjson");
+        return 0 - 1;
     }
+    var big = g_hl_buf;
     store8(big + total, 0);
+    var tb = _hl_tokenbuf();
     tokenize_stream_finish(s, tb);
     tokenize_stream_free(s);
     return _emit_ndjson(big, total, tb);
@@ -1618,17 +1691,18 @@ fn _render_ndjson(fd, path, lang, first_buf, first_n) {
 fn render_path(path) {
     var fd = file_open(path, O_RDONLY, 0);
     if (fd < 0) {
-        report_error(path, "No such file or directory");
+        report_error(path, _errno_msg(fd));
         return 0 - 1;
     }
 
     var lang = detect_language_from_path(path);
 
-    var first_buf = alloc(BUFSIZE);
+    var first_buf = _buf_first();
+    if (first_buf == 0) { file_close(fd); report_error(path, "out of memory"); return 0 - 1; }
     var first_n = file_read(fd, first_buf, BUFSIZE);
     if (first_n < 0) {
         file_close(fd);
-        report_error(path, "read error");
+        report_error(path, _errno_msg(first_n));
         return 0 - 1;
     }
 
@@ -1747,42 +1821,41 @@ fn render_path(path) {
     render_reset();
     if (resolved_show_header() == 1) { emit_header(path); }
 
+    # A regular file already known to be over the cap is not slurped and
+    # tokenized only to be refused at the end (~2 s for 16 MiB).
     if (highlight_ok == 1) {
-        # Buffer the full file (up to HIGHLIGHT_MAX) and feed each
-        # read chunk to vyakarana's streaming tokenizer as it arrives
-        # (1.3.6 lift). The first_n bytes already buffered in
-        # first_buf (read upstream for binary detection) get fed
-        # before the loop so the stream sees the file in order.
-        # Stream lifecycle is driven here so per-chunk feed keeps
-        # vyakarana's scanner state bounded by the live span
-        # (vyakarana 2.0.1's rolling buffer) instead of total input;
-        # `_render_highlighted_with_tb` then walks the populated
-        # tokenbuf for the byte-by-byte render. One extra byte for
-        # a defensive trailing \0 (cstr-shape buffer for any consumer
-        # that touches it; not load-bearing for tokenization).
+        if (_fd_size(fd) > HIGHLIGHT_MAX) {
+            _too_large_notice(path, ": file");
+            highlight_ok = 0;
+        }
+    }
+
+    if (highlight_ok == 1) {
+        # Buffer the whole file (up to HIGHLIGHT_MAX), feeding each chunk
+        # to vyakarana's streaming tokenizer as it arrives (1.3.6 lift);
+        # the first_n bytes read for binary detection go first, so the
+        # stream sees the file in order. `_render_highlighted_with_tb` then
+        # walks the populated tokenbuf for the byte-by-byte render.
         var s = tokenize_stream_new(lang);
         if (s == 0) {
-            # Grammar dropped between has_grammar probe and now.
-            # Treat as not-highlightable; render the prefix + drain
-            # the rest plainly.
-            var big0 = alloc(BUFSIZE);
-            if (big0 == 0) { file_close(fd); return 0 - 1; }   # FINDING-011
-            var k0 = 0;
-            while (k0 < first_n) {
-                store8(big0 + k0, load8(first_buf + k0));
-                k0 = k0 + 1;
-            }
-            render_chunk(big0, first_n);
+            # Grammar dropped between has_grammar probe and now: render the
+            # prefix and drain the rest plainly.
+            render_chunk(first_buf, first_n);
             var rc0 = render_fd_loop(fd);
             file_close(fd);
             if (rc0 < 0) { return 0 - 1; }
             return 0;
         }
-        var tb = tokenbuf_new();
-        var big = alloc(HIGHLIGHT_MAX + 1);
-        # FINDING-011 — fall back to plain streaming rather than writing
-        # the file through a null pointer.
-        if (big == 0) {
+        var total = _hl_slurp(fd, s, first_buf, first_n);
+        if (total == (0 - 1)) {
+            tokenize_stream_free(s);
+            file_close(fd);
+            report_error(path, "read error");
+            return 0 - 1;
+        }
+        if (total == (0 - 2)) {
+            # FINDING-011 — no buffer: stream plainly rather than write
+            # through a null pointer.
             tokenize_stream_free(s);
             render_chunk(first_buf, first_n);
             var rcn = render_fd_loop(fd);
@@ -1790,37 +1863,11 @@ fn render_path(path) {
             if (rcn < 0) { return 0 - 1; }
             return 0;
         }
-        var j = 0;
-        while (j < first_n) {
-            store8(big + j, load8(first_buf + j));
-            j = j + 1;
-        }
-        if (first_n > 0) {
-            tokenize_stream_feed(s, big, first_n);
-        }
-        var total = first_n;
-        while (total < HIGHLIGHT_MAX) {
-            var got = file_read(fd, big + total, HIGHLIGHT_MAX - total);
-            if (got < 0) {
-                tokenize_stream_free(s);
-                file_close(fd);
-                report_error(path, "read error");
-                return 0 - 1;
-            }
-            if (got == 0) { break; }
-            tokenize_stream_feed(s, big + total, got);
-            total = total + got;
-        }
-        # If we filled the cap, check whether the file is larger.
-        var overflow = 0;
-        if (total >= HIGHLIGHT_MAX) {
-            var probe[1];
-            var p = file_read(fd, &probe, 1);
-            if (p > 0) { overflow = 1; }
-        }
-        store8(big + total, 0);
+        var big = g_hl_buf;
 
-        if (overflow == 0) {
+        if (g_hl_overflow == 0) {
+            store8(big + total, 0);
+            var tb = _hl_tokenbuf();
             tokenize_stream_finish(s, tb);
             tokenize_stream_free(s);
             var hrc = _render_highlighted_with_tb(big, total, tb);
@@ -1834,31 +1881,10 @@ fn render_path(path) {
         }
         tokenize_stream_free(s);
 
-        # File exceeds HIGHLIGHT_MAX — flush what we have plainly and
-        # stream the remainder. No color, but line numbers / -A / tabs
-        # all still apply via render_chunk. Tell the user why color is
-        # missing — the gutter stays on, highlighting doesn't, and a
-        # silent drop is confusing.
-        eprint("owl: ", 5);
-        eprint_sanitized(path, strlen(path));
-        var msg = ": file too large for highlighting (> ";
-        eprint(msg, strlen(msg));
-        var mb_buf[12];
-        var mb = HIGHLIGHT_MAX / 1048576;
-        var mpi = 11;
-        store8(&mb_buf + mpi, 0);
-        mpi = mpi - 1;
-        if (mb == 0) { store8(&mb_buf + mpi, 48); mpi = mpi - 1; }
-        while (mb > 0) {
-            store8(&mb_buf + mpi, 48 + mb % 10);
-            mpi = mpi - 1;
-            mb = mb / 10;
-        }
-        mpi = mpi + 1;
-        eprint(&mb_buf + mpi, 11 - mpi);
-        var tail = " MB), rendering without color\n";
-        eprint(tail, strlen(tail));
-
+        # Too large after all (it grew, or the size was not knowable): say
+        # why colour is missing, then render what was read and the rest
+        # plainly — line numbers, -A and tabs all still apply.
+        _too_large_notice(path, ": file");
         render_chunk(big, total);
         var rc_big = render_fd_loop(fd);
         file_close(fd);
@@ -1877,7 +1903,7 @@ fn render_path(path) {
     # path that has already closed the fd.
     if (g_flag_follow == 1) {
         if (rc >= 0) {
-            var frc = _follow_loop(fd);
+            var frc = _follow_loop(fd, path);
             file_close(fd);
             if (frc < 0) {
                 report_error(path, "read error");
@@ -1900,7 +1926,7 @@ fn print_version() {
     println(OWL_VERSION);
     if (g_flag_verbose == 1) {
         # Kept in sync with cyrius.cyml [deps.*].tag and [package].cyrius.
-        # Useful for bug reports — "owl 1.5.2 vyakarana 2.10.0 sit 1.13.0
+        # Useful for bug reports — "owl 1.5.3 vyakarana 2.10.0 sit 1.13.0
         # cyrius 6.7.18 linux-x86_64" pins the exact toolchain + dep
         # versions a user is running against. sit (1.4.0) backs the VCS
         # change-marker gutter via sit_diff_path.
@@ -1952,7 +1978,8 @@ fn print_help() {
     println("Config (optional):");
     println("  $OWL_CONFIG, else $XDG_CONFIG_HOME/owl/config.cyml,");
     println("  else ~/.config/owl/config.cyml. Keys: theme, paging,");
-    println("  style, tabs, wrap. CLI flags override the config.");
+    println("  style, tabs, wrap, ext.<ext> = <language>. CLI flags");
+    println("  override the config.");
     return EXIT_OK;
 }
 
@@ -1988,55 +2015,54 @@ fn set_wrap(value) {
 fn set_line_range(value) {
     var vlen = strlen(value);
     if (vlen == 0) { return 1; }
-    var i = 0;
-    var a = 0;
-    var has_a = 0;
-    while (i < vlen) {
-        var c = load8(value + i);
-        if (c == 58) { i = i + 1; break; }   # ':' separator
-        if (c < 48) { return 1; }
-        if (c > 57) { return 1; }
-        a = a * 10 + (c - 48);
-        has_a = 1;
-        i = i + 1;
-    }
-    var b = 0;
-    var has_b = 0;
-    while (i < vlen) {
-        var c = load8(value + i);
-        if (c < 48) { return 1; }
-        if (c > 57) { return 1; }
-        b = b * 10 + (c - 48);
-        has_b = 1;
-        i = i + 1;
-    }
-    # No colon at all: single-line form "A" → range [A,A].
-    var saw_colon = 0;
+    var colon = 0 - 1;
     var k = 0;
     while (k < vlen) {
-        if (load8(value + k) == 58) { saw_colon = 1; k = vlen; continue; }
+        if (load8(value + k) == 58) { if (colon < 0) { colon = k; } }
         k = k + 1;
     }
-    if (saw_colon == 0) {
-        if (has_a == 0) { return 1; }
-        g_line_range_start = a;
-        g_line_range_end = a;
-        return 0;
+    var a_end = vlen;
+    if (colon >= 0) { a_end = colon; }
+    var a = _parse_line_no(value, 0, a_end);
+    if (a < 0) { return 1; }
+    var b = 0;
+    if (colon >= 0) {
+        b = _parse_line_no(value, colon + 1, vlen);
+        if (b < 0) { return 1; }
+    } else {
+        if (a == 0) { return 1; }
+        b = a;
     }
-    if (has_a == 1) { g_line_range_start = a; }
-    else            { g_line_range_start = 0; }
-    if (has_b == 1) { g_line_range_end = b; }
-    else            { g_line_range_end = 0; }
-    if (g_line_range_start > 0) {
-        if (g_line_range_end > 0) {
-            if (g_line_range_start > g_line_range_end) { return 1; }
-        }
-    }
+    if (a > 0) { if (b > 0) { if (a > b) { return 1; } } }
+    g_line_range_start = a;    # 0 = open
+    g_line_range_end = b;      # 0 = open
     return 0;
 }
 
+# Digits value[s..e): 0 when empty (an open end), -1 when anything is not
+# a digit, when there are more than 18 digits (i64 overflow — 2^64 + 1
+# wrapped to line 1; FINDING-010's lesson), or when the value is 0 (lines
+# are 1-indexed: `0`, `0:` and `:0` used to mean "unset" and print the
+# whole file). Audit 2026-10-31 FINDING-027.
+fn _parse_line_no(v, s, e) {
+    if (e <= s) { return 0; }
+    if (e - s > 18) { return 0 - 1; }
+    var n = 0;
+    var i = s;
+    while (i < e) {
+        var c = load8(v + i);
+        if (c < 48) { return 0 - 1; }
+        if (c > 57) { return 0 - 1; }
+        n = n * 10 + (c - 48);
+        i = i + 1;
+    }
+    if (n == 0) { return 0 - 1; }
+    return n;
+}
+
 # --strip-ansi=auto|always|never. less -R naming for the existing -r
-# behavior plus an "always" mode that strips even in plain output.
+# behavior plus an "always" mode that also strips undecorated piped
+# output (never -p, which is cat-identical).
 fn set_strip_ansi(value) {
     if (streq(value, "auto") == 1)   { g_flag_strip_ansi = 0; return 0; }
     if (streq(value, "always") == 1) { g_flag_strip_ansi = 1; return 0; }
@@ -2065,33 +2091,77 @@ fn _ndjson_escape(buf, s, len) {
     var i = 0;
     while (i < len) {
         var c = load8(buf + s + i);
-        if (c == 34) { print("\\\"", 2); }
-        else { if (c == 92) { print("\\\\", 2); }
-        else { if (c == 8)  { print("\\b", 2); }
-        else { if (c == 12) { print("\\f", 2); }
-        else { if (c == 10) { print("\\n", 2); }
-        else { if (c == 13) { print("\\r", 2); }
-        else { if (c == 9)  { print("\\t", 2); }
+        if (c == 34) { out_write("\\\"", 2); }
+        else { if (c == 92) { out_write("\\\\", 2); }
+        else { if (c == 8)  { out_write("\\b", 2); }
+        else { if (c == 12) { out_write("\\f", 2); }
+        else { if (c == 10) { out_write("\\n", 2); }
+        else { if (c == 13) { out_write("\\r", 2); }
+        else { if (c == 9)  { out_write("\\t", 2); }
         else { if (c < 32) {
                     # \u00XX — the only remaining C0 shapes.
-                    print("\\u00", 4);
+                    out_write("\\u00", 4);
                     var hi = c / 16;
                     var lo = c % 16;
                     _ndjson_hex_digit(hi);
                     _ndjson_hex_digit(lo);
                 } else {
-                    if (c == 127) { print("\\u007f", 6); }
-                    else { print(buf + s + i, 1); }
+                    if (c == 127) { out_write("\\u007f", 6); }
+                    else {
+                        if (c < 128) { out_write(buf + s + i, 1); }
+                        else {
+                            # A well-formed UTF-8 sequence passes through
+                            # untouched; anything else is not valid JSON
+                            # text, so it becomes U+FFFD (audit 2026-10-31).
+                            var sl = _utf8_seq_len(buf, s + i, s + len);
+                            if (sl == 0) { out_write("\\ufffd", 6); }
+                            else {
+                                out_write(buf + s + i, sl);
+                                i = i + sl - 1;
+                            }
+                        }
+                    }
                 } } } } } } } }
         i = i + 1;
     }
     return 0;
 }
 
+# Length of the well-formed UTF-8 sequence that starts at buf[p] (a byte
+# >= 0x80) and ends before `end`, or 0 when it is not one: a stray
+# continuation byte, an overlong form, a surrogate, a value past U+10FFFF,
+# or a sequence the token boundary cuts short (RFC 3629 §4).
+fn _utf8_seq_len(buf, p, end) {
+    var c = load8(buf + p);
+    var n = 0;
+    if (c >= 0xC2) { if (c <= 0xDF) { n = 2; } }
+    if (c >= 0xE0) { if (c <= 0xEF) { n = 3; } }
+    if (c >= 0xF0) { if (c <= 0xF4) { n = 4; } }
+    if (n == 0) { return 0; }
+    if (p + n > end) { return 0; }
+    var lo = 0x80;
+    var hi = 0xBF;
+    if (c == 0xE0) { lo = 0xA0; }
+    if (c == 0xED) { hi = 0x9F; }
+    if (c == 0xF0) { lo = 0x90; }
+    if (c == 0xF4) { hi = 0x8F; }
+    var b1 = load8(buf + p + 1);
+    if (b1 < lo) { return 0; }
+    if (b1 > hi) { return 0; }
+    var k = 2;
+    while (k < n) {
+        var b = load8(buf + p + k);
+        if (b < 0x80) { return 0; }
+        if (b > 0xBF) { return 0; }
+        k = k + 1;
+    }
+    return n;
+}
+
 fn _ndjson_hex_digit(v) {
     var d[1];
     if (v < 10) { store8(&d, 48 + v); } else { store8(&d, 87 + v); }
-    print(&d, 1);
+    out_write(&d, 1);
     return 0;
 }
 
@@ -2130,18 +2200,18 @@ fn _emit_ndjson(buf, n, tb) {
             if (load8(buf + scan) == 10) { line = line + 1; }
             scan = scan + 1;
         }
-        print("{\"kind\":\"", 9);
+        out_write("{\"kind\":\"", 9);
         var name = kind_name(k);
-        print(name, strlen(name));
-        print("\",\"start\":", 10);
-        fmt_int(st);
-        print(",\"len\":", 7);
-        fmt_int(ln);
-        print(",\"line\":", 8);
-        fmt_int(line);
-        print(",\"text\":\"", 9);
+        out_write(name, strlen(name));
+        out_write("\",\"start\":", 10);
+        out_int(st);
+        out_write(",\"len\":", 7);
+        out_int(ln);
+        out_write(",\"line\":", 8);
+        out_int(line);
+        out_write(",\"text\":\"", 9);
         _ndjson_escape(buf, st, ln);
-        print("\"}\n", 3);
+        out_write("\"}\n", 3);
         i = i + 1;
     }
     return 0;
@@ -2190,15 +2260,32 @@ fn should_page() {
 
 fn main() {
     alloc_init();
-    args_init();
+    # The stdlib reads argv from /proc/self/cmdline. Without /proc (a
+    # chroot, a container, fd exhaustion) every argument was silently
+    # dropped and owl read stdin instead (audit 2026-10-31 FINDING-038).
+    if (args_init() < 0) {
+        eprint("owl: cannot read the command line\n", 34);
+        return EXIT_USAGE;
+    }
     # Config → env → CLI: read the file first so CLI flags parsed
     # below always win. Missing file is a silent no-op.
     config_load();
 
     var n = argc();
-    var ok = 0;
-    var fail = 0;
-    var any_positional = 0;
+    # Two passes. Pass 1 parses and validates every flag and collects the
+    # positional arguments; pass 2 renders them. Through 1.5.2 this was one
+    # loop that rendered each file as it was reached, so a flag after a file
+    # half-applied (`owl a.c -p b.c` highlighted b.c — -p no longer cat-
+    # identical; `--color=never` after a file was ignored), `owl FILE
+    # --bogus` rendered FILE before exiting 2 and orphaned the pager, and
+    # `owl missing.txt -V` threw the failure away (audit 2026-10-31
+    # FINDING-024). Every flag now applies to every file.
+    var pos = alloc((n + 1) * 8);
+    if (pos == 0) {
+        eprint("owl: out of memory\n", 19);
+        return EXIT_USAGE;
+    }
+    var npos = 0;
 
     var i = 1;
     while (i < n) {
@@ -2344,11 +2431,8 @@ fn main() {
         }
 
         if (streq(a, "-") == 1) {
-            if (any_positional == 0) { resolve_mode(); if (should_page() == 1) { start_pager(); } }
-            any_positional = 1;
-            var stdin_rc = render_fd(STDIN, "<stdin>");
-            emit_footer();
-            if (stdin_rc < 0) { fail = fail + 1; } else { ok = ok + 1; }
+            store64(pos + npos * 8, i);
+            npos = npos + 1;
             i = i + 1;
             continue;
         }
@@ -2358,23 +2442,63 @@ fn main() {
             return EXIT_USAGE;
         }
 
-        if (any_positional == 0) { resolve_mode(); if (should_page() == 1) { start_pager(); } }
-        any_positional = 1;
-        var file_rc = render_path(a);
-        emit_footer();
-        if (file_rc < 0) { fail = fail + 1; } else { ok = ok + 1; }
+        store64(pos + npos * 8, i);
+        npos = npos + 1;
         i = i + 1;
     }
 
-    if (any_positional == 0) {
+    # --follow tails one regular file: with several, the first never ended
+    # and the rest were never shown; on stdin it was silently not followed.
+    if (g_flag_follow == 1) {
+        var fok = 0;
+        if (npos == 1) {
+            if (streq(argv(load64(pos)), "-") == 0) { fok = 1; }
+        }
+        if (fok == 0) {
+            report_error("--follow", "needs exactly one file (not stdin)");
+            return EXIT_USAGE;
+        }
+    }
+
+    if (npos == 0) {
         if (is_tty(STDIN) == 1) { return print_help(); }
         resolve_mode();
         if (should_page() == 1) { start_pager(); }
+        g_err_reported = 0;
         var bare_rc = render_fd(STDIN, "<stdin>");
+        if (bare_rc < 0) {
+            if (g_err_reported == 0) { report_error("<stdin>", _errno_msg(g_read_errno)); }
+        }
         emit_footer();
         stop_pager();
         if (bare_rc < 0) { return EXIT_ALL_FAIL; }
         return EXIT_OK;
+    }
+
+    # Pass 2: render.
+    resolve_mode();
+    if (should_page() == 1) { start_pager(); }
+    var ok = 0;
+    var fail = 0;
+    var k = 0;
+    while (k < npos) {
+        var pa = argv(load64(pos + k * 8));
+        var rc = 0;
+        g_err_reported = 0;
+        g_read_errno = 0;
+        if (streq(pa, "-") == 1) { rc = render_fd(STDIN, "<stdin>"); }
+        else { rc = render_path(pa); }
+        if (rc < 0) {
+            if (g_err_reported == 0) {
+                var shown = pa;
+                if (streq(pa, "-") == 1) { shown = "<stdin>"; }
+                report_error(shown, _errno_msg(g_read_errno));
+            }
+        }
+        emit_footer();
+        out_flush();
+        if (rc < 0) { fail = fail + 1; } else { ok = ok + 1; }
+        k = k + 1;
     }
 
     var exit_code = EXIT_OK;
@@ -2394,6 +2518,7 @@ fn main() {
 # 60 on Linux (per-target), so this form is correct on host AND agnos.
 fn _owl_entry(): i64 {
     var r = main();
+    out_flush();
     syscall(SYS_EXIT, r);
     return 0;
 }

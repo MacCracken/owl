@@ -63,31 +63,46 @@ owl                      # with no args and stdin is a pipe: read stdin
 
 ### 3.3 Options
 
+Value-taking options use the `--name=value` form only (`--color=always`,
+not `--color always`). Every option applies to every file, wherever it
+appears among the arguments, and all of them are validated before anything
+renders (1.5.3).
+
 | Short | Long | Description |
 |-------|------|-------------|
 | `-n` | `--number` | Show line numbers (on by default in decorated mode) |
 | `-N` | `--no-number` | Hide line numbers |
-| `-p` | `--plain` | No decorations. Equivalent to `cat`. Shortcut for `--no-number --no-highlight --no-header --no-pager` |
-| `-P` | `--paging <when>` | Paging: `auto` (default), `always`, `never` |
-| | `--color <when>` | Color: `auto` (default), `always`, `never` |
-| | `--theme <name>` | Syntax highlighting theme. See §5.2 |
-| | `--list-themes` | Print available themes and exit |
-| | `--language <lang>` | Force language for syntax highlighting (overrides auto-detect) |
-| | `--list-languages` | Print supported languages and exit |
+| `-p` | `--plain` | No decorations, no colour, no paging, no stripping: byte-identical to `cat` |
 | `-A` | `--show-all` | Show non-printable characters (tabs as `→`, newlines as `$`, etc.) |
-| | `--tabs <n>` | Render tabs as N spaces. Default: 4. `0` preserves literal tab |
-| | `--wrap <mode>` | Line wrapping: `auto` (default), `never`, `character` |
-| | `--style <list>` | Comma-separated decoration list: `numbers`, `header`, `grid`, `changes`, `snip`. Overrides individual toggles |
+| `-x` | `--hex` | xxd-style hex dump (automatic for a file containing NUL bytes) |
+| `-r` | `--raw-control-chars` | Pass file-origin terminal escapes through (default: stripped in decorated or coloured output) |
+| `-f` | `--follow` | Keep rendering as the file grows, like `tail -f`; exactly one file, not stdin |
+| `-v` | `--verbose` | With `--version`, also print the dependency and toolchain pins |
+| | `--color=<when>` | `auto` (default), `always`, `never` |
+| | `--paging=<when>` | `auto` (default), `always`, `never` |
+| | `--style=<mode>` | Gutter change markers: `auto` (default), `changes`, `no-changes` |
+| | `--theme=<name>` | Syntax highlighting theme (bundled `dark`, `light`, or a user theme). See §5.2 |
+| | `--list-themes` | Print available themes and exit |
+| | `--language=<lang>` | Force the language for syntax highlighting (overrides detection) |
+| | `--list-languages` | Print supported languages and exit |
+| | `--tabs=<n>` | Render tabs as N spaces (0–64). Default: 4. `0` preserves the literal tab |
+| | `--wrap=<mode>` | `auto` (default), `never`, `character` |
+| | `--strip-ansi=<when>` | `auto` (default), `always`, `never` (`never` is `-r`) |
+| | `--line-range=<A:B>` | 1-indexed inclusive range: `A:B`, `A:`, `:B` or `A` |
+| | `--diff` | Show only the lines with change markers |
+| | `--format=<fmt>` | `text` (default) or `ndjson`: one JSON object per token (needs a grammar) |
 | `-h` | `--help` | Print help and exit |
 | `-V` | `--version` | Print version and exit |
 
 ### 3.4 Environment variables
 
-- `OWL_THEME` — default theme name
-- `OWL_PAGER` — pager command (overrides system pager)
-- `OWL_CONFIG` — config file path (overrides default location)
-- `NO_COLOR` — if set to any non-empty value, disable color (standard convention)
-- `PAGER` — fallback pager if `OWL_PAGER` unset
+- `OWL_PAGER` — pager command (overrides `PAGER`); run through `/bin/sh -c`, receives content on stdin only
+- `PAGER` — fallback pager if `OWL_PAGER` is unset (default `less -RFX`; `LESS=FRX` is supplied when `LESS` is unset)
+- `OWL_CONFIG` — config file path (overrides `$XDG_CONFIG_HOME/owl/config.cyml` and `~/.config/owl/config.cyml`)
+- `XDG_CONFIG_HOME`, `HOME` — locate the config, user themes and user grammars
+- `NO_COLOR` — if set to any non-empty value, disable colour (standard convention); `--color=always` overrides it
+
+A default theme is set with `theme = <name>` in the config file.
 
 ---
 
@@ -106,10 +121,11 @@ owl                      # with no args and stdin is a pipe: read stdin
 ### 4.2 Plain mode (default when stdout is not a TTY, or `-p`)
 
 - No decorations of any kind
-- Bytes pass through essentially unchanged
+- With `-p`, bytes pass through unchanged: byte-identical to `cat`, always
+- Without `-p`, piped output is undecorated and uncoloured but tabs are still expanded to `--tabs` (default 4); use `-p` or `--tabs=0` for exact bytes. *(This differs from the original "essentially unchanged" wording; smoke pins the expansion. Whether piped output should keep literal tabs is an open decision recorded in the 2026-10-31 audit, INFO-012.)*
 - Exit behavior matches `cat` for scriptability
 
-**Rule:** `owl` MUST detect whether stdout is a TTY and flip to plain mode when it is not, unless the user explicitly requests `--color always` or `--paging always`.
+**Rule:** `owl` MUST detect whether stdout is a TTY and flip to plain mode when it is not, unless the user explicitly requests `--color=always` or `--paging=always`.
 
 ---
 

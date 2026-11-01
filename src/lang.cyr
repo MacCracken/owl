@@ -5,7 +5,8 @@
 #
 # Design:
 #   - lang table is a flat array of {name, extensions, shebang_hints}
-#   - extensions are matched case-sensitive against the file suffix
+#   - extensions are matched case-insensitively against the file suffix
+#     (the path is folded; table entries and user overrides are lowercase)
 #   - shebang peek reads the first 128 bytes and looks for "#!"
 #   - unknown/missing input falls through to "plain"
 #
@@ -282,26 +283,34 @@ fn _user_ext_init() {
     return 0;
 }
 
-# Register one ext→lang override. Returns 0 OK, 1 if table is full,
-# 2 if the language name is unknown. Called by config.cyr after key
-# parsing.
+# Register one ext→lang override. Returns 0 OK, 1 if the table is full
+# (USER_EXT_MAX distinct extensions), 2 if the language name is unknown,
+# the extension is empty, or memory ran out. Called by config.cyr after
+# key parsing; config.cyr owns the messages for these codes.
+#
+# The extension is stored normalised — leading dot added, A-Z folded to
+# a-z — because the lookup in detect_language_from_path folds only the
+# PATH side (the built-in table is lowercase by construction). Through
+# 1.5.2 it was stored as typed, so `ext.CONF = shell` could never match
+# anything. Registering an extension that is already present replaces its
+# language in place (every other config key is last-wins; this one was
+# first-wins) and does not use up a slot.
 fn lang_register_ext_override(ext, lang) {
-    if (g_user_ext_count >= USER_EXT_MAX) { return 1; }
     var li = lang_index(lang);
     if (li < 0) { return 2; }
 
     var elen = strlen(ext);
     if (elen == 0) { return 2; }
 
-    if (_user_ext_init() != 0) { return 1; }   # FINDING-011
+    if (_user_ext_init() != 0) { return 2; }   # FINDING-011
 
     # Normalize: prepend a leading dot if the user didn't include one,
     # so _path_ends_with_lower behaves the same as for the built-in
-    # lang_exts table ("conf" → ".conf").
+    # lang_exts table ("conf" → ".conf"), and fold to lowercase.
     var dot = 0;
     if (load8(ext) != 46) { dot = 1; }
     var copy = alloc(elen + dot + 1);
-    if (copy == 0) { return 1; }   # FINDING-011
+    if (copy == 0) { return 2; }   # FINDING-011
     var off = 0;
     if (dot == 1) {
         store8(copy + off, 46);
@@ -309,12 +318,24 @@ fn lang_register_ext_override(ext, lang) {
     }
     var k = 0;
     while (k < elen) {
-        store8(copy + off, load8(ext + k));
+        var c = load8(ext + k);
+        if (c >= 65) { if (c <= 90) { c = c + 32; } }
+        store8(copy + off, c);
         off = off + 1;
         k = k + 1;
     }
     store8(copy + off, 0);
 
+    var ui = 0;
+    while (ui < g_user_ext_count) {
+        if (streq(load64(g_user_ext_keys + ui * 8), copy) == 1) {
+            store64(g_user_ext_langs + ui * 8, li);
+            return 0;
+        }
+        ui = ui + 1;
+    }
+
+    if (g_user_ext_count >= USER_EXT_MAX) { return 1; }
     store64(g_user_ext_keys  + g_user_ext_count * 8, copy);
     store64(g_user_ext_langs + g_user_ext_count * 8, li);
     g_user_ext_count = g_user_ext_count + 1;
@@ -362,14 +383,21 @@ fn detect_language_from_shebang(buf, n) {
     if (load8(buf) != 35) { return 0; }   # '#'
     if (load8(buf + 1) != 33) { return 0; } # '!'
 
-    # Extract shebang line (up to \n or EOF, cap at 127 bytes).
+    # Extract shebang line (up to \n, \r or EOF, cap at 127 bytes). CR
+    # ends it too, so a CRLF script's interpreter is "sh", not "sh\r"; a
+    # TAB is a separator exactly as the kernel's shebang parser treats it,
+    # so `#!/usr/bin/env<TAB>python3` routes. Both were missed through 1.5.2.
     var sb[128];
     var sbi = 0;
     var pi = 2;
-    while (pi < n) {
-        if (sbi >= 127) { break; }
+    var stop = 0;
+    while (stop == 0) {
+        if (pi >= n)    { stop = 1; continue; }
+        if (sbi >= 127) { stop = 1; continue; }
         var c = load8(buf + pi);
-        if (c == 10) { break; }
+        if (c == 10) { stop = 1; continue; }
+        if (c == 13) { stop = 1; continue; }
+        if (c == 9)  { c = 32; }
         store8(&sb + sbi, c);
         sbi = sbi + 1;
         pi = pi + 1;

@@ -1133,6 +1133,253 @@ else
 fi
 
 # ============================================================
+# 1.5.3 — VCS path hardening (docs/audit/2026-10-31-audit.md)
+# ============================================================
+
+# git with the user's config shut out (signing, hooks or templates can't break
+# a fixture). Shared by the 1.5.3 VCS gates below.
+sgit() {
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+        git -c user.name=owl -c user.email=owl@smoke -c init.defaultBranch=main "$@"
+}
+# Marker count in piped gutter output (`    11 ~ │ text`). `|| true`: grep -c
+# exits 1 on zero matches, and zero is usually the passing case under set -e.
+count_marks() { grep -cE '^ *[0-9]+ [-+~] ' "$1" || true; }
+HAVE_TIMEOUT=0
+command -v timeout >/dev/null 2>&1 && HAVE_TIMEOUT=1
+HAVE_GIT=0
+command -v git >/dev/null 2>&1 && HAVE_GIT=1
+
+# A FIFO named `.git/HEAD` in an ancestor: repo discovery must stat(), never
+# open() — open(2) on a FIFO blocks until a writer appears, and through 1.5.2
+# owl hung there forever. A HEAD that isn't a regular file is no repository,
+# so the file is "outside of repo".
+if [ "$HAVE_TIMEOUT" = "1" ] && mkdir -p "$TMPDIR/fifo/p/.git" "$TMPDIR/fifo/p/src" \
+    && mkfifo "$TMPDIR/fifo/p/.git/HEAD" 2>/dev/null; then
+echo hi > "$TMPDIR/fifo/p/src/a.txt"
+set +e
+out=$(timeout 10 "$BIN" --diff "$TMPDIR/fifo/p/src/a.txt" 2>"$TMPDIR/err")
+rc=$?
+set -e
+[ "$rc" != "124" ] || fail "FIFO .git/HEAD in an ancestor hung repo discovery (killed after 10s)"
+[ "$rc" = "0" ]    || fail "FIFO .git/HEAD in an ancestor: exit $rc, expected 0"
+[ -z "$out" ]      || fail "FIFO .git/HEAD in an ancestor: --diff should emit nothing, got: $out"
+grep -q "outside of repo" "$TMPDIR/err" \
+    || fail "FIFO .git/HEAD in an ancestor: expected 'outside of repo', got: $(cat "$TMPDIR/err")"
+set +e
+timeout 10 "$BIN" -n --color=never --style=changes --paging=never \
+    "$TMPDIR/fifo/p/src/a.txt" > "$TMPDIR/out" 2>&1
+rc=$?
+set -e
+[ "$rc" = "0" ] || fail "FIFO .git/HEAD in an ancestor: gutter view exit $rc (124 = hung)"
+grep -q 'hi' "$TMPDIR/out" || fail "FIFO .git/HEAD in an ancestor: gutter view lost the file content"
+else
+echo "smoke: NOTE — timeout or mkfifo unavailable; skipping the FIFO .git/HEAD gate" >&2
+fi
+
+# VCS memory is bounded BEFORE sit runs. sit's diff costs ~95 B per line per
+# side, so 1 MiB of newlines with a 1-byte edit cost ~200 MB through 1.5.2 (and
+# 16 MiB cost 2.5 GB). Over VCS_MAX_LINES (512 Ki) or VCS_MAX_BYTES (8 MiB)
+# owl now skips markers: silent in the gutter, one note under --diff. Run
+# under a 128 MB address-space cap, which 1.5.2 died under (SIGSEGV or 'vec: alloc failed').
+if [ "$HAVE_GIT" = "1" ]; then
+mrepo="$TMPDIR/vcsmem"
+mkdir -p "$mrepo"
+(
+    cd "$mrepo" || exit 1
+    sgit init -q . || exit 1
+    head -c 1048576 /dev/zero | tr '\0' '\n' > nl.txt
+    # 9 MiB in 9216 lines: over the byte ceiling, nowhere near the line one.
+    line=$(head -c 1023 /dev/zero | tr '\0' 'w')
+    i=0; : > wide.txt
+    while [ $i -lt 9216 ]; do printf '%s\n' "$line"; i=$((i + 1)); done > wide.txt
+    sgit add nl.txt wide.txt || exit 1
+    sgit commit -qm base || exit 1
+    printf 'X' | dd of=nl.txt bs=1 seek=100 conv=notrunc 2>/dev/null || exit 1
+    printf 'X' | dd of=wide.txt bs=1 seek=100 conv=notrunc 2>/dev/null || exit 1
+) || fail "could not build the VCS-memory git fixture"
+set +e
+( cd "$mrepo" && ulimit -v 131072 && exec "$BIN_ABS" --diff --paging=never nl.txt ) \
+    > "$TMPDIR/out" 2>"$TMPDIR/err"
+rc=$?
+set -e
+[ "$rc" = "0" ] || fail "VCS memory: --diff of 1 MiB of newlines under a 128 MB cap exited $rc (1.5.2: out of memory — SIGSEGV or 'alloc failed')"
+[ ! -s "$TMPDIR/out" ] || fail "VCS memory: a file over VCS_MAX_LINES should get no diff, got: $(head -c 200 "$TMPDIR/out")"
+grep -q "too large" "$TMPDIR/err" \
+    || fail "VCS memory: --diff over VCS_MAX_LINES should say 'too large', got: $(cat "$TMPDIR/err")"
+set +e
+( cd "$mrepo" && ulimit -v 131072 && exec "$BIN_ABS" -n --color=never --style=changes \
+    --paging=never --line-range=95:105 nl.txt ) > "$TMPDIR/out" 2>"$TMPDIR/err"
+rc=$?
+set -e
+[ "$rc" = "0" ] || fail "VCS memory: gutter view of 1 MiB of newlines under a 128 MB cap exited $rc"
+[ ! -s "$TMPDIR/err" ] || fail "VCS memory: gutter mode must skip silently, got: $(cat "$TMPDIR/err")"
+n=$(count_marks "$TMPDIR/out")
+[ "$n" = "0" ] || fail "VCS memory: a file over VCS_MAX_LINES should show no markers, got $n"
+# Byte ceiling: 9 MiB of 1 KiB lines.
+( cd "$mrepo" && "$BIN_ABS" -n --color=never --style=changes --paging=never \
+    --line-range=1:3 wide.txt ) > "$TMPDIR/out" 2>/dev/null
+n=$(count_marks "$TMPDIR/out")
+[ "$n" = "0" ] || fail "VCS memory: a file over VCS_MAX_BYTES should show no markers, got $n"
+else
+echo "smoke: NOTE — git not found; skipping the VCS memory-ceiling gate" >&2
+fi
+
+# -p is cat: it must not run the VCS diff at all (through 1.5.2 `-p --diff`
+# computed every marker and threw them away). Two observables: no "outside of
+# repo" note (the VCS path never ran), and a 500 Ki-line file in a dirty repo
+# — under the ceilings, so the gutter WOULD diff it — streams under a 64 MB
+# address-space cap that the discarded diff blew through.
+cp README.md "$TMPDIR/plain_diff.md"
+"$BIN" -p --diff "$TMPDIR/plain_diff.md" > "$TMPDIR/out" 2>"$TMPDIR/err" \
+|| fail "-p --diff outside a repo exited non-zero"
+cmp -s "$TMPDIR/out" "$TMPDIR/plain_diff.md" || fail "-p --diff is not byte-identical to cat"
+[ ! -s "$TMPDIR/err" ] || fail "-p --diff consulted VCS (stderr: $(cat "$TMPDIR/err"))"
+if [ "$HAVE_GIT" = "1" ]; then
+prepo="$TMPDIR/plainvcs"
+mkdir -p "$prepo"
+(
+    cd "$prepo" || exit 1
+    sgit init -q . || exit 1
+    head -c 512000 /dev/zero | tr '\0' '\n' > nl.txt
+    sgit add nl.txt || exit 1
+    sgit commit -qm base || exit 1
+    printf 'X' | dd of=nl.txt bs=1 seek=100 conv=notrunc 2>/dev/null || exit 1
+) || fail "could not build the -p --diff git fixture"
+set +e
+( cd "$prepo" && ulimit -v 65536 && exec "$BIN_ABS" -p --diff nl.txt ) > "$TMPDIR/out" 2>/dev/null
+rc=$?
+set -e
+[ "$rc" = "0" ] || fail "-p --diff ran the VCS diff: exit $rc under a 64 MB cap (1.5.2: SIGSEGV)"
+cmp -s "$TMPDIR/out" "$prepo/nl.txt" || fail "-p --diff in a dirty repo is not byte-identical to cat"
+else
+echo "smoke: NOTE — git not found; skipping the -p --diff memory half of the plain-mode gate" >&2
+fi
+
+# A tracked symlink holds its target TEXT; owl shows the target's CONTENT and
+# sit read through the link, so a clean, committed symlink marked every line
+# "~". The path naming a symlink now means no markers.
+if [ "$HAVE_GIT" = "1" ]; then
+srepo="$TMPDIR/vcslink"
+mkdir -p "$srepo"
+(
+    cd "$srepo" || exit 1
+    sgit init -q . || exit 1
+    printf 'one\ntwo\nthree\n' > target.txt
+    ln -s target.txt link.txt || exit 1
+    sgit add target.txt link.txt || exit 1
+    sgit commit -qm base || exit 1
+) || fail "could not build the tracked-symlink git fixture"
+( cd "$srepo" && "$BIN_ABS" -n --color=never --style=changes --paging=never link.txt ) \
+    > "$TMPDIR/out" 2>/dev/null
+grep -q 'three' "$TMPDIR/out" || fail "tracked symlink: target content not rendered"
+n=$(count_marks "$TMPDIR/out")
+[ "$n" = "0" ] || fail "tracked symlink: a clean committed symlink should show no markers, got $n"
+out=$( cd "$srepo" && "$BIN_ABS" --diff link.txt 2>"$TMPDIR/err" )
+[ -z "$out" ] || fail "tracked symlink: --diff should emit nothing, got: $out"
+grep -q "symlink" "$TMPDIR/err" || fail "tracked symlink: --diff should say why, got: $(cat "$TMPDIR/err")"
+else
+echo "smoke: NOTE — git not found; skipping the tracked-symlink gate" >&2
+fi
+
+# A `.git` that is a FILE (`gitdir:` — a submodule or `git worktree add`) is a
+# repository boundary sit can't follow. Through 1.5.2 the walk went on to the
+# superproject, where the worktree's files are untracked: every line "+".
+if [ "$HAVE_GIT" = "1" ]; then
+wrepo="$TMPDIR/vcswt"
+mkdir -p "$wrepo"
+(
+    cd "$wrepo" || exit 1
+    sgit init -q . || exit 1
+    printf 'a\nb\nc\n' > f.txt
+    sgit add f.txt || exit 1
+    sgit commit -qm base || exit 1
+    sgit worktree add -q nested >/dev/null 2>&1 || exit 1
+) || fail "could not build the linked-worktree git fixture"
+[ -f "$wrepo/nested/.git" ] || fail "linked-worktree fixture: nested/.git is not a file"
+"$BIN" -n --color=never --style=changes --paging=never "$wrepo/nested/f.txt" \
+    > "$TMPDIR/out" 2>/dev/null
+n=$(count_marks "$TMPDIR/out")
+[ "$n" = "0" ] || fail "linked worktree: a .git file must stop the repo walk (no markers), got $n"
+out=$("$BIN" --diff "$wrepo/nested/f.txt" 2>"$TMPDIR/err")
+[ -z "$out" ] || fail "linked worktree: --diff should emit nothing, got: $out"
+grep -q "linked worktree" "$TMPDIR/err" \
+    || fail "linked worktree: --diff should say why, got: $(cat "$TMPDIR/err")"
+else
+echo "smoke: NOTE — git not found; skipping the .git-file (gitdir:) gate" >&2
+fi
+
+# A file inside the repo's own `.git/` is not in its work tree; through 1.5.2
+# `owl .git/config` showed every line "+" (absent from HEAD, present on disk).
+if [ "$HAVE_GIT" = "1" ]; then
+grm="$TMPDIR/vcsmeta"
+mkdir -p "$grm"
+( cd "$grm" && sgit init -q . ) || fail "could not build the .git/ metadata git fixture"
+( cd "$grm" && "$BIN_ABS" -n --color=never --style=changes --paging=never .git/config ) \
+    > "$TMPDIR/out" 2>/dev/null
+n=$(count_marks "$TMPDIR/out")
+[ "$n" = "0" ] || fail ".git/ metadata: .git/config should show no markers, got $n"
+out=$( cd "$grm" && "$BIN_ABS" --diff .git/config 2>"$TMPDIR/err" )
+[ -z "$out" ] || fail ".git/ metadata: --diff .git/config should emit nothing, got: $out"
+grep -q "outside of repo" "$TMPDIR/err" \
+    || fail ".git/ metadata: --diff .git/config should say 'outside of repo', got: $(cat "$TMPDIR/err")"
+else
+echo "smoke: NOTE — git not found; skipping the .git/ metadata gate" >&2
+fi
+# Same for a sit repo's `.sit/`.
+if [ -n "$SIT_BIN" ]; then
+srm="$TMPDIR/vcsmeta_sit"
+mkdir -p "$srm"
+( cd "$srm" && "$SIT_BIN" init >/dev/null 2>&1 ) || fail "could not build the .sit/ metadata sit fixture"
+( cd "$srm" && "$BIN_ABS" -n --color=never --style=changes --paging=never .sit/HEAD ) \
+    > "$TMPDIR/out" 2>/dev/null
+n=$(count_marks "$TMPDIR/out")
+[ "$n" = "0" ] || fail ".sit/ metadata: .sit/HEAD should show no markers, got $n"
+fi
+
+# Lexical `..` after a symlink names a different file than the kernel opens:
+# with R/lnk -> ../X/sub, `R/lnk/../f.txt` IS X/f.txt, but 1.5.2 diffed R/f.txt
+# and painted R's changes onto X's content. A `..` that follows a symlink now
+# means no markers.
+if [ "$HAVE_GIT" = "1" ]; then
+dd_="$TMPDIR/vcsdotdot"
+mkdir -p "$dd_/R" "$dd_/X/sub"
+printf 'x-one\nx-two\nx-three\nx-four\n' > "$dd_/X/f.txt"
+(
+    cd "$dd_/R" || exit 1
+    sgit init -q . || exit 1
+    printf 'r-one\nr-two\nr-three\nr-four\n' > f.txt
+    sgit add f.txt || exit 1
+    sgit commit -qm base || exit 1
+    printf 'r-one\nR-TWO\nr-three\nr-four\nr-five\n' > f.txt
+    ln -s ../X/sub lnk || exit 1
+) || fail "could not build the ..-after-symlink git fixture"
+# Control: R/f.txt itself has markers.
+"$BIN" -n --color=never --style=changes --paging=never "$dd_/R/f.txt" > "$TMPDIR/out" 2>/dev/null
+n=$(count_marks "$TMPDIR/out")
+[ "$n" = "2" ] || fail "..-after-symlink control: R/f.txt should show 2 markers, got $n"
+for p in "$dd_/R/lnk/../f.txt" "lnk/../f.txt"; do
+    ( cd "$dd_/R" && "$BIN_ABS" -n --color=never --style=changes --paging=never "$p" ) \
+        > "$TMPDIR/out" 2>/dev/null
+    grep -q 'x-three' "$TMPDIR/out" || fail "..-after-symlink: $p should render X/f.txt"
+    n=$(count_marks "$TMPDIR/out")
+    [ "$n" = "0" ] || fail "..-after-symlink: $p shows X/f.txt but got $n markers from R/f.txt"
+done
+out=$( cd "$dd_/R" && "$BIN_ABS" --diff lnk/../f.txt 2>"$TMPDIR/err" )
+[ -z "$out" ] || fail "..-after-symlink: --diff should emit nothing, got: $out"
+grep -q "symlink" "$TMPDIR/err" || fail "..-after-symlink: --diff should say why, got: $(cat "$TMPDIR/err")"
+# A `..` with no symlink before it still resolves (and still marks).
+mkdir -p "$dd_/R/sub"
+( cd "$dd_/R/sub" && "$BIN_ABS" -n --color=never --style=changes --paging=never ../f.txt ) \
+    > "$TMPDIR/out" 2>/dev/null
+n=$(count_marks "$TMPDIR/out")
+[ "$n" = "2" ] || fail "plain ../ path: ../f.txt from R/sub should show 2 markers, got $n"
+else
+echo "smoke: NOTE — git not found; skipping the ..-after-symlink gate" >&2
+fi
+
+
+# ============================================================
 # M7 — Config file (OWL_CONFIG + precedence)
 # ============================================================
 
@@ -1608,6 +1855,12 @@ printf 'a\033]52;c;ZXZpbA==\007b\033[31mc\033[0md\033]0;t\033\\e\033Pq\033\\f\03
     > "$TMPDIR/allesc.txt"
 "$BIN" --color=always --paging=never "$TMPDIR/allesc.txt" | tr -dc '\033' | wc -c \
     | grep -qx '0' || fail "FINDING-001 regression: an ESC survived stripping"
+# ...and exactly the content survives. The count above also passes for a
+# binary that prints nothing, and for a classifier that over-suppresses
+# (a CSI final byte or a string terminator that no longer ends its
+# sequence hides the rest of the line) — both found by the 2026-10-31 audit.
+[ "$("$BIN" --color=always --paging=never "$TMPDIR/allesc.txt")" = "abcdefg" ] \
+    || fail "FINDING-001 regression: stripping did not leave exactly the text (abcdefg)"
 
 # FINDING-007 — an oversized $XDG_CONFIG_HOME / $HOME must not be appended
 # into a fixed-size config-path buffer. Pre-1.4.6 both were copied into a
@@ -1648,6 +1901,8 @@ printf 'lineno_color = 999999999999999999\nheader_color = 45\n' > "$TMPDIR/th/ow
 longest=$(XDG_CONFIG_HOME="$TMPDIR/th" "$BIN" -n --color=always --paging=never \
     --theme=huge "$TMPDIR/csi.txt" 2>/dev/null \
     | grep -oaE "$(printf '\033')\[38;5;[0-9]+m" | awk '{if(length($0)>m)m=length($0)}END{print m+0}')
+[ "$longest" -ge 9 ] \
+    || fail "FINDING-008: no colour was emitted at all (the bound below would pass vacuously)"
 [ "$longest" -le 12 ] \
     || fail "FINDING-008 regression: theme colour produced a ${longest}-byte SGR (buffer is 16)"
 
@@ -1683,4 +1938,466 @@ esc=$("$BIN" --color=always --paging=never "$TMPDIR/ceil.txt" | tr -dc '\033' | 
 "$BIN" --color=always --paging=never "$TMPDIR/ceil.txt" | grep -q 'TAIL' \
     || fail "FINDING-013: content after an over-long escape was suppressed"
 
-echo "smoke: OK ($v_long) — M0–M8 gates passing (security hardening FINDING-001/002/003/004/006/007/008/010/013 closed)"
+# ── 1.5.3 audit gates (docs/audit/2026-10-31-audit.md) ────────────────
+# Each gate was run against the 1.5.2 binary and fails there (FINDING-017
+# needs OWL_POISON_BIN, a `cyrius build -D CYRIUS_POISON` build).
+
+# FINDING-014 — escape stripping follows the frame, not the colour. Through
+# 1.5.2 `_strip_active` keyed on colour alone, so NO_COLOR=1 or
+# --color=never on a terminal drew the decorated frame and passed every
+# file escape (here an OSC 52 clipboard write) straight to the terminal —
+# FINDING-001 re-opened by a common setting. `-n` piped decorates too.
+printf 'hello\n\033]52;c;cHduZWQ=\007world\n\033[2Jcls\n' > "$TMPDIR/esc14.txt"
+out=$("$BIN" -n --color=never "$TMPDIR/esc14.txt")
+n=$(printf '%s' "$out" | tr -dc '\033' | wc -c)
+[ "$n" -eq 0 ] || fail "FINDING-014: -n --color=never passed $n raw ESC byte(s)"
+case "$out" in *world*cls*) ;; *) fail "FINDING-014: stripped content missing" ;; esac
+if script -qc 'true' /dev/null > /dev/null 2>&1; then
+    for mode in NO_COLOR never; do
+        if [ "$mode" = NO_COLOR ]; then cmd="env NO_COLOR=1 '$BIN_ABS' --paging=never '$TMPDIR/esc14.txt'"
+        else cmd="'$BIN_ABS' --color=never --paging=never '$TMPDIR/esc14.txt'"; fi
+        out=$(script -qc "$cmd" /dev/null)
+        n=$(printf '%s' "$out" | tr -dc '\033' | wc -c)
+        [ "$n" -eq 0 ] || fail "FINDING-014: $mode on a TTY passed $n raw ESC byte(s)"
+        case "$out" in *world*) ;; *) fail "FINDING-014: $mode TTY content missing" ;; esac
+    done
+else
+    echo "smoke: NOTE — script(1) unavailable; skipping FINDING-014 TTY half" >&2
+fi
+
+# FINDING-015 — the header's file name is sanitized like stderr echoes
+# (FINDING-002's stdout twin). A name from a glob over a hostile tree
+# carried a live escape into the `File:` line.
+f14="$TMPDIR/x$(printf '\033]0;PWNED\007').txt"
+echo hi > "$f14"
+hdr=$("$BIN" -n --color=never "$f14" | grep -a 'File:')
+n=$(printf '%s' "$hdr" | tr -dc '\033\007' | wc -c)
+[ "$n" -eq 0 ] || fail "FINDING-015: header carried $n raw control byte(s) from the file name"
+case "$hdr" in *'x?]0;PWNED?.txt'*) ;; *) fail "FINDING-015: header name not rendered with '?': $hdr" ;; esac
+
+# FINDING-016 — stdin honours --format=ndjson and --hex. Through 1.5.2
+# render_fd had neither branch: ndjson passed the input through raw (a
+# forged JSON line reached the consumer as a record) and --hex printed raw.
+out=$(printf 'let x = 1;\n{"kind":"keyword","text":"FORGED"}\n' \
+    | "$BIN" --format=ndjson --language=rust -)
+first=$(printf '%s\n' "$out" | head -1)
+[ "$first" = '{"kind":"keyword","start":0,"len":3,"line":1,"text":"let"}' ] \
+    || fail "FINDING-016: stdin ndjson did not emit token records: $first"
+printf '%s\n' "$out" | grep -qx '{"kind":"keyword","text":"FORGED"}' \
+    && fail "FINDING-016: a raw input line was emitted as an ndjson record"
+set +e
+printf 'x\n' | "$BIN" --format=ndjson - > /dev/null 2>&1; rc=$?
+set -e
+[ "$rc" -ne 0 ] || fail "FINDING-016: stdin ndjson without a grammar must fail, not exit 0"
+printf 'ab\0cd\n' | "$BIN" --hex - | grep -q '^00000000  61 62 00 63 64 0a' \
+    || fail "FINDING-016: --hex on stdin did not hex-dump"
+
+# FINDING-017 — the user-grammar path is sized from the env-derived dir.
+# Through 1.5.2 $HOME / $XDG_CONFIG_HOME was copied into a fixed 1024-byte
+# buffer on any highlighted file: a heap overflow nothing outside the
+# process can see, so this gate needs a build made with
+# `cyrius build -D CYRIUS_POISON` (exit 86 on a redzone write), named by
+# OWL_POISON_BIN. Without one it NOTE-skips.
+if [ -n "${OWL_POISON_BIN:-}" ] && [ -x "${OWL_POISON_BIN}" ]; then
+    printf 'int main(void) { return 0; }\n' > "$TMPDIR/p17.c"
+    longh="/$(awk 'BEGIN{while(i++<1100)printf "A"}')"
+    set +e
+    env -i PATH="$PATH" HOME="$longh" "$OWL_POISON_BIN" --color=always "$TMPDIR/p17.c" > /dev/null 2>&1; rc=$?
+    env -i PATH="$PATH" XDG_CONFIG_HOME="$longh" "$OWL_POISON_BIN" --color=always "$TMPDIR/p17.c" > /dev/null 2>&1; rc2=$?
+    set -e
+    [ "$rc" -eq 0 ] || fail "FINDING-017: long HOME on the highlight path exited $rc (86 = heap overflow)"
+    [ "$rc2" -eq 0 ] || fail "FINDING-017: long XDG_CONFIG_HOME on the highlight path exited $rc2"
+else
+    echo "smoke: NOTE — OWL_POISON_BIN not set; skipping FINDING-017 (needs a -D CYRIUS_POISON build)" >&2
+fi
+
+# FINDING-018 / 028 — the highlight cap is the stream's real capacity, and
+# nothing is lost at it. Through 1.5.2 an input of exactly 16 MiB was
+# tokenized for its first 64 KiB without a word (ndjson exited 0 with a
+# truncated stream), and over the cap the 1-byte overflow probe was dropped.
+head -c 16777216 /dev/zero | tr '\0' 'a' > "$TMPDIR/cap.cyr"
+set +e
+"$BIN" --format=ndjson "$TMPDIR/cap.cyr" > /dev/null 2> "$TMPDIR/cap.err"; rc=$?
+set -e
+[ "$rc" -ne 0 ] || fail "FINDING-018: a 16 MiB file gave ndjson exit 0 (truncated stream)"
+grep -q 'too large' "$TMPDIR/cap.err" || fail "FINDING-018: no 'too large' error for a 16 MiB ndjson input"
+# Over the cap on stdin (size unknown, so the probe decides): every byte out.
+{ head -c 16777216 /dev/zero | tr '\0' 'b'; printf 'Z_after\n'; } > "$TMPDIR/cap2.ini"
+"$BIN" --color=always -N --wrap=never --language=ini - < "$TMPDIR/cap2.ini" 2>/dev/null \
+    | sed 's/\x1b\[[0-9;]*m//g' | cmp -s - "$TMPDIR/cap2.ini" \
+    || fail "FINDING-028: over-cap stdin lost a byte at the overflow probe"
+
+# FINDING-021 — stdout write errors end owl with exit 3 (design-spec §9).
+# Through 1.5.2 every write result was ignored: /dev/full and a closed
+# stdout exited 0, and with SIGPIPE ignored owl spun forever after its
+# reader quit.
+echo hi > "$TMPDIR/w.txt"
+set +e
+"$BIN" "$TMPDIR/w.txt" > /dev/full 2> "$TMPDIR/w.err"; rc=$?
+set -e
+[ "$rc" -eq 3 ] || fail "FINDING-021: write to /dev/full exited $rc, want 3"
+grep -q 'write error' "$TMPDIR/w.err" || fail "FINDING-021: no 'write error' message for /dev/full"
+set +e
+"$BIN" "$TMPDIR/w.txt" >&- 2>/dev/null; rc=$?
+set -e
+[ "$rc" -eq 3 ] || fail "FINDING-021: closed stdout exited $rc, want 3"
+if command -v timeout >/dev/null 2>&1; then
+    { sh -c "trap '' PIPE; timeout 10 '$BIN_ABS' -p /dev/zero; echo \$? > '$TMPDIR/w.st'"; } | head -c 1 > /dev/null
+    st=$(cat "$TMPDIR/w.st")
+    [ "$st" = 3 ] || fail "FINDING-021: with SIGPIPE ignored owl exited $st (124 = still spinning), want 3"
+fi
+
+# FINDING-022 — buffers are reused across files. Through 1.5.2 every
+# highlighted file took a fresh 16 MiB buffer on the never-freed heap, so
+# under an address-space limit highlighting quietly stopped partway
+# (1.5.2: 16 of 40 files coloured at 300 MB).
+mkdir -p "$TMPDIR/m22"
+i=1; while [ $i -le 40 ]; do printf 'int f%d(void) { return %d; }\n' $i $i > "$TMPDIR/m22/f$i.c"; i=$((i+1)); done
+pat=$(printf '\033[38;5;141mint')
+n=$(sh -c "ulimit -v 300000; '$BIN_ABS' --color=always '$TMPDIR'/m22/*.c 2>/dev/null" | grep -cF "$pat" || true)
+[ "$n" -eq 40 ] || fail "FINDING-022: only $n of 40 files highlighted under a 300 MB address-space limit"
+
+# FINDING-023 — the gutter prints any line number whole. Through 1.5.2 a
+# fixed 8-byte buffer was filled past its start from line 1,000,000 on (an
+# out-of-bounds stack write driven by the line count) and the gutter showed
+# the number mod 10^6.
+awk 'BEGIN{while(i++<1000001)print "x"}' > "$TMPDIR/m.txt"
+"$BIN" -n --color=never --wrap=never "$TMPDIR/m.txt" | grep -q '^1000000 ' \
+    || fail "FINDING-023: line 1000000 not rendered as 1000000"
+
+# FINDING-024 — flags apply to every file and are all checked before
+# anything renders. Through 1.5.2 parse and render were one loop.
+printf 'int a;\n' > "$TMPDIR/a24.c"; printf 'int b;\n' > "$TMPDIR/b24.c"
+out=$("$BIN" --color=always "$TMPDIR/a24.c" -p "$TMPDIR/b24.c")
+[ "$out" = "$(cat "$TMPDIR/a24.c" "$TMPDIR/b24.c")" ] \
+    || fail "FINDING-024: -p after a file did not make the run cat-identical"
+set +e
+out=$("$BIN" "$TMPDIR/a24.c" --bogus 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "FINDING-024: FILE --bogus exited $rc, want 2"
+[ -z "$out" ] || fail "FINDING-024: FILE --bogus rendered FILE before rejecting the flag"
+set +e
+"$BIN" -f "$TMPDIR/a24.c" "$TMPDIR/b24.c" > /dev/null 2>&1; rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "FINDING-024: --follow with two files exited $rc, want 2"
+
+# FINDING-025 — the pager gets its input and the whole environment. Through
+# 1.5.2: with owl's fd 0 closed the pager's stdin was closed too; past
+# 16 KB or 255 entries of environment TERM et al. were dropped; and a bare
+# PAGER=less got no LESS flags (raw escapes, short files paged).
+if script -qc 'true' /dev/null > /dev/null 2>&1; then
+    printf '#!/bin/sh\nn=$(wc -c); printf "%%s %%s %%s\\n" "$n" "${LESS:-unset}" "${TERM:-unset}" > "%s/pg.out"\n' "$TMPDIR" > "$TMPDIR/pg.sh"
+    chmod +x "$TMPDIR/pg.sh"
+    printf 'one\ntwo\n' > "$TMPDIR/p25.txt"
+    script -qc "env -u LESS PAGER='$TMPDIR/pg.sh' '$BIN_ABS' --paging=always -N '$TMPDIR/p25.txt' <&-" /dev/null > /dev/null 2>&1 || true
+    set -- $(cat "$TMPDIR/pg.out" 2>/dev/null || echo "0 x x")
+    [ "$1" -gt 0 ] || fail "FINDING-025: with fd 0 closed the pager received no input"
+    [ "$2" = FRX ] || fail "FINDING-025: LESS unset, the pager got LESS=$2 (want FRX)"
+    bigenv=$(awk 'BEGIN{while(i++<300)printf "V%03d=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ", i}')
+    script -qc "env -i PATH='$PATH' $bigenv TERM=xterm-owl PAGER='$TMPDIR/pg.sh' '$BIN_ABS' --paging=always -N '$TMPDIR/p25.txt'" /dev/null > /dev/null 2>&1 || true
+    set -- $(cat "$TMPDIR/pg.out" 2>/dev/null || echo "0 x x")
+    [ "$3" = xterm-owl ] || fail "FINDING-025: a large environment dropped TERM before the pager (got $3)"
+else
+    echo "smoke: NOTE — script(1) unavailable; skipping FINDING-025 pager gates" >&2
+fi
+
+# FINDING-027 — line numbers are 1-indexed and bounded. Through 1.5.2
+# `0`, `0:` and `:0` meant "unset" and printed everything, and an overlong
+# number wrapped (2^64 + 1 printed line 1).
+seq 1 10 > "$TMPDIR/ten.txt" 2>/dev/null || awk 'BEGIN{while(i++<10)print i}' > "$TMPDIR/ten.txt"
+for r in 0 :0 0:0 0:5 18446744073709551617 9223372036854775808 5:3; do
+    set +e
+    "$BIN" -p --line-range=$r "$TMPDIR/ten.txt" > /dev/null 2>&1; rc=$?
+    set -e
+    [ "$rc" -eq 2 ] || fail "FINDING-027: --line-range=$r exited $rc, want 2"
+done
+[ "$("$BIN" -p --line-range=3:4 "$TMPDIR/ten.txt" | tr '\n' ,)" = "3,4," ] \
+    || fail "FINDING-027: --line-range=3:4 regressed"
+
+# FINDING-032 — errors say what happened. Through 1.5.2 every open failure
+# read "No such file or directory" and a directory "read error"; a stdin
+# read failure printed nothing at all.
+mkdir -p "$TMPDIR/d32"
+"$BIN" "$TMPDIR/d32" 2>&1 >/dev/null | grep -q 'Is a directory' \
+    || fail "FINDING-032: a directory was not reported as 'Is a directory'"
+"$BIN" "$TMPDIR/d32/x/y" 2>&1 >/dev/null | grep -q 'No such file' \
+    || fail "FINDING-032: ENOENT text regressed"
+echo s > "$TMPDIR/np32"; chmod 000 "$TMPDIR/np32"
+if [ ! -r "$TMPDIR/np32" ]; then
+    "$BIN" "$TMPDIR/np32" 2>&1 >/dev/null | grep -q 'Permission denied' \
+        || fail "FINDING-032: EACCES was not reported as 'Permission denied'"
+fi
+"$BIN" - < "$TMPDIR/d32" 2>&1 >/dev/null | grep -q '<stdin>: Is a directory' \
+    || fail "FINDING-032: a stdin read failure was silent"
+
+# FINDING-034 — --follow survives truncation like `tail -f`. Through 1.5.2
+# a truncated log (logrotate copytruncate) went silent, and later appends
+# came out as a torn fragment.
+if command -v timeout >/dev/null 2>&1; then
+    printf 'old-1\nold-2\n' > "$TMPDIR/f.log"
+    ( timeout 4 "$BIN" -f -p "$TMPDIR/f.log" > "$TMPDIR/f.out" 2> "$TMPDIR/f.err" & )
+    sleep 1; : > "$TMPDIR/f.log"; sleep 1
+    printf 'new-1\nnew-2\n' >> "$TMPDIR/f.log"; sleep 3
+    grep -q '^new-2$' "$TMPDIR/f.out" || fail "FINDING-034: --follow lost lines appended after truncation"
+    grep -q 'truncated' "$TMPDIR/f.err" || fail "FINDING-034: --follow did not report the truncation"
+fi
+
+# FINDING-036 — no colour codes for bytes that are not drawn: through 1.5.2
+# --line-range emitted an empty SGR pair for every token before the range.
+printf 'fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\n' > "$TMPDIR/lr.rs"
+out=$("$BIN" --color=always --line-range=4 "$TMPDIR/lr.rs")
+first=$(printf '%s' "$out" | head -c 11 | od -An -c | tr -d ' \n')
+[ "$first" = "033[38;5;141mf" ] || [ "$first" = '033[38;5;141' ] || {
+    pairs=$(printf '%s' "$out" | sed 's/\x1b\[38;5;[0-9]*m\x1b\[0m/@/g' | tr -dc '@' | wc -c)
+    [ "$pairs" -eq 0 ] || fail "FINDING-036: $pairs empty SGR pair(s) for tokens outside --line-range"
+}
+
+# FINDING-037 — ndjson is valid JSON for any input: invalid UTF-8 becomes
+# \ufffd instead of passing through raw.
+printf 'x = "\303\251 \377 end"\n' > "$TMPDIR/u.py"
+out=$("$BIN" --format=ndjson "$TMPDIR/u.py")
+raw=$(printf '%s' "$out" | tr -dc '\377' | wc -c)
+[ "$raw" -eq 0 ] || fail "FINDING-037: ndjson carried a raw invalid UTF-8 byte"
+# A case pattern, not grep: some greps read `\u` as an escape even under -F.
+case "$out" in *'\ufffd'*) ;; *) fail "FINDING-037: invalid UTF-8 not replaced with \\ufffd" ;; esac
+printf '%s' "$out" | grep -qF "$(printf '\303\251')" || fail "FINDING-037: valid UTF-8 no longer passes through"
+
+# FINDING-038 — a command line owl cannot read is an error, not "no
+# arguments". Through 1.5.2 owl silently read stdin instead (no /proc, or
+# fd exhaustion as here).
+echo hi > "$TMPDIR/s38.txt"
+set +e
+# No redirect inside: with only fds 0-2 allowed the shell itself could not
+# open one, and owl would never run.
+err=$(sh -c "ulimit -n 3; '$BIN_ABS' '$TMPDIR/s38.txt'" 2>&1 >/dev/null); rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "FINDING-038: unreadable command line exited $rc, want 2"
+case "$err" in *'command line'*) ;; *) fail "FINDING-038: no error for an unreadable command line" ;; esac
+
+# ── 1.5.3 parser gates (config.cyr / theme.cyr / lang.cyr) ──────────
+
+# ── Finding 1: user theme name dangled into a dead stack frame ──────────
+# [theme_name_copy]
+mkdir -p "$TMPDIR/g1/owl/themes"
+printf 'header_color = 37\n' > "$TMPDIR/g1/owl/themes/mytheme.cyml"
+printf 'header_color = 38\n' > "$TMPDIR/g1/owl/themes/other.cyml"
+# The later line matters: its _cfg_apply reuses the stack frame whose
+# buffer 1.5.2 kept as the theme's name, so the name became "4".
+printf 'theme = mytheme\ntabs = 4\n' > "$TMPDIR/g1.cyml"
+printf 'x\n' > "$TMPDIR/g1.txt"
+# config `theme = mytheme`, CLI `--theme=mytheme`: same theme, must resolve.
+out=$(env -i PATH="$PATH" HOME="$TMPDIR/nohome" XDG_CONFIG_HOME="$TMPDIR/g1" \
+    OWL_CONFIG="$TMPDIR/g1.cyml" "$BIN" -n --color=always --paging=never \
+    --theme=mytheme "$TMPDIR/g1.txt" 2>"$TMPDIR/g1.err") \
+    || fail "1.5.3 parser audit: --theme=<user theme the config already loaded> rejected: $(cat "$TMPDIR/g1.err")"
+case "$out" in
+    *"[38;5;37m"*) ;;
+    *) fail "1.5.3 parser audit: config+CLI user theme lost header_color=37" ;;
+esac
+
+# [theme_cli_overrides_config]
+mkdir -p "$TMPDIR/g1/owl/themes"
+printf 'header_color = 37\n' > "$TMPDIR/g1/owl/themes/mytheme.cyml"
+printf 'header_color = 38\n' > "$TMPDIR/g1/owl/themes/other.cyml"
+printf 'theme = mytheme\n' > "$TMPDIR/g1.cyml"
+printf 'x\n' > "$TMPDIR/g1.txt"
+# CLI --theme=<another user theme> must override the config's user theme.
+out=$(env -i PATH="$PATH" HOME="$TMPDIR/nohome" XDG_CONFIG_HOME="$TMPDIR/g1" \
+    OWL_CONFIG="$TMPDIR/g1.cyml" "$BIN" -n --color=always --paging=never \
+    --theme=other "$TMPDIR/g1.txt" 2>"$TMPDIR/g1.err") \
+    || fail "1.5.3 parser audit: CLI --theme=other could not override config theme=mytheme: $(cat "$TMPDIR/g1.err")"
+case "$out" in
+    *"[38;5;38m"*) ;;
+    *) fail "1.5.3 parser audit: CLI user theme did not apply header_color=38" ;;
+esac
+case "$out" in
+    *"[38;5;37m"*) fail "1.5.3 parser audit: config user theme leaked through a CLI override" ;;
+esac
+
+# ── Finding 2: config / theme silently truncated at 8192 bytes ──────────
+# [config_truncation]
+printf '\tX\n' > "$TMPDIR/tab.txt"
+# `tabs = 64` straddles byte 8192: `tabs = 6` is the last in-limit text.
+{
+    printf '#'; i=0; while [ $i -lt 8182 ]; do printf 'x'; i=$((i+1)); done; printf '\n'
+    printf 'tabs = 64\nwrap = never\n'
+} > "$TMPDIR/big.cyml"
+out=$(env -i PATH="$PATH" HOME="$TMPDIR/nohome" OWL_CONFIG="$TMPDIR/big.cyml" \
+    "$BIN" "$TMPDIR/tab.txt" 2>"$TMPDIR/big.err")
+[ "$out" = "    X" ] \
+    || fail "1.5.3 parser audit: a config line cut at 8192 bytes was applied (got '$out', want 4-space default)"
+n=$(grep -c "big.cyml: larger than 8192 bytes" "$TMPDIR/big.err" || true)
+[ "$n" = "1" ] || fail "1.5.3 parser audit: oversized config did not warn exactly once (got $n): $(cat "$TMPDIR/big.err")"
+# Exactly-full file whose newline is byte 8193: nothing lost, no warning.
+{
+    printf '#'; i=0; while [ $i -lt 8182 ]; do printf 'x'; i=$((i+1)); done; printf '\n'
+    printf 'tabs = 6\n'
+} > "$TMPDIR/full.cyml"
+out=$(env -i PATH="$PATH" HOME="$TMPDIR/nohome" OWL_CONFIG="$TMPDIR/full.cyml" \
+    "$BIN" "$TMPDIR/tab.txt" 2>"$TMPDIR/full.err")
+[ "$out" = "      X" ] || fail "1.5.3 parser audit: last line of an exactly-full config was dropped"
+[ ! -s "$TMPDIR/full.err" ] || fail "1.5.3 parser audit: exactly-full config warned: $(cat "$TMPDIR/full.err")"
+
+# [theme_truncation]
+mkdir -p "$TMPDIR/g2/owl/themes"
+printf 'x\n' > "$TMPDIR/g2.txt"
+# `header_color = 123` straddles byte 8192: `header_color = 12` is in-limit.
+{
+    printf '#'; i=0; while [ $i -lt 8173 ]; do printf 'x'; i=$((i+1)); done; printf '\n'
+    printf 'header_color = 123\n'
+} > "$TMPDIR/g2/owl/themes/big.cyml"
+out=$(env -i PATH="$PATH" HOME="$TMPDIR/nohome" XDG_CONFIG_HOME="$TMPDIR/g2" \
+    "$BIN" -n --color=always --paging=never --theme=big "$TMPDIR/g2.txt" 2>"$TMPDIR/g2.err") \
+    || fail "1.5.3 parser audit: oversized theme failed to load"
+case "$out" in
+    *"[38;5;12m"*) fail "1.5.3 parser audit: a theme line cut at 8192 bytes was applied (header 12)" ;;
+esac
+n=$(grep -c "big.cyml: larger than 8192 bytes" "$TMPDIR/g2.err" || true)
+[ "$n" = "1" ] || fail "1.5.3 parser audit: oversized theme did not warn exactly once (got $n)"
+
+# ── Finding 3: ext.<X> overrides ────────────────────────────────────────
+# [ext_uppercase_key]
+printf 'echo hi\n' > "$TMPDIR/f.confx"
+printf 'ext.CONFX = shell\n' > "$TMPDIR/e1.cyml"
+out=$(env -i PATH="$PATH" HOME="$TMPDIR/nohome" OWL_CONFIG="$TMPDIR/e1.cyml" \
+    "$BIN" -n --color=never "$TMPDIR/f.confx")
+case "$out" in
+    *"(shell)"*) ;;
+    *) fail "1.5.3 parser audit: ext.CONFX = shell did not match f.confx: $out" ;;
+esac
+
+# [ext_last_wins]
+printf 'echo hi\n' > "$TMPDIR/f.confx"
+printf 'ext.confx = ini\next.confx = shell\n' > "$TMPDIR/e2.cyml"
+out=$(env -i PATH="$PATH" HOME="$TMPDIR/nohome" OWL_CONFIG="$TMPDIR/e2.cyml" \
+    "$BIN" -n --color=never "$TMPDIR/f.confx")
+case "$out" in
+    *"(shell)"*) ;;
+    *) fail "1.5.3 parser audit: repeated ext.confx is not last-wins: $out" ;;
+esac
+
+# [ext_too_many]
+printf 'echo hi\n' > "$TMPDIR/f.confx"
+: > "$TMPDIR/e3.cyml"
+i=0; while [ $i -lt 16 ]; do printf 'ext.e%d = shell\n' $i >> "$TMPDIR/e3.cyml"; i=$((i+1)); done
+printf 'ext.e3 = python\next.confx = shell\n' >> "$TMPDIR/e3.cyml"
+env -i PATH="$PATH" HOME="$TMPDIR/nohome" OWL_CONFIG="$TMPDIR/e3.cyml" \
+    "$BIN" "$TMPDIR/f.confx" >/dev/null 2>"$TMPDIR/e3.err"
+grep -q ":18: too many ext overrides (max 16)" "$TMPDIR/e3.err" \
+    || fail "1.5.3 parser audit: 17th distinct ext override not reported as too many: $(cat "$TMPDIR/e3.err")"
+# Re-registering e3 (line 17) replaces in place, so it must NOT error.
+grep -q ":17:" "$TMPDIR/e3.err" && fail "1.5.3 parser audit: re-registering a known ext used up a slot"
+
+# ── Finding 4a: theme integers wrapped i64 ──────────────────────────────
+# [theme_int_digits]
+mkdir -p "$TMPDIR/g4/owl/themes"
+printf 'x\n' > "$TMPDIR/g4.txt"
+printf 'lineno_color = 18446744073709551716\n' > "$TMPDIR/g4/owl/themes/wrap.cyml"
+out=$(env -i PATH="$PATH" HOME="$TMPDIR/nohome" XDG_CONFIG_HOME="$TMPDIR/g4" \
+    "$BIN" -n --color=always --paging=never --theme=wrap "$TMPDIR/g4.txt")
+case "$out" in
+    *"[38;5;100m"*) fail "1.5.3 parser audit: 2^64+100 wrapped and was accepted as colour 100" ;;
+esac
+printf 'lineno_color = 0100\n' > "$TMPDIR/g4/owl/themes/four.cyml"
+out=$(env -i PATH="$PATH" HOME="$TMPDIR/nohome" XDG_CONFIG_HOME="$TMPDIR/g4" \
+    "$BIN" -n --color=always --paging=never --theme=four "$TMPDIR/g4.txt")
+case "$out" in
+    *"[38;5;100m"*) fail "1.5.3 parser audit: a 4-digit theme colour was accepted" ;;
+esac
+printf 'lineno_color = 100\n' > "$TMPDIR/g4/owl/themes/ok.cyml"
+out=$(env -i PATH="$PATH" HOME="$TMPDIR/nohome" XDG_CONFIG_HOME="$TMPDIR/g4" \
+    "$BIN" -n --color=always --paging=never --theme=ok "$TMPDIR/g4.txt")
+case "$out" in
+    *"[38;5;100m"*) ;;
+    *) fail "1.5.3 parser audit: a valid 3-digit theme colour was refused" ;;
+esac
+
+# ── Finding 4b: theme name escaped the themes directory ─────────────────
+# [theme_name_confined]
+mkdir -p "$TMPDIR/g5/x/owl/themes"
+printf 'header_color = 37\n' > "$TMPDIR/g5/evil.cyml"
+printf 'x\n' > "$TMPDIR/g5.txt"
+set +e
+env -i PATH="$PATH" HOME="$TMPDIR/nohome" XDG_CONFIG_HOME="$TMPDIR/g5/x" \
+    "$BIN" -n --color=always --paging=never --theme=../../../evil "$TMPDIR/g5.txt" \
+    >"$TMPDIR/g5.out" 2>"$TMPDIR/g5.err"
+rc=$?
+set -e
+[ "$rc" = "2" ] || fail "1.5.3 parser audit: --theme=../../../evil loaded a file outside the themes dir (rc=$rc)"
+printf 'theme = ../../../evil\n' > "$TMPDIR/g5.cyml"
+out=$(env -i PATH="$PATH" HOME="$TMPDIR/nohome" XDG_CONFIG_HOME="$TMPDIR/g5/x" \
+    OWL_CONFIG="$TMPDIR/g5.cyml" "$BIN" -n --color=always --paging=never \
+    "$TMPDIR/g5.txt" 2>"$TMPDIR/g5.err")
+grep -q ":1: bad value" "$TMPDIR/g5.err" \
+    || fail "1.5.3 parser audit: config theme = ../../../evil was not refused"
+case "$out" in
+    *"[38;5;37m"*) fail "1.5.3 parser audit: config theme name traversed out of the themes dir" ;;
+esac
+
+# ── Finding 4c: non-regular config / theme files ────────────────────────
+# [config_fifo]
+mkfifo "$TMPDIR/cfg.fifo"
+set +e
+env -i PATH="$PATH" HOME="$TMPDIR/nohome" OWL_CONFIG="$TMPDIR/cfg.fifo" \
+    timeout 5 "$BIN" --version >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" = "0" ] || fail "1.5.3 parser audit: a FIFO at OWL_CONFIG hung or broke owl --version (rc=$rc)"
+
+# [theme_fifo]
+mkdir -p "$TMPDIR/g6/owl/themes"
+mkfifo "$TMPDIR/g6/owl/themes/ff.cyml"
+printf 'x\n' > "$TMPDIR/g6.txt"
+set +e
+env -i PATH="$PATH" HOME="$TMPDIR/nohome" XDG_CONFIG_HOME="$TMPDIR/g6" \
+    timeout 5 "$BIN" --theme=ff "$TMPDIR/g6.txt" >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" = "2" ] || fail "1.5.3 parser audit: a FIFO theme file hung owl or was accepted (rc=$rc, want 2)"
+
+# [config_dev_stdin]
+out=$(printf 'tabs = 2\n' | env -i PATH="$PATH" HOME="$TMPDIR/nohome" \
+    OWL_CONFIG=/dev/stdin timeout 5 "$BIN" -p)
+[ "$out" = "tabs = 2" ] || fail "1.5.3 parser audit: OWL_CONFIG=/dev/stdin consumed the piped input (got '$out')"
+
+# ── Finding 5: CRLF / TAB shebangs ──────────────────────────────────────
+# [shebang_crlf]
+printf '#!/bin/sh\r\necho hi\r\n' > "$TMPDIR/crlfsh"
+out=$("$BIN" -n --color=never "$TMPDIR/crlfsh")
+case "$out" in
+    *"(shell)"*) ;;
+    *) fail "1.5.3 parser audit: CRLF shebang #!/bin/sh not detected: $out" ;;
+esac
+
+# [shebang_tab]
+printf '#!/usr/bin/env\tpython3\nprint(1)\n' > "$TMPDIR/tabpy"
+out=$("$BIN" -n --color=never "$TMPDIR/tabpy")
+case "$out" in
+    *"(python)"*) ;;
+    *) fail "1.5.3 parser audit: TAB-separated shebang env<TAB>python3 not detected: $out" ;;
+esac
+
+# ── Harness-found: a NUL inside a config value was silently cut ─────────
+# [config_value_nul]
+printf '\tX\n' > "$TMPDIR/tab.txt"
+printf 'tabs = 8\000junk\n' > "$TMPDIR/nul.cyml"
+out=$(env -i PATH="$PATH" HOME="$TMPDIR/nohome" OWL_CONFIG="$TMPDIR/nul.cyml" \
+    "$BIN" "$TMPDIR/tab.txt" 2>"$TMPDIR/nul.err")
+[ "$out" = "    X" ] || fail "1.5.3 parser audit: 'tabs = 8<NUL>junk' was applied as tabs=8"
+grep -q ":1: bad value" "$TMPDIR/nul.err" || fail "1.5.3 parser audit: NUL in a config value not reported"
+
+# ── Unchanged behaviour: valid config/theme still apply ─────────────────
+# [valid_unchanged]
+mkdir -p "$TMPDIR/g7/owl/themes"
+printf 'header_color = 37\ntoken.keyword = 207\n' > "$TMPDIR/g7/owl/themes/t.cyml"
+printf 'theme = t\ntabs = "6"\next.confx = shell\n' > "$TMPDIR/g7.cyml"
+printf '\tX\n' > "$TMPDIR/g7.confx"
+out=$(env -i PATH="$PATH" HOME="$TMPDIR/nohome" XDG_CONFIG_HOME="$TMPDIR/g7" \
+    OWL_CONFIG="$TMPDIR/g7.cyml" "$BIN" -n --color=always --paging=never \
+    "$TMPDIR/g7.confx" 2>"$TMPDIR/g7.err")
+[ ! -s "$TMPDIR/g7.err" ] || fail "valid config warned: $(cat "$TMPDIR/g7.err")"
+case "$out" in *"[38;5;37m"*) ;; *) fail "valid user theme not applied" ;; esac
+case "$out" in *"(shell)"*) ;; *) fail "valid ext override not applied" ;; esac
+case "$out" in *"      X"*) ;; *) fail "valid quoted tabs not applied" ;; esac
+
+echo "smoke: OK ($v_long) — M0–M8 gates passing (security hardening FINDING-001…013 and the 2026-10-31 audit gates closed)"

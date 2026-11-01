@@ -134,9 +134,13 @@ fn theme_index(name) {
     }
     # 1.1.3 — user theme overlay. Lazy-load $XDG_CONFIG_HOME/owl/themes/<name>.cyml
     # (or $HOME/.config/owl/themes/<name>.cyml). Single slot at THEME_USER_INDEX.
+    # The slot already holding `name` answers without touching the disk; any
+    # other name is loaded INTO the slot, replacing it (1.5.3). Through 1.5.2
+    # a loaded slot refused every other name, so a CLI `--theme=<user theme>`
+    # could not override the config's `theme = <another user theme>` —
+    # contradicting "CLI overrides config" in --help.
     if (g_user_theme_loaded == 1) {
         if (streq(g_user_theme_name, name) == 1) { return THEME_USER_INDEX; }
-        return 0 - 1;
     }
     if (_user_theme_load_by_name(name) == 0) { return THEME_USER_INDEX; }
     return 0 - 1;
@@ -198,7 +202,7 @@ fn ansi_fg(code) {
     off = off + _u16_to_ascii(&buf, off, code);
     store8(&buf + off, 109);  # 'm'
     off = off + 1;
-    syscall(1, 1, &buf, off);
+    out_write(&buf, off);
     return 0;
 }
 
@@ -214,7 +218,7 @@ fn ansi_reset() {
     store8(&rbuf + 1, 91);    # '['
     store8(&rbuf + 2, 48);    # '0'
     store8(&rbuf + 3, 109);   # 'm'
-    syscall(1, 1, &rbuf, 4);
+    out_write(&rbuf, 4);
     return 0;
 }
 
@@ -235,13 +239,21 @@ fn ansi_reset() {
 #   vcs.mod = 215
 #   vcs.del = 167
 #
-# Limitations: only one user theme can be loaded per invocation (can't
-# switch via --theme= mid-run; owl invokes once per file batch). User
-# themes do not appear in --list-themes (no dir-scanning at startup).
+# Limitations: one user theme is resident at a time. Loading another
+# (config `theme = a`, then `--theme=b`) replaces the slot — the later
+# load wins, as CLI-over-config requires. User themes do not appear in
+# --list-themes (no dir-scanning at startup).
+#
+# The name is a file name inside the themes directory, never a path: one
+# containing `/`, or empty / `.` / `..`, is refused before any path is
+# built (1.5.3 — `--theme=../../x` loaded `$XDG_CONFIG_HOME/../../x.cyml`).
+# Theme files go through config.cyr's cfg_read_regular: regular files
+# only, THEME_FILE_MAX bytes, one warning when longer.
 
 var THEME_USER_INDEX     = 2;
 var g_user_theme_loaded  = 0;
-var g_user_theme_name    = "user";   # replaced by load
+var g_user_theme_name    = "user";   # replaced by a heap copy on load
+var THEME_FILE_MAX       = 8192;
 var g_user_theme_header  = 7;
 var g_user_theme_lineno  = 7;
 var g_user_theme_tokens  = 0;        # alloc'd: 10 * 8 bytes
@@ -254,11 +266,20 @@ fn _user_theme_init() {
         # FINDING-011 — every _theme_apply store below indexes these.
         if (g_user_theme_tokens == 0) { return 1; }
         if (g_user_theme_vcs == 0)    { g_user_theme_tokens = 0; return 1; }
-        var i = 0;
-        while (i < 10) { store64(g_user_theme_tokens + i * 8, 0 - 1); i = i + 1; }
-        i = 0;
-        while (i < 4)  { store64(g_user_theme_vcs    + i * 8, 0 - 1); i = i + 1; }
+        _user_theme_reset();
     }
+    return 0;
+}
+
+# Return the slot to its pre-load defaults, so a theme loaded over another
+# does not inherit the keys the new file leaves out.
+fn _user_theme_reset() {
+    g_user_theme_header = 7;
+    g_user_theme_lineno = 7;
+    var i = 0;
+    while (i < 10) { store64(g_user_theme_tokens + i * 8, 0 - 1); i = i + 1; }
+    i = 0;
+    while (i < 4)  { store64(g_user_theme_vcs    + i * 8, 0 - 1); i = i + 1; }
     return 0;
 }
 
@@ -268,14 +289,20 @@ fn _theme_keyeq(buf, len, s) {
     return memeq(buf, s, len);
 }
 
-# Parse signed integer from buf[s..e). Stores result in *out via
-# pointer-write convention; returns 0 success, 1 invalid.
+# Parse a signed integer of at most three digits from buf[s..e). Returns
+# the value, or -99999 when the span is not one.
+#
+# The digit cap comes BEFORE accumulating (FINDING-010's lesson, as in
+# set_tabs): an unbounded run wraps i64, and the wrapped value can land
+# back inside the range check — `18446744073709551716` (2^64 + 100) was
+# accepted as colour 100 through 1.5.2. Every valid colour fits in three.
 fn _theme_parse_int(buf, s, e) {
     if (s >= e) { return 0 - 99999; }
     var sign = 1;
     var p = s;
     if (load8(buf + p) == 45) { sign = 0 - 1; p = p + 1; }
     if (p >= e) { return 0 - 99999; }
+    if (e - p > 3) { return 0 - 99999; }
     var v = 0;
     while (p < e) {
         var c = load8(buf + p);
@@ -380,28 +407,12 @@ fn _theme_parse_line(buf, s, e) {
     return 0;
 }
 
-# Read theme file at `path` and populate user-theme globals. Returns 0
-# success, 1 if file is missing / unreadable / empty.
-fn _theme_file_load(path) {
-    var fd = file_open(path, O_RDONLY, 0);
-    if (fd < 0) { return 1; }
-    var cap = 8192;
-    var buf = alloc(cap);
-    if (buf == 0) { file_close(fd); return 1; }   # FINDING-011
-    var total = 0;
-    var done = 0;
-    while (done == 0) {
-        var got = file_read(fd, buf + total, cap - total);
-        if (got < 0) { file_close(fd); return 1; }
-        if (got == 0) { done = 1; continue; }
-        total = total + got;
-        if (total >= cap) { done = 1; continue; }
-    }
-    file_close(fd);
-    if (total == 0) { return 1; }
-
-    if (_user_theme_init() != 0) { return 1; }   # FINDING-011
-
+# Apply theme text buf[0..total) to the slot, resetting it first. Lines
+# apply in order, last one wins; `trunc` = the buffer is a prefix of a
+# longer file, so its unterminated tail is a fragment and is skipped.
+# Caller has run _user_theme_init.
+fn _theme_apply_text(buf, total, trunc) {
+    _user_theme_reset();
     var ls = 0;
     var i = 0;
     while (i < total) {
@@ -411,8 +422,63 @@ fn _theme_file_load(path) {
         }
         i = i + 1;
     }
-    if (ls < total) { _theme_parse_line(buf, ls, total); }
+    if (ls < total) {
+        if (trunc == 0) { _theme_parse_line(buf, ls, total); }
+    }
     return 0;
+}
+
+# Record `name` as the slot's name. The copy matters: callers pass
+# transient buffers (config.cyr hands over a stack scratch), and through
+# 1.5.2 the slot kept the pointer, so a later `--theme=<same name>` read
+# a dead stack frame and reported "unknown theme". Returns 0, or 1 when
+# the copy cannot be allocated.
+fn _user_theme_set_name(name) {
+    var nlen = strlen(name);
+    var copy = alloc(nlen + 1);
+    if (copy == 0) { return 1; }   # FINDING-011
+    var k = 0;
+    while (k < nlen) { store8(copy + k, load8(name + k)); k = k + 1; }
+    store8(copy + nlen, 0);
+    g_user_theme_name = copy;
+    return 0;
+}
+
+# Read the theme file at `path` into the slot as `name`. Returns 0
+# success, 1 if the file is missing / not a regular file / unreadable /
+# empty — in which case the slot is left exactly as it was.
+fn _theme_file_load(path, name) {
+    var res[16];
+    var buf = cfg_read_regular(path, THEME_FILE_MAX, &res);
+    if (buf == 0) { return 1; }
+    var total = load64(&res);
+    var trunc = load64(&res + 8);
+    if (total == 0) { return 1; }
+
+    if (_user_theme_init() != 0) { return 1; }    # FINDING-011
+    if (_user_theme_set_name(name) != 0) { return 1; }
+    if (trunc == 1) { cfg_warn_truncated(path, THEME_FILE_MAX); }
+    _theme_apply_text(buf, total, trunc);
+    g_user_theme_loaded = 1;
+    return 0;
+}
+
+# Is `name` usable as a theme file name? It is joined into
+# "<themes dir>/<name>.cyml", so it must be a single path component:
+# non-empty, no `/`, not `.` or `..`, and short enough that the joined
+# component fits NAME_MAX (255) with its ".cyml".
+fn _theme_name_ok(name) {
+    var nlen = strlen(name);
+    if (nlen == 0) { return 0; }
+    if (nlen > 250) { return 0; }
+    var k = 0;
+    while (k < nlen) {
+        if (load8(name + k) == 47) { return 0; }   # '/'
+        k = k + 1;
+    }
+    if (streq(name, ".") == 1)  { return 0; }
+    if (streq(name, "..") == 1) { return 0; }
+    return 1;
 }
 
 # Build "<base><sep>owl/themes/<name>.cyml" path. Returns alloc'd buf.
@@ -447,17 +513,16 @@ fn _theme_join_path(base, sep, name) {
     return out;
 }
 
-# Try to load a user theme by name. On success records the name and
-# returns 0; otherwise returns 1.
+# Try to load a user theme by name into the slot (replacing whatever it
+# held). Returns 0 on success; otherwise 1, with the slot unchanged.
 fn _user_theme_load_by_name(name) {
+    if (_theme_name_ok(name) == 0) { return 1; }
     var xdg = getenv("XDG_CONFIG_HOME");
     if (xdg != 0) {
         if (load8(xdg) != 0) {
             var p = _theme_join_path(xdg, "/", name);
-            if (p != 0 && _theme_file_load(p) == 0) {
-                g_user_theme_name = name;
-                g_user_theme_loaded = 1;
-                return 0;
+            if (p != 0) {
+                if (_theme_file_load(p, name) == 0) { return 0; }
             }
         }
     }
@@ -465,10 +530,8 @@ fn _user_theme_load_by_name(name) {
     if (home != 0) {
         if (load8(home) != 0) {
             var p = _theme_join_path(home, "/.config/", name);
-            if (p != 0 && _theme_file_load(p) == 0) {
-                g_user_theme_name = name;
-                g_user_theme_loaded = 1;
-                return 0;
+            if (p != 0) {
+                if (_theme_file_load(p, name) == 0) { return 0; }
             }
         }
     }

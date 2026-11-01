@@ -6,6 +6,30 @@
 
 ## Version
 
+**1.5.3** — shipped 2026-10-31. **P(−1) audit, hardening and repair
+pass** over everything since the 1.4.6 audit
+([`2026-10-31-audit.md`](../audit/2026-10-31-audit.md)). Five independent
+reviews found 26 defects in owl (1 HIGH, 9 MEDIUM, 16 LOW, numbered
+FINDING-014 – 039) and 12 informational items, 5 of them sit-owned. All 26
+are fixed, and each has a smoke gate that fails against 1.5.2.
+
+The HIGH: escape stripping keyed on colour, so `NO_COLOR` or
+`--color=never` on a terminal drew the frame and passed file escapes
+through. That re-opened FINDING-001. Also closed:
+- a heap overflow and a stack under-write;
+- an ancestor-FIFO hang;
+- gigabyte-scale VCS memory;
+- ignored write errors;
+- per-file memory growth;
+- argument order mattering;
+- an ndjson stream that silently ended at 64 KiB.
+
+All output now goes through `src/out.cyr`: piped output is ~18× faster,
+highlighted ~4×, `-p` unchanged. There is a second fuzz harness (config and
+theme), the escape harness gained a precision invariant, and two vacuous
+smoke gates are rewritten. Pins unchanged. The release binary is 1,414,456
+bytes (+8,616).
+
 **1.5.2** — shipped 2026-10-31. **Markdown is routed by extension.** Its
 grammar has shipped since 1.0.0, but the language table had no row
 for it. Before this release:
@@ -633,6 +657,9 @@ complete; full owl attack surface audited and hardened.
 
 ## Binary
 
+- **1,414,456 bytes (`CYRIUS_DCE=1`) at 1.5.3**, +8,616 over 1.5.2: the
+  audit's repairs, the buffered writer and the new checks. `--agnos` DCE
+  is 1,411,656; the plain build 3,482,936.
 - **1,405,832 bytes (`CYRIUS_DCE=1`) at 1.5.1**, +73,712 over 1.5.0.
   `--agnos` DCE is 1,402,992 and the plain build 3,474,312;
   unreachable fns went 3,621 → 4,376. The growth is the deps'
@@ -686,16 +713,26 @@ complete; full owl attack surface audited and hardened.
 
 ## Source
 
-- 4685 lines across 8 modules (1.4.7 cut) — `escape.cyr` split out of
-  `main.cyr`, `fetch.cyr` added but NOT built (see §Next):
-  - `src/main.cyr` (2395) — entry, CLI, render dispatch, TTY/mode resolution, exe-relative grammar lookup, hex-dump, --diff, bat-style header frame (1.1.7), wrap-continuation gutter (1.1.8), `↪` wrap-arrow glyph (1.1.9), VCS-aware wrap budget (1.1.11), grammar bootstrap (1.1.12 → 1.4.5 covering 46 grammars), tokenize_source → streaming-API migration (1.3.1), per-chunk feed during slurp + HIGHLIGHT_MAX 128 KB → 16 MB (1.3.6), agnos `#ifdef` gates + bare-`_owl_entry()` top-level call (1.3.7/1.3.8), `--version --verbose` banner reports sit (1.4.0)
-  - `src/lang.cyr` (505) — extension/shebang/content detection + ext-override table + filename-shape detection (1.2.6); LANG_COUNT 50 (latest additions: markdown row 1.5.2, nasm/mdx/lean 1.5.1, openqasm 1.4.5, terraform 1.3.5, nix 1.3.4, vue/svelte 1.3.3, powershell/crystal/julia 1.3.2, cyml/llvm_ir 1.3.0)
-  - `src/theme.cyr` (475) — bundled themes, 10-kind palette, ANSI emission, user-theme loader (1.1.3); kind_name-keyed `theme_token_color` per vyakarana architecture note 004 (1.3.0)
-  - `src/vcs.cyr` (376) — **sit-backed VCS markers (1.4.0)** via `sit_repo_open`/`sit_diff_path`/`sit_repo_close`; LCS edit-script → ADD/MOD/DEL mapping; `--diff` bypass for piped output; agnos `#ifdef` no-op. Replaced the git fork+execve scaffold; public five-fn interface unchanged
-  - `src/config.cyr` (319) — `key = value` config parser (M7) + `ext.*` keys (1.1.1)
-  - `src/pager.cyr` (174) — pager spawn + SIGPIPE handling + env forward (1.1.5) + agnos `#ifdef` no-op (1.3.7)
-  - `src/escape.cyr` (116) — **file-origin escape classifier (1.4.7)**, split out of main.cyr so `tests/owl.fcyr` can include it. Audit FINDING-001/006/013 live here
-  - `src/fetch.cyr` (325) — http/https fetch. **NOT in the build** — complete but parked at 1.4.7; see §Next
+- 4,527 lines across 8 built modules at 1.5.3 (`fetch.cyr`, 325, is not
+  built — see §Next):
+  - `src/main.cyr` (2,525) — entry, CLI (two-pass since 1.5.3), mode
+    resolution, render dispatch, decorated frame, gutter, wrap, hex dump,
+    ndjson, `--follow`, the shared slurp (`_hl_slurp`, 1.5.3) and grammar
+    bootstrap (one loop over the language table since 1.5.3)
+  - `src/vcs.cyr` (593) — sit-backed change markers (1.4.0); stat-only repo
+    probe, worktree size / line pre-check, and symlink / `.git`-file / `..`
+    skips (1.5.3)
+  - `src/lang.cyr` (550) — extension / shebang / filename / content
+    detection, ext-override table; `LANG_COUNT` 50
+  - `src/theme.cyr` (539) — bundled and user themes, the 10-kind palette,
+    ANSI emission (through `out_write` since 1.5.3)
+  - `src/config.cyr` (416) — `key = value` parser and `cfg_read_regular`,
+    the shared regular-file reader for config and themes (1.5.3)
+  - `src/pager.cyr` (186) — pager spawn; environment from `env_block`, SIGINT
+    ignored while paging (1.5.3)
+  - `src/out.cyr` (127) — **buffered stdout (1.5.3)**: every rendered byte;
+    exit 3 on a write error
+  - `src/escape.cyr` (116) — the file-origin escape classifier (1.4.7)
 
 ## Tests
 
@@ -703,11 +740,19 @@ complete; full owl attack surface audited and hardened.
 - `scripts/smoke.sh` — end-to-end behavioral gates (M0 → M8)
 - `tests/owl.bcyr` — benchmark slot (reserved)
 - `tests/owl.fcyr` — **fuzz harness for the escape classifier (1.4.7)**.
-  5 invariants: bounded suppression, newlines always emitted, ESC never
-  emitted, escape-free streams pass through whole, reset is total. Each
-  A/B-verified against a deliberately broken classifier — `no-ceiling`,
-  `no-lf` and `esc-at-ceiling` mutations all fail it with distinct
-  messages. Run by `cyrius fuzz`
+  6 invariants: bounded suppression, newlines always emitted, ESC never
+  emitted, escape-free streams pass through whole, reset is total, and
+  (1.5.3) precision — a well-formed sequence is suppressed whole and the
+  text after it emitted exactly. Each is A/B-verified against a broken
+  classifier: `no-ceiling`, `no-lf`, `esc-at-ceiling`, and (1.5.3) a CSI
+  final byte or BEL / ST that no longer terminates.
+- `tests/owl_config.fcyr` — **fuzz harness for the config and theme
+  parsers (1.5.3)**, closing the 1.4.6 audit's follow-up. 6 invariants
+  checked against reference models; it caught 11 planted mutations.
+- `scripts/smoke.sh` gates every 2026-10-31 finding. FINDING-017 needs
+  `OWL_POISON_BIN` (a `cyrius build -D CYRIUS_POISON` binary) and
+  NOTE-skips without one. Several gates need `script(1)`, `git` or
+  `timeout`, and NOTE-skip without them.
 
 ## Dependencies
 
@@ -797,6 +842,29 @@ the audit asked for, and closed in 1.4.7:
 | 012 | LOW    | VCS marker table sized from sit's `max_line` with no ceiling, on repos that may be cloned from anywhere. Fails closed above `VCS_MAX_LINES` (16,777,216) |
 | 013 | **HIGH** | *(1.4.7)* The ceiling added for 006 emitted the byte that tripped it — and that byte can be an ESC, so a sequence padded to exactly the ceiling followed by `ESC ] 52` wrote a raw ESC + a full clipboard-write sequence to the terminal, re-opening 001 inside the repair for 006. Found by `tests/owl.fcyr`. An ESC at the ceiling now starts a new sequence instead |
 
+**2026-10-31 audit (1.5.3)** —
+[`docs/audit/2026-10-31-audit.md`](../audit/2026-10-31-audit.md).
+FINDING-014 – 039, all fixed in 1.5.3; the report has the full table.
+Headlines:
+- **014 HIGH:** stripping keyed on colour, so `NO_COLOR` passed file
+  escapes.
+- **015 MEDIUM:** the header file name was unsanitized.
+- **016 MEDIUM:** stdin ignored ndjson and hex.
+- **017 MEDIUM:** heap overflow in the user-grammar path.
+- **018 MEDIUM:** a 16 MiB ndjson stream silently ended at 64 KiB.
+- **019 MEDIUM:** an ancestor-FIFO hang.
+- **020 MEDIUM:** gigabyte-scale VCS memory.
+- **021 MEDIUM:** write errors ignored.
+- **022 MEDIUM:** per-file memory growth.
+- **023 MEDIUM:** gutter stack under-write.
+
+Informational: INFO-004 – 008 are sit's (tree-bomb memory; unbounded lock
+wait; unreadable vs unchanged; gitattributes; `commit_tree_hex`), INFO-009
+vyakarana's (per-stream memory), INFO-010 cyrius's (argv via `/proc`), and
+INFO-011 – 015 owl-side (CR/BS accepted; piped-tab expansion an open
+decision; the `.bashrc` sniff and `--` deferred to 1.6.x; the spec
+corrected).
+
 Open informational items:
 
 - ~~**INFO-002 (upstream, cyrius)**~~ — **closed upstream in cyrius
@@ -815,7 +883,8 @@ Open informational items:
   stripping**: `_strip_active()` keys off `g_want_color`, which resolves
   from TTY detection, so a truncated environment can only fail to
   *enable* `NO_COLOR` — erring toward more decoration, never toward
-  passing file-origin escapes through.
+  passing file-origin escapes through. *(That reasoning was itself wrong
+  until 1.5.3: honouring `NO_COLOR` turned stripping off — FINDING-014.)*
 - **INFO-003 (accepted)** — 8-bit C1 controls (`0x9B` CSI, `0x9D` OSC,
   `0x90` DCS) are not stripped. In UTF-8, the only mode in which owl's
   box-drawing frame renders, `0x80–0x9F` are continuation bytes;
@@ -823,6 +892,20 @@ Open informational items:
   make the same call. Revisit only if owl grows a non-UTF-8 mode.
 
 ## Verification
+
+All green at 1.5.3 on cyrius `6.7.18`:
+- **builds:** host / DCE / `-D CYRIUS_POISON` / `--agnos` / DCE `--agnos` /
+  `--aarch64`;
+- **unit tests:** `cyrius test` 7/7;
+- **fuzz:** `cyrius fuzz` 2/2 (escape, 6 invariants; config, 6), also under
+  `--poison`;
+- **smoke:** green on the plain and DCE builds with `OWL_POISON_BIN`; every
+  new gate fails against 1.5.2;
+- **lint:** 0 warnings.
+
+Output A/B against 1.5.2 (52 corpus files × 11 modes plus 12 TTY runs) is
+identical except highlighted `--line-range`, which loses only its empty
+out-of-range SGR pairs.
 
 All green at 1.5.2 on cyrius `6.7.18` (build, test, fuzz, lint, smoke
 on plain + DCE; the markdown gates fail against 1.5.1). The 1.5.1
@@ -919,78 +1002,28 @@ At 1.4.7 on cyrius `6.5.35`:
 
 ## Next
 
-**1.4.0 shipped the SIT dependency swap** — the highest-priority
-1.4.x item. Remaining 1.4.x candidates, each independent:
+Forward work lives in [`roadmap.md`](roadmap.md): **1.6.x** is
+registry-based language routing, the `[test]` stdlib scope, colourised
+`--follow`, cmdit with completions, and `--diff-from`. URL support and AGNOS
+theming are blocked, with the reasons recorded there.
 
-- **NDJSON output mode** (`--format=ndjson`) — emit tokens as
-  one JSON object per line for tooling consumers. Mirrors
-  vyakarana's existing NDJSON debug shape. No upstream blocker.
-- **`--follow` / `-f`** — tail-style live highlighting via
-  inotify + per-modify re-tokenize. Cheap upstream now that
-  vyakarana 2.0.1's rolling-buffer scanner is in place; needs
-  owl-side append-only ANSI render path.
-- **URL / remote-file support** (`owl https://…`) — fetch
-  via sandhi's HTTP/TLS surface. (sandhi is now linked anyway as
-  part of sit's stdlib footprint, so the TLS surface is present.)
-- **Native AGNOS theming** — wait until AGNOS ships its
-  system-wide theming primitive; owl's kind_name-keyed theme
-  layer (1.3.0) is the load-bearing prep, swap is mechanical.
+Open follow-ups:
 
-Follow-ups opened by the 1.4.6 audit:
-
-~~**Report INFO-002 to cyrius**~~ — **filed at 1.4.7** as
-`cyrius/docs/development/issues/2026-08-22-owl-getenv-8kb-environ-window.md`,
-with a standalone minimal repro (same variable found or not found purely
-by how many bytes precede it) plus the owl `NO_COLOR` measurement.
-**Fixed upstream in 6.5.36**; re-verified at 1.4.9.
-
-~~**Widen the audit corpus into a fuzz target**~~ — **done at 1.4.7.**
-`tests/owl.fcyr` covers the escape classifier with 5 invariants and
-found FINDING-013 on its first run. The config and theme parsers are
-still uncovered; they are the obvious next harness.
-
-Follow-ups opened by the SIT swap:
-
-~~**Adopt `dist/sit-read.cyr`**~~ — **done at 1.4.7.** −17.7% binary,
-38 → 22 stdlib entries, 15 → 3 link warnings.
-
-~~**Upstream namespacing for `_stream_grow`**~~ — **re-diagnosed and
-filed at 1.4.7, against cyrius, not against vyakarana or sankoch.**
-The earlier framing here was wrong. Cyrius has had `private` / `public`
-since **6.5.0**, so "neither library scopes its helper" looked like the
-answer — but it is not: a `private` fn still loses a `duplicate fn`
-race to a same-named fn in another file, the private file's *own*
-internal calls get rebound, declaring `private` in both files does not
-help, and the override **bypasses the arity check that is otherwise a
-hard error**. All four verified with a minimal repro; filed as
-`cyrius/docs/development/issues/2026-08-22-owl-private-fns-still-collide-across-files.md`.
-Renaming in either library is a workaround, not the fix, and neither
-library is doing anything wrong. owl continues to carry the warning,
-verified inert.
-
-Open, and the reason each is open:
-
-- **URL / remote-file support** — code is complete in `src/fetch.cyr`
-  but **not in the build**. Three reasons, any one sufficient: (1) it
-  could not be verified — `sandhi_conn_open_fully_timed` returns
-  `SANDHI_CONN_OPEN_TIMEOUT` for every target tried including a
-  known-good local server, sandbox on or off, while `curl` reaches the
-  same server; (2) it costs **521,352 bytes**, giving back 81% of the
-  sit-read win; (3) it is new inbound network attack surface one release
-  after an audit and wants its own audit pass. Unblocking it starts with
-  the sandhi transport, not with owl.
-- **Native AGNOS theming** — still blocked on AGNOS shipping its
-  system-wide theming primitive. owl's kind_name-keyed theme layer
-  (1.3.0) is the prep; the swap is mechanical.
-- **Colourised `--follow`** — the tail deliberately renders without
-  token colour (see `_follow_loop`). Doing it properly means threading a
-  base offset through `_render_highlighted_with_tb` so absolute stream
-  spans can be drawn against a chunk, and handling tokens that straddle
-  an append boundary.
-- **Fuzz the config and theme parsers** — both take untrusted file
-  content, both produced 1.4.6 findings, neither has a harness.
-- **Stdlib constant collisions** — filed for cyrius
+- **Upstream, from the 2026-10-31 audit.** None of these is filed yet.
+  - **sit:** INFO-004, the tree-bomb `.git` (impact HIGH: resolve one path
+    by its components instead of flattening HEAD's tree); INFO-005, an
+    unbounded lock wait; INFO-006, unreadable vs unchanged; INFO-007,
+    gitattributes; INFO-008, `commit_tree_hex`.
+  - **vyakarana:** INFO-009, per-stream memory.
+  - **cyrius:** INFO-010, argv via `/proc`.
+- **INFO-012, a decision:** should piped output (without `-p`) keep literal
+  tabs, as the design spec originally said? It expands them today, and
+  smoke pins that.
+- **cyrius stdlib constant collisions.** Filed
   (`cyrius/docs/development/issues/2026-06-14-stdlib-constant-value-collisions.md`).
 
-Stdlib follow-ups: M7's `key = value` parser will swap to a formal
-CYML parser when `cyml` lands in stdlib.
+Closed and kept for the record: INFO-002, the `getenv` 8 KB window
+(fixed in cyrius 6.5.36, re-verified at 1.4.9 and 1.5.1); sit-read
+adoption (1.4.7); the `_stream_grow` collision (vyakarana 2.4.2, at
+owl 1.4.8); the escape-classifier fuzz harness (1.4.7); the config and
+theme parser harness (1.5.3).

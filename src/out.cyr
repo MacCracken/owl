@@ -1,0 +1,127 @@
+# src/out.cyr — buffered stdout (1.5.3)
+#
+# Every byte owl renders goes through out_write / out_byte, never a raw
+# `syscall(1, 1, …)`. Two reasons, both from the 2026-10-31 audit:
+#
+#   - Performance. Through 1.5.2 each emitted byte was its own write(2):
+#     104.9M syscalls for a 100 MB file piped (42 s), 1,024 per KB. One
+#     64 KiB buffer makes the same output ~26x faster and changes no byte.
+#   - Write errors. A failed or short write was ignored, so `owl f >
+#     /dev/full` exited 0 and, with SIGPIPE ignored, owl spun forever after
+#     its reader quit. out_flush loops on short writes and EINTR, exits 3
+#     silently on EPIPE (design-spec §9: a broken pipe is an stdout I/O
+#     error that may be suppressed), and reports anything else before
+#     exiting 3.
+#
+# Flush points (callers own them): before anything is written to stderr,
+# before the pager's write end is closed, before --follow sleeps, and at
+# exit. A direct write to fd 1 anywhere else would reorder output.
+
+var OUT_CAP = 65536;
+# Heap, allocated on first write: a top-level `var x[N]` reserves N 8-byte
+# slots in the binary image (512 KiB here), not N bytes as a local does.
+var g_out_buf = 0;
+var g_out_len = 0;
+
+# 1 when the buffer is usable. If the one-time alloc fails, writes go out
+# unbuffered rather than not at all.
+fn _out_ready() {
+    if (g_out_buf == 0) { g_out_buf = alloc(OUT_CAP); }
+    if (g_out_buf == 0) { return 0; }
+    return 1;
+}
+
+# Write n bytes to fd 1 completely, or exit 3. Never returns short.
+fn _out_write_all(p, n) {
+    var off = 0;
+    while (off < n) {
+        var w = syscall(1, 1, p + off, n - off);
+        if (w > 0) { off = off + w; continue; }
+        if (w == (0 - 4)) { continue; }                 # EINTR: retry
+        _out_fail(w);
+    }
+    return 0;
+}
+
+# stdout is unusable: say why (except for a closed reader), then exit 3.
+fn _out_fail(err) {
+    g_out_len = 0;
+    if (err != (0 - 32)) {                              # not EPIPE
+        var msg = "write error";
+        if (err == (0 - 28)) { msg = "write error: No space left on device"; }
+        if (err == (0 - 9))  { msg = "write error: stdout is closed"; }
+        if (err == (0 - 5))  { msg = "write error: Input/output error"; }
+        syscall(1, 2, "owl: ", 5);
+        syscall(1, 2, msg, strlen(msg));
+        syscall(1, 2, "\n", 1);
+    }
+    syscall(SYS_EXIT, 3);
+    return 0;
+}
+
+fn out_flush() {
+    if (g_out_len > 0) {
+        var n = g_out_len;
+        g_out_len = 0;
+        _out_write_all(g_out_buf, n);
+    }
+    return 0;
+}
+
+fn out_write(p, n) {
+    if (n <= 0) { return 0; }
+    # A large write goes straight out after whatever is pending: buffering
+    # is for coalescing small writes, and copying a 64 KiB `-p` chunk into
+    # the buffer first (memcpy is a byte loop) made plain mode ~6x slower
+    # than writing it directly.
+    if (n >= 4096) { out_flush(); _out_write_all(p, n); return 0; }
+    if (_out_ready() == 0) { _out_write_all(p, n); return 0; }
+    if (g_out_len + n > OUT_CAP) { out_flush(); }
+    memcpy(g_out_buf + g_out_len, p, n);
+    g_out_len = g_out_len + n;
+    return 0;
+}
+
+fn out_byte(c) {
+    if (_out_ready() == 0) { var one[8]; store8(&one, c); _out_write_all(&one, 1); return 0; }
+    if (g_out_len >= OUT_CAP) { out_flush(); }
+    store8(g_out_buf + g_out_len, c);
+    g_out_len = g_out_len + 1;
+    return 0;
+}
+
+fn out_str(s) { return out_write(s, strlen(s)); }
+
+# Decimal i64, buffered (the stdlib's fmt_int writes straight to fd 1).
+fn out_int(v) {
+    var d[24];
+    var i = 23;
+    var neg = 0;
+    if (v < 0) { neg = 1; v = 0 - v; }
+    if (v == 0) { store8(&d + i, 48); i = i - 1; }
+    while (v > 0) {
+        store8(&d + i, 48 + v % 10);
+        i = i - 1;
+        v = v / 10;
+    }
+    if (neg == 1) { store8(&d + i, 45); i = i - 1; }
+    return out_write(&d + i + 1, 23 - i);
+}
+
+# stdout twin of eprint_sanitized: C0 controls and DEL become '?', so a
+# file NAME (argv, and so glob expansion over a hostile tree) can never
+# reach the terminal as an escape sequence. Bytes >= 0x80 pass through so
+# UTF-8 names stay readable. Audit 2026-10-31 FINDING-015.
+fn out_write_sanitized(s, n) {
+    var i = 0;
+    while (i < n) {
+        var c = load8(s + i);
+        if (c < 32) { out_byte(63); }
+        else {
+            if (c == 127) { out_byte(63); }
+            else { out_byte(c); }
+        }
+        i = i + 1;
+    }
+    return 0;
+}

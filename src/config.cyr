@@ -20,18 +20,29 @@
 #
 # Recognized keys
 # ---------------
-#   theme   = dark | light
+#   theme   = dark | light | <user theme name>
 #   paging  = auto | always | never
 #   style   = auto | changes | no-changes
 #   tabs    = <non-negative integer>
 #   wrap    = auto | never | character
 #   ext.<extension> = <language>     (e.g. ext.conf = shell)
 #
+# Keys are case-sensitive; the extension in `ext.<extension>` is not
+# (it is stored lowercased, like the built-in table). A key that appears
+# twice takes its LAST value, `ext.` entries included.
+#
 # Location (first hit wins)
 # -------------------------
 #   $OWL_CONFIG
 #   $XDG_CONFIG_HOME/owl/config.cyml
 #   $HOME/.config/owl/config.cyml
+#
+# Only a regular file is read (a symlink to one is fine). Anything else —
+# a FIFO, a directory, /dev/stdin, a tty — is skipped as if absent:
+# opening a FIFO blocks until a writer appears, so before 1.5.3 a FIFO at
+# $OWL_CONFIG hung every owl invocation, `owl --version` included, and
+# `OWL_CONFIG=/dev/stdin` silently ate the input owl was meant to show.
+# (`OWL_CONFIG=/dev/null` therefore still means "no config".)
 #
 # Error model
 # -----------
@@ -40,18 +51,16 @@
 # the remaining lines continue to load. We deliberately do NOT fail
 # startup on bad config — a user's viewer should not be held hostage
 # by a typo in their own dotfiles.
+#
+# Size
+# ----
+# The first CONFIG_MAX bytes are read (plus the newline ending the line
+# that reaches the limit). A longer file gets ONE warning naming it, and
+# the line cut by the limit is dropped, never applied: before 1.5.3 the
+# tail vanished silently and a straddling `tabs = 64` was applied as
+# `tabs = 6`.
 
 var CONFIG_MAX = 8192;
-
-fn _cfg_append(dst, off, src) {
-    var sl = strlen(src);
-    var i = 0;
-    while (i < sl) {
-        store8(dst + off + i, load8(src + i));
-        i = i + 1;
-    }
-    return off + sl;
-}
 
 fn _cfg_append_n(dst, off, src, n) {
     var i = 0;
@@ -115,6 +124,54 @@ fn _config_resolve_path() {
     return 0;
 }
 
+# Read a small user-owned text file — the config, or a theme (theme.cyr
+# calls this too). Returns a freshly allocated buffer, or 0 when `path`
+# is missing, is not a regular file, or cannot be read. On success `res`
+# (16 bytes) receives res[0] = bytes in the buffer and res[8] = 1 when
+# the file holds more than the buffer does.
+#
+# At most `cap` bytes of content are kept, plus the newline that ends the
+# line reaching the limit: `cap + 1` bytes are read, and when the extra
+# byte is that newline one more byte is probed to tell "exactly full"
+# from "more follows". Callers must not apply the unterminated tail of a
+# truncated buffer — it is a fragment of a line, not a line.
+#
+# The stat-before-open window is not a boundary owl defends: whoever can
+# swap the file for a FIFO between the two calls can write the file.
+fn cfg_read_regular(path, cap, res) {
+    var st[256];
+    var probe[8];
+    store64(res, 0);
+    store64(res + 8, 0);
+    if (xstat(path, &st) != 0) { return 0; }
+    if ((load32(&st + STAT_MODE) & 0xF000) != 0x8000) { return 0; }   # S_IFREG
+    var fd = file_open(path, O_RDONLY, 0);
+    if (fd < 0) { return 0; }
+    var want = cap + 1;
+    var buf = alloc(want);
+    if (buf == 0) { file_close(fd); return 0; }   # FINDING-011
+    var total = 0;
+    var done = 0;
+    while (done == 0) {
+        if (total >= want) { done = 1; continue; }
+        var got = file_read(fd, buf + total, want - total);
+        if (got < 0) { file_close(fd); return 0; }
+        if (got == 0) { done = 1; continue; }
+        total = total + got;
+    }
+    var trunc = 0;
+    if (total > cap) {
+        trunc = 1;
+        if (load8(buf + cap) == 10) {
+            if (file_read(fd, &probe, 1) <= 0) { trunc = 0; }
+        }
+    }
+    file_close(fd);
+    store64(res, total);
+    store64(res + 8, trunc);
+    return buf;
+}
+
 # True (1) when the key buffer at (buf, len) matches null-terminated s.
 fn _cfg_keyeq(buf, len, s) {
     var sl = strlen(s);
@@ -122,15 +179,11 @@ fn _cfg_keyeq(buf, len, s) {
     return memeq(buf, s, len);
 }
 
-# Emit `owl: <path>:<line>: <reason>` to stderr. Keeps the same shape
-# as report_error so the format is familiar to users. Line numbers are
-# 1-based.
-fn _cfg_err(path, line, reason) {
-    var pbuf[16];
-    var n = line;
-    var pi = 15;
-    store8(&pbuf + pi, 0);
-    pi = pi - 1;
+# Write a non-negative integer to stderr in decimal.
+fn _cfg_eprint_uint(n) {
+    var pbuf[24];
+    var pi = 23;
+    if (n < 0) { n = 0; }
     if (n == 0) { store8(&pbuf + pi, 48); pi = pi - 1; }
     while (n > 0) {
         store8(&pbuf + pi, 48 + n % 10);
@@ -138,73 +191,120 @@ fn _cfg_err(path, line, reason) {
         n = n / 10;
     }
     pi = pi + 1;
+    eprint(&pbuf + pi, 24 - pi);
+    return 0;
+}
+
+# Emit `owl: <path>:<line>: <reason>` to stderr. Keeps the same shape
+# as report_error so the format is familiar to users. Line numbers are
+# 1-based.
+fn _cfg_err(path, line, reason) {
     eprint("owl: ", 5);
     eprint_sanitized(path, strlen(path));
     eprint(":", 1);
-    eprint(&pbuf + pi, 15 - pi);
+    _cfg_eprint_uint(line);
     eprint(": ", 2);
     eprint(reason, strlen(reason));
     eprint("\n", 1);
     return 0;
 }
 
+# Emit `owl: <path>: larger than <cap> bytes; lines past the limit
+# ignored` — the one warning a truncated config or theme file gets.
+fn cfg_warn_truncated(path, cap) {
+    eprint("owl: ", 5);
+    eprint_sanitized(path, strlen(path));
+    eprint(": larger than ", 14);
+    _cfg_eprint_uint(cap);
+    eprint(" bytes; lines past the limit ignored\n", 37);
+    return 0;
+}
+
+# Per-line outcome of _cfg_parse_line. 0 = applied / comment / blank.
+var CFG_E_SYNTAX  = 1;   # no '='
+var CFG_E_NOKEY   = 2;   # nothing before '='
+var CFG_E_NOVAL   = 3;   # nothing after '='
+var CFG_E_KEY     = 4;   # unknown key
+var CFG_E_VALUE   = 5;   # known key, value refused
+var CFG_E_EXTFULL = 6;   # 17th distinct ext.<extension>
+
+fn _cfg_reason(rc) {
+    if (rc == CFG_E_SYNTAX)  { return "expected key=value"; }
+    if (rc == CFG_E_NOKEY)   { return "missing key before '='"; }
+    if (rc == CFG_E_NOVAL)   { return "missing value after '='"; }
+    if (rc == CFG_E_KEY)     { return "unknown config key"; }
+    if (rc == CFG_E_EXTFULL) { return "too many ext overrides (max 16)"; }
+    return "bad value";
+}
+
 # Apply a parsed (key, value) pair. Both are pointers into a caller
-# buffer with explicit lengths. Returns 0 OK, 1 unknown key, 2 bad
-# value. Value is copied into a local null-terminated scratch so the
-# existing set_* helpers from theme/pager/vcs keep working unchanged.
+# buffer with explicit lengths. Returns 0 OK or a CFG_E_* code. Value is
+# copied into a local null-terminated scratch so the existing set_*
+# helpers from theme/pager/vcs keep working unchanged. Nothing keeps that
+# pointer: theme_index copies a user theme's name to the heap (1.5.3 —
+# before, the slot kept &vbuf and later lookups read a dead stack frame).
+#
+# A value or ext key holding a NUL byte is refused: the NUL-terminated
+# hand-off would silently cut it (`tabs = 8<NUL>junk` applied as 8).
 fn _cfg_apply(key, klen, value, vlen) {
-    if (vlen > 63) { return 2; }
+    if (vlen > 63) { return CFG_E_VALUE; }
     var vbuf[64];
     var i = 0;
     while (i < vlen) {
-        store8(&vbuf + i, load8(value + i));
+        var vc = load8(value + i);
+        if (vc == 0) { return CFG_E_VALUE; }
+        store8(&vbuf + i, vc);
         i = i + 1;
     }
     store8(&vbuf + i, 0);
 
     if (_cfg_keyeq(key, klen, "theme") == 1) {
         var ti = theme_index(&vbuf);
-        if (ti < 0) { return 2; }
+        if (ti < 0) { return CFG_E_VALUE; }
         g_active_theme = ti;
         return 0;
     }
     if (_cfg_keyeq(key, klen, "paging") == 1) {
-        if (set_paging(&vbuf) != 0) { return 2; }
+        if (set_paging(&vbuf) != 0) { return CFG_E_VALUE; }
         return 0;
     }
     if (_cfg_keyeq(key, klen, "style") == 1) {
-        if (set_style(&vbuf) != 0) { return 2; }
+        if (set_style(&vbuf) != 0) { return CFG_E_VALUE; }
         return 0;
     }
     if (_cfg_keyeq(key, klen, "tabs") == 1) {
-        if (set_tabs(&vbuf) != 0) { return 2; }
+        if (set_tabs(&vbuf) != 0) { return CFG_E_VALUE; }
         return 0;
     }
     if (_cfg_keyeq(key, klen, "wrap") == 1) {
-        if (set_wrap(&vbuf) != 0) { return 2; }
+        if (set_wrap(&vbuf) != 0) { return CFG_E_VALUE; }
         return 0;
     }
     # ext.<extension> = <language> — per-extension language override.
     # Lets a user remap e.g. ".conf" to "shell" without a code change.
-    # Capped at lang.cyr's USER_EXT_MAX (16). Bad value if the language
-    # name is unknown or the extension is empty.
+    # Capped at lang.cyr's USER_EXT_MAX (16) distinct extensions; a
+    # repeated extension replaces its earlier entry. Bad value if the
+    # language name is unknown or the extension is empty.
     if (klen > 4) {
         if (memeq(key, "ext.", 4) == 1) {
             var elen = klen - 4;
-            if (elen >= 63) { return 2; }
+            if (elen >= 63) { return CFG_E_VALUE; }
             var ebuf[64];
             var ki = 0;
             while (ki < elen) {
-                store8(&ebuf + ki, load8(key + 4 + ki));
+                var kc = load8(key + 4 + ki);
+                if (kc == 0) { return CFG_E_VALUE; }
+                store8(&ebuf + ki, kc);
                 ki = ki + 1;
             }
             store8(&ebuf + ki, 0);
             var rc = lang_register_ext_override(&ebuf, &vbuf);
-            if (rc != 0) { return 2; }
+            if (rc == 1) { return CFG_E_EXTFULL; }
+            if (rc != 0) { return CFG_E_VALUE; }
             return 0;
         }
     }
-    return 1;
+    return CFG_E_KEY;
 }
 
 # Is byte c whitespace? Tab, LF, CR, space.
@@ -216,9 +316,9 @@ fn _cfg_is_ws(c) {
     return 0;
 }
 
-# Parse one line of the config at buf[s..e]. Returns 0 OK (line
-# applied, skipped as comment, or blank), 1 if an error was reported.
-fn _cfg_parse_line(path, lineno, buf, s, e) {
+# Parse and apply one line of the config at buf[s..e). Returns 0 (line
+# applied, comment, or blank) or a CFG_E_* code; the caller reports it.
+fn _cfg_parse_line(buf, s, e) {
     # Trim leading whitespace.
     while (s < e) {
         if (_cfg_is_ws(load8(buf + s)) == 0) { break; }
@@ -239,10 +339,7 @@ fn _cfg_parse_line(path, lineno, buf, s, e) {
         if (load8(buf + eq) == 61) { break; }  # '='
         eq = eq + 1;
     }
-    if (eq >= e) {
-        _cfg_err(path, lineno, "expected key=value");
-        return 1;
-    }
+    if (eq >= e) { return CFG_E_SYNTAX; }
 
     # Key span: [s, eq), trim trailing whitespace.
     var ke = eq;
@@ -250,10 +347,7 @@ fn _cfg_parse_line(path, lineno, buf, s, e) {
         if (_cfg_is_ws(load8(buf + ke - 1)) == 0) { break; }
         ke = ke - 1;
     }
-    if (ke <= s) {
-        _cfg_err(path, lineno, "missing key before '='");
-        return 1;
-    }
+    if (ke <= s) { return CFG_E_NOKEY; }
 
     # Value span: (eq, e), trim leading whitespace.
     var vs = eq + 1;
@@ -270,15 +364,40 @@ fn _cfg_parse_line(path, lineno, buf, s, e) {
             }
         }
     }
-    if (vs >= e) {
-        _cfg_err(path, lineno, "missing value after '='");
-        return 1;
-    }
+    if (vs >= e) { return CFG_E_NOVAL; }
 
-    var rc = _cfg_apply(buf + s, ke - s, buf + vs, e - vs);
-    if (rc == 1) { _cfg_err(path, lineno, "unknown config key"); return 1; }
-    if (rc == 2) { _cfg_err(path, lineno, "bad value");          return 1; }
-    return 0;
+    return _cfg_apply(buf + s, ke - s, buf + vs, e - vs);
+}
+
+# Report a _cfg_parse_line outcome. Returns 1 when it was an error.
+fn _cfg_report(path, lineno, rc) {
+    if (rc == 0) { return 0; }
+    _cfg_err(path, lineno, _cfg_reason(rc));
+    return 1;
+}
+
+# Apply every line of buf[0..total) in order. `trunc` = the buffer is a
+# prefix of a longer file, so its unterminated tail is a fragment and is
+# NOT applied. Returns the number of lines that reported an error.
+fn _cfg_parse_buf(path, buf, total, trunc) {
+    var errs = 0;
+    var lineno = 1;
+    var ls = 0;
+    var i = 0;
+    while (i < total) {
+        if (load8(buf + i) == 10) {
+            errs = errs + _cfg_report(path, lineno, _cfg_parse_line(buf, ls, i));
+            lineno = lineno + 1;
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    if (ls < total) {
+        if (trunc == 0) {
+            errs = errs + _cfg_report(path, lineno, _cfg_parse_line(buf, ls, total));
+        }
+    }
+    return errs;
 }
 
 # Public entry. Called from main() before CLI argument parsing.
@@ -287,33 +406,11 @@ fn config_load() {
     var path = _config_resolve_path();
     if (path == 0) { return 0; }
 
-    var fd = file_open(path, O_RDONLY, 0);
-    if (fd < 0) { return 0; }
-
-    var buf = alloc(CONFIG_MAX);
-    if (buf == 0) { file_close(fd); return 0; }   # FINDING-011
-    var total = 0;
-    while (total < CONFIG_MAX) {
-        var got = file_read(fd, buf + total, CONFIG_MAX - total);
-        if (got < 0) { file_close(fd); return 0; }
-        if (got == 0) { break; }
-        total = total + got;
-    }
-    file_close(fd);
-
-    var lineno = 1;
-    var ls = 0;
-    var i = 0;
-    while (i < total) {
-        if (load8(buf + i) == 10) {
-            _cfg_parse_line(path, lineno, buf, ls, i);
-            lineno = lineno + 1;
-            ls = i + 1;
-        }
-        i = i + 1;
-    }
-    if (ls < total) {
-        _cfg_parse_line(path, lineno, buf, ls, total);
-    }
+    var res[16];
+    var buf = cfg_read_regular(path, CONFIG_MAX, &res);
+    if (buf == 0) { return 0; }
+    var trunc = load64(&res + 8);
+    if (trunc == 1) { cfg_warn_truncated(path, CONFIG_MAX); }
+    _cfg_parse_buf(path, buf, load64(&res), trunc);
     return 0;
 }

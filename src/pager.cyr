@@ -58,71 +58,28 @@ fn start_pager() {
     }
 
     if (pid == 0) {
-        # Child: wire pipe's read-end to stdin, then forward the
-        # parent's full environment to the pager. PATH-only used to
-        # be enough for sh to find `less` on $PATH, but less itself
-        # needs TERM (terminfo init), HOME (~/.lesshst), LANG/LC_*
-        # (UTF-8 handling), LESS (default flags), COLORTERM, etc.
-        # Without TERM less prints
-        #   'unknown': I need something more specific.
-        # to stderr and exits, leaving owl writing into a dead pipe
-        # → SIGPIPE → exit 141. Forwarding /proc/self/environ keeps
-        # the pager working without re-introducing shell injection
-        # (PAGER values still flow through `/bin/sh -c` exactly as
-        # before).
+        # Child: wire the pipe's read end to stdin, then exec the pager with
+        # owl's full environment (_pager_envp). PATH alone is not enough:
+        # less needs TERM (terminfo init), HOME (~/.lesshst), LANG/LC_*
+        # (UTF-8), LESS (flags), COLORTERM. Without TERM it prints
+        # "'unknown': I need something more specific." and exits, leaving
+        # owl writing into a dead pipe. PAGER values still flow through
+        # `/bin/sh -c` exactly as before (INFO-001), and no file-derived
+        # string ever reaches that command.
         sys_close(write_fd);
-        sys_dup2(read_fd, 0);
-        sys_close(read_fd);
+        # If owl started with fd 0 closed, pipe() handed us 0 as the read
+        # end: it is already the pager's stdin, and dup2(0, 0) + close(0)
+        # would close it (audit 2026-10-31: the pager got no input).
+        if (read_fd != 0) {
+            sys_dup2(read_fd, 0);
+            sys_close(read_fd);
+        }
         var argv[64];
         store64(&argv + 0,  "/bin/sh");
         store64(&argv + 8,  "-c");
         store64(&argv + 16, cmd);
         store64(&argv + 24, 0);
-
-        var envbuf[16384];
-        var envp[2048];
-        var nbytes = 0;
-        var efd = file_open("/proc/self/environ", 0, 0);
-        if (efd >= 0) {
-            nbytes = file_read(efd, &envbuf, 16384);
-            file_close(efd);
-            if (nbytes < 0) { nbytes = 0; }
-        }
-        # Only hand execve entries that are NUL-terminated INSIDE envbuf.
-        # Audit FINDING-009: /proc/self/environ is read into a fixed 16 KB
-        # buffer, so an environment larger than that truncates mid-entry —
-        # and the old loop still published a pointer to that final,
-        # unterminated entry. execve would then read past envbuf, copying
-        # adjacent memory into the child's environment. `last_nul` is the
-        # last byte we know terminates something; any entry starting at or
-        # before it is therefore terminated within the buffer.
-        var last_nul = 0 - 1;
-        var q = nbytes - 1;
-        while (q >= 0 && last_nul < 0) {
-            if (load8(&envbuf + q) == 0) { last_nul = q; }
-            q = q - 1;
-        }
-        var slot = 0;
-        if (nbytes > 0 && last_nul >= 0) {
-            if (load8(&envbuf) != 0) {
-                store64(&envp + 0, &envbuf);
-                slot = 1;
-            }
-            var pos = 0;
-            while (pos < nbytes - 1) {
-                if (load8(&envbuf + pos) == 0 && (pos + 1) <= last_nul && load8(&envbuf + pos + 1) != 0 && slot < 255) {
-                    store64(&envp + slot * 8, &envbuf + pos + 1);
-                    slot = slot + 1;
-                }
-                pos = pos + 1;
-            }
-        }
-        if (slot == 0) {
-            store64(&envp + 0, "PATH=/usr/local/bin:/usr/bin:/bin");
-            slot = 1;
-        }
-        store64(&envp + slot * 8, 0);
-        sys_execve("/bin/sh", &argv, &envp);
+        sys_execve("/bin/sh", &argv, _pager_envp());
         sys_exit(127);
     }
 
@@ -133,8 +90,61 @@ fn start_pager() {
     sys_dup2(write_fd, 1);
     sys_close(write_fd);
     g_pager_pid = pid;
+    # While the pager owns the terminal, Ctrl-C is the pager's (less keeps
+    # running on ^C). owl ignores it and ends when the pager closes the
+    # pipe; dying here left the pager orphaned on the TTY with PPID 1
+    # (audit 2026-10-31). Set after fork, so the pager keeps the default.
+    signal_ignore(SIGINT);
     return pid;
     #endif
+}
+
+# The pager's environment: owl's own, whole. Built from the stdlib's
+# env_block (the block getenv reads, sized to the real environment), so
+# nothing past 16 KB or past 255 entries is dropped — through 1.5.2 a large
+# environment lost TERM / PATH / LANG and less ran degraded (audit
+# 2026-10-31; FINDING-009's unterminated-entry guard is moot here, since
+# env_block's entries are all terminated). `LESS=FRX` is added when LESS is
+# unset, as git does, so a bare `PAGER=less` renders colour and does not
+# page a short file. Called in the forked child only.
+fn _pager_envp() {
+    var blen = 0;
+    var blk = env_block(&blen);
+    var count = 0;
+    var i = 0;
+    while (i < blen) {
+        if (load8(blk + i) == 0) { count = count + 1; }
+        i = i + 1;
+    }
+    var envp = alloc((count + 3) * 8);
+    if (envp == 0) { return 0; }
+    var slot = 0;
+    var has_less = 0;
+    var start = 0;
+    i = 0;
+    while (i < blen) {
+        if (load8(blk + i) == 0) {
+            if (i > start) {
+                store64(envp + slot * 8, blk + start);
+                slot = slot + 1;
+                if (i - start >= 5) {
+                    if (memeq(blk + start, "LESS=", 5) == 1) { has_less = 1; }
+                }
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    if (slot == 0) {
+        store64(envp, "PATH=/usr/local/bin:/usr/bin:/bin");
+        slot = 1;
+    }
+    if (has_less == 0) {
+        store64(envp + slot * 8, "LESS=FRX");
+        slot = slot + 1;
+    }
+    store64(envp + slot * 8, 0);
+    return envp;
 }
 
 # Close our write-end of the pipe (fd 1) so the pager gets EOF, then
@@ -147,6 +157,7 @@ fn stop_pager() {
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     if (g_pager_pid == 0) { return 0; }
+    out_flush();
     sys_close(1);
     if (g_pager_orig_out > 0) {
         sys_dup2(g_pager_orig_out, 1);
@@ -160,6 +171,7 @@ fn stop_pager() {
     var status_buf[8];
     sys_waitpid(g_pager_pid, &status_buf, 0);
     g_pager_pid = 0;
+    signal_default(SIGINT);
     return 0;
     #endif
 }

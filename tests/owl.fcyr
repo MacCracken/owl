@@ -34,6 +34,13 @@
 #      identically to a fresh start, so one file cannot bleed into the
 #      next.
 #
+#   6. **Precision (1.5.3).** A well-formed sequence is suppressed whole,
+#      and the bytes after its terminator are emitted exactly. Invariants
+#      1-5 only bound how much is lost; the 2026-10-31 audit showed two
+#      mutants that pass all five while hiding the rest of every line — a
+#      CSI final byte that no longer terminates, and BEL / ST no longer
+#      ending a string. This one catches both.
+#
 # Inputs are pseudorandom from a fixed xorshift seed, so a failure
 # reproduces exactly. The corpus deliberately over-weights 0x1B and the
 # CSI/OSC introducer bytes — uniform random bytes almost never build a
@@ -228,11 +235,79 @@ fn _fuzz_reset_is_total() {
     return 0;
 }
 
+# Invariant 6: precision. Generate a well-formed sequence of a random class
+# (kept far below ESC_MAX_LEN, so the ceiling never fires), require every
+# byte of it to be suppressed, then require ordinary text after it to be
+# emitted byte for byte.
+fn _fuzz_feed_suppressed(c) {
+    if (_emit_file_byte(c) != 0) { return _fail("a byte inside a well-formed sequence was emitted"); }
+    return 0;
+}
+
+fn _fuzz_precision() {
+    var round = 0;
+    while (round < FUZZ_ROUNDS) {
+        escape_reset();
+        var seqs = 1 + (_rnd() % 4);
+        while (seqs > 0) {
+            if (_fuzz_feed_suppressed(0x1B) != 0) { return 1; }
+            var kind = _rnd() % 5;
+            if (kind == 0) {
+                # CSI: params 0x30-0x3F, intermediates 0x20-0x2F, final 0x40-0x7E.
+                if (_fuzz_feed_suppressed(0x5B) != 0) { return 1; }
+                var np = _rnd() % 12;
+                while (np > 0) { if (_fuzz_feed_suppressed(0x30 + (_rnd() % 16)) != 0) { return 1; } np = np - 1; }
+                var ni = _rnd() % 3;
+                while (ni > 0) { if (_fuzz_feed_suppressed(0x20 + (_rnd() % 16)) != 0) { return 1; } ni = ni - 1; }
+                if (_fuzz_feed_suppressed(0x40 + (_rnd() % 63)) != 0) { return 1; }
+            }
+            if (kind >= 1) {
+                if (kind <= 3) {
+                    # A string sequence (OSC / DCS / APC / PM / SOS) with a
+                    # printable payload, ended by BEL, ESC \ or C1 ST.
+                    var intro = 0x5D;
+                    var which = _rnd() % 5;
+                    if (which == 1) { intro = 0x50; }
+                    if (which == 2) { intro = 0x5F; }
+                    if (which == 3) { intro = 0x5E; }
+                    if (which == 4) { intro = 0x58; }
+                    if (_fuzz_feed_suppressed(intro) != 0) { return 1; }
+                    var nb = _rnd() % 48;
+                    while (nb > 0) { if (_fuzz_feed_suppressed(0x20 + (_rnd() % 95)) != 0) { return 1; } nb = nb - 1; }
+                    if (kind == 1) { if (_fuzz_feed_suppressed(0x07) != 0) { return 1; } }
+                    if (kind == 2) {
+                        if (_fuzz_feed_suppressed(0x1B) != 0) { return 1; }
+                        if (_fuzz_feed_suppressed(0x5C) != 0) { return 1; }
+                    }
+                    if (kind == 3) { if (_fuzz_feed_suppressed(0x9C) != 0) { return 1; } }
+                }
+            }
+            if (kind == 4) {
+                # Two-byte escape: ESC 7 / 8 / c / D / M / = / >.
+                var two = "78cDM=>";
+                if (_fuzz_feed_suppressed(load8(two + (_rnd() % 7))) != 0) { return 1; }
+            }
+            # Text after the terminator must come through, every byte.
+            var nt = 1 + (_rnd() % 8);
+            while (nt > 0) {
+                if (_emit_file_byte(0x20 + (_rnd() % 95)) != 1) {
+                    return _fail("text after a terminated sequence was suppressed");
+                }
+                nt = nt - 1;
+            }
+            seqs = seqs - 1;
+        }
+        round = round + 1;
+    }
+    return 0;
+}
+
 fn fuzz_main(data, len) {
     if (_fuzz_bounded_and_no_esc() != 0)   { return 1; }
     if (_fuzz_newline_always_emitted() != 0) { return 1; }
     if (_fuzz_plain_passthrough() != 0)    { return 1; }
     if (_fuzz_reset_is_total() != 0)       { return 1; }
+    if (_fuzz_precision() != 0)            { return 1; }
     return 0;
 }
 
@@ -242,7 +317,7 @@ fn _harness_main() {
         eprint("escape fuzz: FAIL\n", 18);
         return 1;
     }
-    print("escape fuzz: OK (5 invariants)\n", 30);
+    print("escape fuzz: OK (6 invariants)\n", 30);
     return 0;
 }
 
