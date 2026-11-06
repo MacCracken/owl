@@ -6,6 +6,48 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [1.6.1] - 2026-11-06
+
+**The mouse wheel scrolls a paged file.** Through 1.6.0 it did nothing:
+owl's default `less -RFX` stays on the normal screen, where a terminal gives
+the wheel to its own scrollback and less never sees it. Pins are unchanged
+(cyrius 6.7.18, vyakarana 2.10.0, sit 1.13.0, cmdit 1.5.0).
+
+### Added
+
+- **Mouse-wheel scrolling in the pager.** Each notch moves three lines, up or
+  down, with the file staying on screen at quit as before. owl adds this to
+  the `LESS` it already supplies when `LESS` is unset, and asks the installed
+  less what it can do:
+  - a less with `--emouse` gets `--emouse=vscroll`, which is the wheel and
+    nothing else;
+  - a less with only `--mouse` gets that, which also makes a click set a mark
+    and a right-click jump back to it;
+  - a less with neither is handed nothing and pages as before. An unknown
+    option in `LESS` stops GNU less at a "Press RETURN" prompt on every run.
+
+  The check adds about 2 ms to a pager's start, and only when owl pages. It
+  runs in the pager's own shell, so it does not hold up rendering. A short
+  file that fits the screen still prints and exits.
+
+### Changed
+
+- **Click-drag text selection needs a modifier in the pager,** Shift in most
+  terminals. A terminal that reports the wheel to an application reports the
+  button too, and no mode reports one without the other. This applies only
+  while less is showing a file longer than the screen.
+- **To opt out,** set `LESS` yourself, even to nothing: `LESS= owl file`.
+  A `LESS` of your own is left alone, the same rule as `LESS=FRX` has always
+  followed. It also means an existing `LESS` does not get the wheel until you
+  add `--emouse=vscroll` or `--mouse` to it. The wheel applies to a pager
+  command whose first word is `less`, so `PAGER=/usr/bin/less` is left as it
+  is too.
+
+### Build
+
+- 1,480,296 bytes (`CYRIUS_DCE=1`), +4,264 over 1.6.0. The plain build grew
+  168 bytes, to 3,483,240.
+
 ## [1.6.0] - 2026-10-31
 
 **The 1.6.x feature line.** owl stops keeping its own language tables and
@@ -185,7 +227,7 @@ copy.
 
 ### Docs
 
-- **Upstream filings drafted** in `docs/development/issues/`:
+- **Upstream filings** in each owning repo's `docs/development/issues/`:
   - vyakarana's missing routes;
   - cmdit's completion scripts, which complete nothing in the first
     argument of a tool with no subcommands. That bug is why 1.6.0 does not

@@ -13,7 +13,7 @@ include "src/config.cyr"
 
 # Keep OWL_VERSION in sync with the VERSION file.
 # A M8 CI check will enforce equality; for now, manual.
-var OWL_VERSION = "owl 1.6.0";
+var OWL_VERSION = "owl 1.6.1";
 
 var BUFSIZE = 65536;
 
@@ -2372,7 +2372,7 @@ fn should_page() {
 # table, but for a tool without subcommands its 1.5.0 scripts complete the
 # (empty) subcommand list in the first argument's place, so `owl <TAB>`
 # offered nothing — worse than the shell's own file completion. Filed
-# upstream: docs/development/issues/2026-10-31-cmdit-completions-verbless-tools.md.
+# upstream: cmdit/docs/development/issues/2026-10-31-cmdit-completions-verbless-tools.md.
 
 # Flag indices from cmdit registration (_cli_register).
 var F_NUMBER = 0;

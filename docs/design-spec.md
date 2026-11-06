@@ -107,7 +107,8 @@ wins.
 ### 3.4 Environment variables
 
 - `OWL_PAGER` — pager command (overrides `PAGER`); run through `/bin/sh -c`, receives content on stdin only
-- `PAGER` — fallback pager if `OWL_PAGER` is unset (default `less -RFX`; `LESS=FRX` is supplied when `LESS` is unset)
+- `PAGER` — fallback pager if `OWL_PAGER` is unset (default `less -RFX`; `LESS=FRX` is supplied when `LESS` is unset, plus the mouse wheel where that less supports it, §7)
+- `LESS` — left alone when set, even to nothing, which is also how to turn the mouse wheel off
 - `OWL_CONFIG` — config file path (overrides `$XDG_CONFIG_HOME/owl/config.cyml` and `~/.config/owl/config.cyml`)
 - `XDG_CONFIG_HOME`, `HOME` — locate the config, user themes and user grammars
 - `NO_COLOR` — if set to any non-empty value, disable colour (standard convention); `--color=always` overrides it
@@ -218,10 +219,11 @@ When showing multiple files, a header precedes each. A trailing horizontal rule 
 
 ## 7. Paging
 
-- Default pager: system pager on AGNOS / Cyrius, or `less -R` if available
+- Default pager: `less -RFX`. On AGNOS / Cyrius there is no external pager; output goes straight to the console
 - Paging triggered only when output exceeds terminal height AND stdout is TTY
 - `--paging never` or piped output disables paging
 - Pager receives already-rendered output (colors included); pager must be capable of interpreting ANSI escape sequences, or color must be stripped
+- Mouse wheel (since 1.6.1): moves a paged file three lines per notch. When `LESS` is unset and the pager command's first word is `less`, owl asks that less what it supports and adds `--emouse=vscroll` (the wheel alone) or else `--mouse` (wheel, plus click to mark and right-click to return), with `--wheel-lines=3`, to the `LESS` it supplies. A less with neither is handed nothing. While less is reporting the mouse, click-drag selection needs a terminal modifier (Shift in most terminals)
 
 ---
 

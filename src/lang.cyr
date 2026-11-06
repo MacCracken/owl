@@ -21,7 +21,7 @@
 #      grammar loaded, so routing stays cheap;
 #   4. owl's supplement — the routes owl 1.5.3 had and vyakarana 2.10.0 does
 #      not (`_owl_supplement`). Each is an upstream gap
-#      (docs/development/issues/2026-10-31-vyakarana-missing-routes.md); the
+#      (vyakarana/docs/development/issues/2026-10-31-vyakarana-missing-routes.md); the
 #      table shrinks as vyakarana gains them and goes when it is empty;
 #   5. owl's own opening sniff (1.1.4): JSON / YAML / TOML / markdown.
 #
@@ -193,7 +193,7 @@ fn _user_ext_lookup(path) {
 # ── owl's supplement (1.6.0) ───────────────────────────────────────────
 # Routes owl 1.5.3's own tables had that vyakarana 2.10.0's do not. Keeping
 # them means moving to vyakarana's routes regresses no file. Filed upstream
-# (docs/development/issues/2026-10-31-vyakarana-missing-routes.md); delete
+# (vyakarana/docs/development/issues/2026-10-31-vyakarana-missing-routes.md); delete
 # each row when vyakarana routes it, and the table when it is empty.
 
 # Interpreter word → language. A word matches when it starts with the entry

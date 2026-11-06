@@ -1011,7 +1011,7 @@ else
     echo "smoke: NOTE — timeout or mkfifo unavailable; skipping the overlay FIFO gate" >&2
 fi
 # (g) owl's supplement: routes owl 1.5.3 had that vyakarana 2.10.0 does not
-# (docs/development/issues/2026-10-31-vyakarana-missing-routes.md).
+# (vyakarana/docs/development/issues/2026-10-31-vyakarana-missing-routes.md).
 for pair in t.tcyr:cyrius b.bcyr:cyrius f.FCYR:cyrius; do
     f=${pair%%:*}; lang=${pair#*:}
     printf '# a comment\nvar x = 1;\n' > "$TMPDIR/r160/cwd/$f"
@@ -2691,5 +2691,160 @@ out=$(env -i PATH="$PATH" HOME="$TMPDIR/nohome" XDG_CONFIG_HOME="$TMPDIR/g7" \
 case "$out" in *"[38;5;37m"*) ;; *) fail "valid user theme not applied" ;; esac
 case "$out" in *"(shell)"*) ;; *) fail "valid ext override not applied" ;; esac
 case "$out" in *"      X"*) ;; *) fail "valid quoted tabs not applied" ;; esac
+
+# ── 1.6.1: the mouse wheel ──────────────────────────────────────────────
+# -X keeps less on the normal screen, where a terminal gives the wheel to its
+# own scrollback, so through 1.6.0 the wheel did nothing to a paged file. owl
+# now asks for it in the LESS it supplies, as `--emouse=vscroll` (the wheel
+# alone) or else `--mouse`, with --wheel-lines=3. The rules: a LESS of the
+# user's own is untouched, a less that knows neither flag is never handed one
+# (it would stop at a "Press RETURN" prompt on every run), only a command whose
+# first word is `less` is probed, and less stays the process owl waits on.
+if script -qc 'true' /dev/null > /dev/null 2>&1; then
+    WHEEL_DIR="$TMPDIR/w161"
+    mkdir -p "$WHEEL_DIR/new" "$WHEEL_DIR/mid" "$WHEEL_DIR/old"
+    # Stand-ins for `less`, found first on PATH: `new` lists --emouse and
+    # --mouse, `mid` only --mouse, `old` neither.
+    cat > "$WHEEL_DIR/new/less" <<'EOF'
+#!/bin/sh
+if [ "$1" = --help ]; then
+    echo probed >> "$WHEEL_DIR/probed"
+    echo '  --emouse=[vscroll,vdrag,hscroll,hdrag,lclick,rclick]'
+    echo '  --mouse'
+    exit 0
+fi
+n=$(wc -c)
+printf '%s\n' "$n" > "$WHEEL_DIR/bytes"
+printf '%s\n' "${LESS-unset}" > "$WHEEL_DIR/less"
+printf '%s\n' "$*" > "$WHEEL_DIR/argv"
+cat "/proc/$PPID/comm" > "$WHEEL_DIR/parent" 2>/dev/null || :
+EOF
+    grep -v -e "echo '  --emouse" "$WHEEL_DIR/new/less" > "$WHEEL_DIR/mid/less"
+    grep -v -e "echo '  --mouse'" "$WHEEL_DIR/mid/less" > "$WHEEL_DIR/old/less"
+    cp "$WHEEL_DIR/new/less" "$WHEEL_DIR/new/lessish"
+    chmod +x "$WHEEL_DIR/new/less" "$WHEEL_DIR/mid/less" "$WHEEL_DIR/old/less" "$WHEEL_DIR/new/lessish"
+    WHEEL_ONLY="FRX --emouse=vscroll --wheel-lines=3"
+    printf 'one\ntwo\nthree\n' > "$WHEEL_DIR/in.txt"
+
+    # wheel_run <new|mid|old> [quoted env assignments]: owl on a tty, stand-in first.
+    wheel_run() {
+        wdir=$1; shift
+        rm -f "$WHEEL_DIR/bytes" "$WHEEL_DIR/less" "$WHEEL_DIR/argv" "$WHEEL_DIR/probed" "$WHEEL_DIR/parent"
+        script -qc "env -u LESS -u PAGER -u OWL_PAGER WHEEL_DIR='$WHEEL_DIR' PATH='$WHEEL_DIR/$wdir:$PATH' $* '$BIN_ABS' --paging=always '$WHEEL_DIR/in.txt'" /dev/null > /dev/null 2>&1 || true
+    }
+    wheel_got() { cat "$WHEEL_DIR/$1" 2>/dev/null || echo "(no $1)"; }
+
+    # Nothing set: owl's own pager, owl's own LESS.
+    wheel_run new
+    [ "$(wheel_got less)" = "$WHEEL_ONLY" ] \
+        || fail "1.6.1: default pager did not get the wheel (LESS=$(wheel_got less))"
+    [ "$(wheel_got argv)" = "-RFX" ] || fail "1.6.1: default pager argv is '$(wheel_got argv)', want -RFX"
+    probed_bytes=$(wheel_got bytes)
+    # owl waits on the pager itself, and its Ctrl-C handling assumes that. Both
+    # checks are needed: bash 5.1+ execs the last command of `-c` unasked, so on
+    # a bash /bin/sh the first passes with or without the `exec`; the second
+    # holds the word in place whatever the shell. (`tr`: the probe is multi-line.)
+    if [ -r /proc/self/comm ]; then
+        comm=$(basename "$BIN_ABS" | cut -c1-15)
+        [ "$(wheel_got parent)" = "$comm" ] || fail "1.6.1: less is not owl's own child (parent: $(wheel_got parent))"
+    fi
+    tr '\n' ' ' < "$BIN_ABS" | grep -aq 'esac exec ' || fail "1.6.1: the wheel probe no longer execs the pager"
+
+    # A bare PAGER=less, and one with flags: still owl's LESS, so still the wheel.
+    wheel_run new "PAGER=less"
+    [ "$(wheel_got less)" = "$WHEEL_ONLY" ] \
+        || fail "1.6.1: PAGER=less with LESS unset did not get the wheel (LESS=$(wheel_got less))"
+    wheel_run new "OWL_PAGER='less -S'"
+    [ "$(wheel_got less)" = "$WHEEL_ONLY" ] \
+        || fail "1.6.1: OWL_PAGER='less -S' with LESS unset did not get the wheel (LESS=$(wheel_got less))"
+    [ "$(wheel_got argv)" = "-S" ] || fail "1.6.1: OWL_PAGER='less -S' argv is '$(wheel_got argv)'"
+
+    # A LESS of the user's own is theirs: untouched, and not even a probe. It
+    # is also the opt-out, down to an empty one. The probe must not eat input.
+    wheel_run new "LESS=FRX"
+    [ "$(wheel_got less)" = FRX ] || fail "1.6.1: a user's LESS was changed to '$(wheel_got less)'"
+    [ ! -e "$WHEEL_DIR/probed" ] || fail "1.6.1: probed less though LESS was the user's"
+    [ "$(wheel_got bytes)" = "$probed_bytes" ] \
+        || fail "1.6.1: the probe changed what the pager received ($probed_bytes vs $(wheel_got bytes) bytes)"
+    wheel_run new "LESS="
+    [ "$(wheel_got less)" = "" ] || fail "1.6.1: an empty LESS was changed to '$(wheel_got less)'"
+    [ ! -e "$WHEEL_DIR/probed" ] || fail "1.6.1: probed less though an empty LESS was set"
+
+    # A less with only --mouse gets that; one with neither is handed nothing.
+    wheel_run mid
+    [ "$(wheel_got less)" = "FRX --mouse --wheel-lines=3" ] \
+        || fail "1.6.1: a less with only --mouse got LESS=$(wheel_got less)"
+    wheel_run old
+    [ -e "$WHEEL_DIR/probed" ] || fail "1.6.1: the old-less run never probed"
+    [ "$(wheel_got less)" = FRX ] || fail "1.6.1: a less without --mouse got LESS=$(wheel_got less)"
+
+    # Not less: no probe, no flag. `lessish` pins the end of the first word.
+    wheel_run new "OWL_PAGER=lessish"
+    [ "$(wheel_got less)" = FRX ] || fail "1.6.1: a pager that is not less got LESS=$(wheel_got less)"
+    [ ! -e "$WHEEL_DIR/probed" ] || fail "1.6.1: probed less for a pager that is not less"
+
+    # The real thing, where this less has the flag: SGR wheel reports typed
+    # into a 10-row pty, against the same run with no wheel.
+    case "$(less --help </dev/null 2>/dev/null)" in
+    *--mouse*)
+        awk 'BEGIN{while(i++<100)printf "line-%03d\n", i}' > "$WHEEL_DIR/long.txt"
+        WHEEL_DOWN=$(printf '\033[<65;5;5M')
+        WHEEL_UP=$(printf '\033[<64;5;5M')
+        # wheel_real <file> <keys…>: one key report at a time, then q. LESSCHARSET
+        # because without a UTF-8 locale less spells the header rule's bytes out
+        # as <E2><94><80> and they fill the whole 10-row screen.
+        wheel_real() {
+            wfile=$1; shift
+            {
+                sleep 1
+                for k in "$@"; do printf '%s' "$k"; sleep 0.2; done
+                printf q
+                sleep 0.2
+            } | script -qc "stty rows 10 cols 60; env -u LESS -u PAGER -u OWL_PAGER TERM=xterm LESSCHARSET=utf-8 '$BIN_ABS' --paging=always '$wfile'" /dev/null 2>/dev/null || true
+        }
+        wheel_lines() { grep -ao 'line-[0-9]*' | sed -e 's/line-//'; }
+        wheel_max() { wheel_lines | sort -n | tail -1; }
+
+        still=$(wheel_real "$WHEEL_DIR/long.txt" | wheel_max)
+        moved=$(wheel_real "$WHEEL_DIR/long.txt" "$WHEEL_DOWN" "$WHEEL_DOWN" | wheel_max)
+        [ $((10#${moved:-0} - 10#${still:-0})) -eq 6 ] \
+            || fail "1.6.1: two wheel notches moved the view from line $still to $moved, want 6 lines"
+
+        wheel_real "$WHEEL_DIR/long.txt" "$WHEEL_DOWN" "$WHEEL_DOWN" "$WHEEL_UP" > "$WHEEL_DIR/up.out"
+        up_last=$(wheel_lines < "$WHEEL_DIR/up.out" | tail -1)
+        [ "$((10#${up_last:-0}))" -lt "$((10#$moved))" ] \
+            || fail "1.6.1: wheel up did not scroll back (last drawn line $up_last, bottom was $moved)"
+
+        # Only the wheel: with --emouse, a click then a right-click must not jump
+        # the view back (under plain --mouse it does).
+        case "$(less --help </dev/null 2>/dev/null)" in
+        *--emouse*)
+            WHEEL_CLICK=$(printf '\033[<0;5;3M\033[<0;5;3m')
+            WHEEL_RCLICK=$(printf '\033[<2;5;5M\033[<2;5;5m')
+            clicked=$(wheel_real "$WHEEL_DIR/long.txt" "$WHEEL_CLICK" "$WHEEL_DOWN" "$WHEEL_DOWN" "$WHEEL_RCLICK" | wheel_lines | tail -1)
+            [ "$clicked" = "$moved" ] \
+                || fail "1.6.1: a right-click moved the view (last drawn line $clicked, bottom was $moved)"
+            ;;
+        esac
+
+        # A terminal must never be left reporting the mouse: a shell would
+        # print every later click and wheel notch as garbage.
+        last_mode=$(grep -ao '\[?1000[hl]' "$WHEEL_DIR/up.out" | tail -1)
+        [ "$last_mode" = "[?1000l" ] || fail "1.6.1: mouse mode left on after quit (last: '$last_mode')"
+        wheel_real "$WHEEL_DIR/in.txt" > "$WHEEL_DIR/short.out"
+        case "$(tr -d '\r' < "$WHEEL_DIR/short.out")" in
+            *three*) ;;
+            *) fail "1.6.1: a short file did not print through less -F with the wheel on" ;;
+        esac
+        last_mode=$(grep -ao '\[?1000[hl]' "$WHEEL_DIR/short.out" | tail -1)
+        [ "$last_mode" != "[?1000h" ] || fail "1.6.1: mouse mode left on after a short file"
+        ;;
+    *)
+        echo "smoke: NOTE — this less has no --mouse; skipping the real-wheel gates" >&2
+        ;;
+    esac
+else
+    echo "smoke: NOTE — script(1) unavailable; skipping the 1.6.1 mouse-wheel gates" >&2
+fi
 
 echo "smoke: OK ($v_long) — M0–M8 gates passing (security hardening FINDING-001…013 and the 2026-10-31 audit gates closed)"

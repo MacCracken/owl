@@ -6,6 +6,21 @@
 
 ## Version
 
+**1.6.1** — 2026-11-06. **The mouse wheel scrolls a paged file.** `-X` keeps
+less on the normal screen, where a terminal gives the wheel to its own
+scrollback. owl now adds the wheel to the `LESS` it supplies when `LESS` is
+unset, for a pager command whose first word is `less`:
+- `--emouse=vscroll` where that less has it, which is the wheel alone;
+- `--mouse` otherwise, which also means click to mark and right-click to
+  return;
+- nothing on a less with neither, since an unknown option in `LESS` stops
+  GNU less at a "Press RETURN" prompt on every run.
+
+Three lines a notch. The file stays on screen at quit, and short files print
+and exit as before. The cost is about 2 ms on a pager's start. Click-drag
+selection needs a terminal modifier while less is showing a long file;
+`LESS=` opts out. Pins unchanged.
+
 **1.6.0** — 2026-10-31. **The 1.6.x feature line.** owl keeps no
 language table and no grammar files:
 - languages route through vyakarana (`detect_language_combined`), so `.asm`
@@ -677,6 +692,9 @@ complete; full owl attack surface audited and hardened.
 
 ## Binary
 
+- **1,480,296 bytes (`CYRIUS_DCE=1`) at 1.6.1**, +4,264 over 1.6.0, for one
+  small function. `--agnos` DCE is 1,473,424 and the plain build 3,483,240,
+  each +168.
 - **1,476,032 bytes (`CYRIUS_DCE=1`) at 1.6.0**, +61,576 over 1.5.3. About
   24 KB is vyakarana's routing and bootstrap code, now reachable. The rest
   is cmdit and the document API. `--agnos` DCE is 1,473,256; the plain build
@@ -739,7 +757,7 @@ complete; full owl attack surface audited and hardened.
 
 ## Source
 
-- 5,161 lines across 8 built modules at 1.6.0 (`fetch.cyr`, 325, is not
+- 5,210 lines across 8 built modules at 1.6.1 (`fetch.cyr`, 325, is not
   built — see §Next):
   - `src/main.cyr` (2,728) — entry, CLI (two-pass since 1.5.3; parsed by
     cmdit since 1.6.0), mode resolution, render dispatch, decorated frame,
@@ -756,8 +774,8 @@ complete; full owl attack surface audited and hardened.
     ANSI emission (through `out_write` since 1.5.3)
   - `src/config.cyr` (416) — `key = value` parser and `cfg_read_regular`,
     the shared regular-file reader for config and themes (1.5.3)
-  - `src/pager.cyr` (186) — pager spawn; environment from `env_block`, SIGINT
-    ignored while paging (1.5.3)
+  - `src/pager.cyr` (235) — pager spawn; environment from `env_block`, SIGINT
+    ignored while paging (1.5.3); the mouse wheel (1.6.1)
   - `src/out.cyr` (127) — **buffered stdout (1.5.3)**: every rendered byte;
     exit 3 on a write error
   - `src/escape.cyr` (116) — the file-origin escape classifier (1.4.7)
@@ -777,6 +795,25 @@ complete; full owl attack surface audited and hardened.
 - `tests/owl_config.fcyr` — **fuzz harness for the config and theme
   parsers (1.5.3)**, closing the 1.4.6 audit's follow-up. 6 invariants
   checked against reference models; it caught 11 planted mutations.
+- **1.6.1 gates**, each shown to fail against a mutant of `_pager_wheel`
+  (nine mutants: no wheel, no probe, a user's `LESS` overwritten, no
+  first-word check, no `exec`, one line a notch, the `--mouse` arm first, each
+  arm removed):
+  - the contract, with stand-in `less` binaries on `PATH`: the default command,
+    `PAGER=less`, `OWL_PAGER='less -S'`, a user's `LESS`, an empty `LESS`, a
+    less with only `--mouse`, one with neither, and a pager that is not less;
+  - the real thing, where the host's less has the flag: SGR wheel reports typed
+    into a 10-row pty move the view by exactly six lines for two notches and
+    back up, a right-click does not move it, and mouse mode is off after quit.
+
+  The `exec` has two checks because bash 5.1+ execs the last `-c` command
+  itself, so on a bash `/bin/sh` the process-parent check cannot fail. The
+  second pins the word in the binary.
+
+  Unit tests, both fuzz harnesses (also `--poison`), smoke on the plain,
+  poison and DCE builds, and lint are green at 1.6.1. The wheel is also
+  confirmed by hand with a physical wheel in a terminal. tmux, and a real less
+  older than `--emouse`, remain untested (stand-ins only).
 - **1.6.0 gates**, each shown to fail before its change:
   - the `--verbose` pins against `cyrius.cyml`;
   - routing: the bare binary highlights, `--list-languages` equals

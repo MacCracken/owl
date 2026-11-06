@@ -8,7 +8,8 @@
 # Pager resolution cascade: OWL_PAGER → PAGER → "less -RFX". -R passes
 # ANSI, -F quits if content fits one screen (avoids paging short files —
 # we always spawn the pager and let less decide), -X leaves content on
-# screen after quit. sh -c handles flag-carrying env var values.
+# screen after quit. sh -c handles flag-carrying env var values. The mouse
+# wheel is added where owl supplies LESS (_pager_wheel, 1.6.1).
 
 # ── State ──────────────────────────────────────────────────────────────
 var g_flag_paging   = 0 - 1;   # -1 auto, 0 never, 1 always
@@ -77,7 +78,7 @@ fn start_pager() {
         var argv[64];
         store64(&argv + 0,  "/bin/sh");
         store64(&argv + 8,  "-c");
-        store64(&argv + 16, cmd);
+        store64(&argv + 16, _pager_wheel(cmd));
         store64(&argv + 24, 0);
         sys_execve("/bin/sh", &argv, _pager_envp());
         sys_exit(127);
@@ -145,6 +146,54 @@ fn _pager_envp() {
     }
     store64(envp + slot * 8, 0);
     return envp;
+}
+
+# The mouse wheel (1.6.1). -X keeps less on the normal screen, where a
+# terminal gives the wheel to its own scrollback and less never sees it. Asking
+# less for the wheel has the terminal report it to less instead; dropping -X
+# would also work on many terminals, but would wipe the file off the screen at
+# quit. Added to the LESS owl supplies, so it follows the same rule as LESS=FRX:
+# a LESS of the user's own, even an empty one, is left alone. That is also the
+# way out for anyone who wants plain click-drag selection back, since a terminal
+# reporting the mouse no longer selects without a modifier (Shift, usually).
+#
+# `--emouse=vscroll` is the wheel and nothing else. `--mouse` is the fallback for
+# a less without it, and is broader: click sets a mark, right-click jumps to it,
+# and on the less that has --emouse it also means drag-to-scroll, which is why it
+# is not simply the first choice.
+#
+# Probed, because `less` is not always a less that knows either flag: an unknown
+# option in LESS stops GNU less at a "Press RETURN" prompt, on every run. A shell
+# `case` rather than grep so the probe needs nothing but less itself, and it runs
+# inside the pager's sh, so it costs owl's rendering nothing (2 ms to the pager's
+# start, measured on a short file). `exec` keeps less the process owl waits on, as
+# it is without the probe: owl's Ctrl-C handling assumes that, and only some
+# shells exec the last command of a `-c` string unasked. All of this is a
+# constant; the only thing appended is the user's own pager command (INFO-001).
+#
+# Only for a command whose first word is exactly `less`: that is the binary the
+# probe asks, and anything else (`PAGER=cat`) would pay for a probe it cannot
+# use. Called in the forked child only.
+fn _pager_wheel(cmd) {
+    if (getenv("LESS") != 0) { return cmd; }
+    var clen = strlen(cmd);
+    if (clen < 4) { return cmd; }
+    if (memeq(cmd, "less", 4) != 1) { return cmd; }
+    if (clen > 4) {
+        if (load8(cmd + 4) != 32) { return cmd; }
+    }
+    var probe = "case \"$(less --help </dev/null 2>&1)\" in
+*--emouse*) LESS=\"$LESS --emouse=vscroll --wheel-lines=3\";;
+*--mouse*) LESS=\"$LESS --mouse --wheel-lines=3\";;
+esac
+exec ";
+    var plen = strlen(probe);
+    var s = alloc(plen + clen + 1);
+    if (s == 0) { return cmd; }
+    memcpy(s, probe, plen);
+    memcpy(s + plen, cmd, clen);
+    store8(s + plen + clen, 0);
+    return s;
 }
 
 # Close our write-end of the pipe (fd 1) so the pager gets EOF, then

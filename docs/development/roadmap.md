@@ -4,12 +4,13 @@ Forward-looking planning surface: this file tracks what is *next*.
 What has shipped is in `CHANGELOG.md`, and live state (version, sizes,
 pins, open findings) is in `state.md`.
 
-**Where we are.** The current release is **1.6.0**, on cyrius 6.7.18,
+**Where we are.** The current release is **1.6.1**, on cyrius 6.7.18,
 vyakarana 2.10.0 (49 grammars), sit 1.13.0 and cmdit 1.5.0.
 - Languages route through vyakarana, with no tables of owl's own.
 - The bundled grammars come from the binary.
 - `--follow` is token-coloured.
 - The CLI is parsed by cmdit.
+- The mouse wheel scrolls a paged file.
 
 The 1.5.x line moved owl onto cyrius's 6.7 language line and closed the
 P(−1) audit (`docs/audit/2026-10-31-audit.md`). URL support and AGNOS
@@ -45,7 +46,7 @@ subcommand. For owl, `owl <TAB>` completes nothing, not even files, which
 is worse than the shell's default. zsh and fish complete no flags at all.
 
 - Unblocked by: the cmdit fix drafted in
-  `docs/development/issues/2026-10-31-cmdit-completions-verbless-tools.md`.
+  `cmdit/docs/development/issues/2026-10-31-cmdit-completions-verbless-tools.md`.
 - [ ] Then: `cmdit_enum(h, 0, "completions", 0, "bash|zsh|fish", …)` plus one
       `cmdit_completions` call. Gate `owl <TAB>` (files) and `owl --col<TAB>`
       (flags) in bash.
@@ -69,7 +70,7 @@ vyakarana 2.10.0 does not:
 - the deno, rust-script, swift, elixir, ocaml and ocamlrun shebangs.
 
 Drafted upstream in
-`docs/development/issues/2026-10-31-vyakarana-missing-routes.md`.
+`vyakarana/docs/development/issues/2026-10-31-vyakarana-missing-routes.md`.
 
 - [ ] On each vyakarana bump, delete the rows it now routes. Smoke gate
       1.6.0 (g) keeps passing either way. Delete the table when it is empty.
@@ -113,12 +114,13 @@ Each item is blocked or parked, with the reason.
   - **vyakarana:** INFO-009, a stream's input copy is never reclaimed.
   - **cyrius:** INFO-010, argv via `/proc`.
 
-  Each is drafted, with a repro, in `docs/development/issues/` (see its
-  README), ready to carry upstream. None is filed yet. There is also a
-  vyakarana API ask: make `tokenbuf_reset` public and document the
-  registry-ordering contract that owl's overlay-first bootstrap relies on.
-  owl 1.6.0 stopped writing `_grammars_bootstrapped`.
-- **From the 1.6.0 work,** also drafted in `docs/development/issues/`:
+  Each is filed, with a repro, in the owning repo's
+  `docs/development/issues/` (indexed in owl's
+  `docs/development/issues/README.md`). There is also a vyakarana API ask:
+  make `tokenbuf_reset` public and document the registry-ordering contract
+  that owl's overlay-first bootstrap relies on. owl 1.6.0 stopped writing
+  `_grammars_bootstrapped`.
+- **From the 1.6.0 work,** also filed upstream:
   - **vyakarana:** the routes the supplement above carries;
   - **cmdit:** completions for a tool without subcommands.
 - **cyrius: stdlib constant collisions.** Filed as

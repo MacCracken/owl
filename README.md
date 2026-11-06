@@ -140,6 +140,19 @@ Precedence, lowest to highest: built-in defaults → config file → environment
 - `OWL_CONFIG` — path to config file
 - `NO_COLOR` — set to anything to disable color everywhere
 - `PAGER` — fallback if `OWL_PAGER` is unset
+- `LESS` — flags for `less`. Set it, even to nothing, and owl leaves them to you
+
+### Scrolling
+
+Long files open in `less`, and the mouse wheel scrolls them, three lines a notch. Short files just print.
+
+While `less` is showing a long file, select text with Shift-drag (most terminals) rather than a plain drag, because the terminal is reporting the mouse to `less`. To turn the wheel off and get plain drag back, set `LESS` yourself:
+
+```bash
+LESS= owl file.txt
+```
+
+The wheel needs a `less` that supports it. On one that doesn't, paging works as before and the arrow keys still scroll.
 
 ---
 
